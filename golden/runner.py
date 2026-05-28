@@ -114,16 +114,19 @@ def _backend_for_platform(platform: str) -> Any:
 
 
 _DFX_FLAG_KEYS = ("enable_l2_swimlane", "enable_dump_tensor", "enable_pmu", "enable_dep_gen")
+_BENCH_KEYS = ("warmup_iters", "bench_repeat")
 
 
 def _execute_compiled_kwargs(runtime: dict[str, Any]) -> dict[str, Any]:
     """Translate user-facing ``runtime_cfg`` into ``execute_compiled`` kwargs.
 
-    The four DFX flags get bundled into a single ``dfx: _DfxOpts``; all other
-    keys pass through unfiltered, so ``execute_compiled`` raises ``TypeError``
-    on unknown keys rather than us silently dropping them.
+    The four DFX flags get bundled into a single ``dfx: _DfxOpts``; the bench
+    keys (``warmup_iters`` / ``bench_repeat``) pass through as plain kwargs;
+    all other keys pass through unfiltered, so ``execute_compiled`` raises
+    ``TypeError`` on unknown keys rather than us silently dropping them.
     """
-    out: dict[str, Any] = {k: v for k, v in runtime.items() if k not in _DFX_FLAG_KEYS}
+    skip = set(_DFX_FLAG_KEYS) | set(_BENCH_KEYS)
+    out: dict[str, Any] = {k: v for k, v in runtime.items() if k not in skip}
     dfx_flags = {k: runtime[k] for k in _DFX_FLAG_KEYS if runtime.get(k)}
     if dfx_flags:
         try:
@@ -135,6 +138,9 @@ def _execute_compiled_kwargs(runtime: dict[str, Any]) -> dict[str, Any]:
             ) from exc
 
         out["dfx"] = _DfxOpts(**dfx_flags)
+    for k in _BENCH_KEYS:
+        if k in runtime:
+            out[k] = runtime[k]
     return out
 
 

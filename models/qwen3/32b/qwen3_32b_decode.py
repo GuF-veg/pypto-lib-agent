@@ -647,7 +647,19 @@ if __name__ == "__main__":
     parser.add_argument("-d", "--device", type=int, default=0)
     parser.add_argument("--enable-l2-swimlane", action="store_true", default=False)
     parser.add_argument("--max-seq", action="store_true", default=False)
+    parser.add_argument("--warmup", type=int, default=None,
+                        help="Warmup iterations (default: 5 with --enable-l2-swimlane, else 0)")
+    parser.add_argument("--repeat", type=int, default=None,
+                        help="Bench iterations to average Total Test Time over "
+                             "(default: 100 with --enable-l2-swimlane, else 1)")
     args = parser.parse_args()
+
+    if args.enable_l2_swimlane:
+        warmup_iters = 5 if args.warmup is None else args.warmup
+        bench_repeat = 100 if args.repeat is None else args.repeat
+    else:
+        warmup_iters = 0 if args.warmup is None else args.warmup
+        bench_repeat = 1 if args.repeat is None else args.repeat
 
     result = run(
         program=build_qwen3_decode_program(),
@@ -658,6 +670,8 @@ if __name__ == "__main__":
             platform=args.platform,
             device_id=args.device,
             enable_l2_swimlane=args.enable_l2_swimlane,
+            warmup_iters=warmup_iters,
+            bench_repeat=bench_repeat,
         ),
         rtol=3e-3,
         atol=3e-3,
