@@ -49,6 +49,7 @@ HIDDEN_INV = 1.0 / HIDDEN
 # Scope 1 tiles
 RMSNORM_K_CHUNK = 512
 Q_OUT_CHUNK = 256
+Q_PROJ_OUT_CHUNK = 512
 Q_PROJ_K_CHUNK = 128
 KV_OUT_CHUNK = 256
 KV_PROJ_K_CHUNK = 128
@@ -67,9 +68,15 @@ MAX_CTX_BLOCKS = (MAX_SEQ + SEQ_TILE - 1) // SEQ_TILE
 # Scope 3 tiles
 K_CHUNK = 128
 OUT_PROJ_K_CHUNK = 128
-MLP_OUT_CHUNK = 256
+MLP_OUT_CHUNK = 512
 DOWN_N_CHUNK = 256
-DOWN_K_CHUNK = 128
+DOWN_K_CHUNK = 256
+DOWN_K_SPLIT = 2
+DOWN_KHALF = INTERMEDIATE // DOWN_K_SPLIT
+OUT_K_SPLIT = 2
+OUT_KHALF = HIDDEN // OUT_K_SPLIT
+MLP_K_SPLIT = 2
+MLP_KHALF = HIDDEN // MLP_K_SPLIT
 OUT_PROJ_BLOCKS = HIDDEN // Q_OUT_CHUNK
 MLP_OUT_BLOCKS = INTERMEDIATE // MLP_OUT_CHUNK
 DOWN_PROJ_BLOCKS = HIDDEN // DOWN_N_CHUNK
@@ -77,10 +84,6 @@ DOWN_PROJ_BLOCKS = HIDDEN // DOWN_N_CHUNK
 
 HIDDEN_BLOCKS = HIDDEN // K_CHUNK
 BATCH_TILE = BATCH
-MLP_SPMD_INNER = 2
-MLP_GROUP_CHUNK = MLP_SPMD_INNER * MLP_OUT_CHUNK
-
-assert MLP_OUT_BLOCKS % MLP_SPMD_INNER == 0
 
 
 def build_qwen3_decode_program():
@@ -128,13 +131,13 @@ def build_qwen3_decode_program():
                     normed_states = pl.assemble(normed_states, pl.cast(normed, target_type=pl.BF16), [0, k0])
 
             # Q projection.
-            for qi in pl.spmd(Q_OUT_BLOCKS, name_hint="q_proj"):
-                q0 = qi * Q_OUT_CHUNK
-                q_acc = pl.create_tensor([BATCH, Q_OUT_CHUNK], dtype=pl.FP32)
+            for qi in pl.spmd(HIDDEN // Q_PROJ_OUT_CHUNK, name_hint="q_proj"):
+                q0 = qi * Q_PROJ_OUT_CHUNK
+                q_acc = pl.create_tensor([BATCH, Q_PROJ_OUT_CHUNK], dtype=pl.FP32)
                 for kb in pl.pipeline(0, HIDDEN // Q_PROJ_K_CHUNK, stage=2):
                     k0 = kb * Q_PROJ_K_CHUNK
                     tile_a_i = normed_states[:, k0 : k0 + Q_PROJ_K_CHUNK]
-                    tile_b_i = wq[k0 : k0 + Q_PROJ_K_CHUNK, q0 : q0 + Q_OUT_CHUNK]
+                    tile_b_i = wq[k0 : k0 + Q_PROJ_K_CHUNK, q0 : q0 + Q_PROJ_OUT_CHUNK]
                     if k0 == 0:
                         q_acc = pl.matmul(tile_a_i, tile_b_i, out_dtype=pl.FP32)
                     else:
@@ -329,24 +332,32 @@ def build_qwen3_decode_program():
             # ── Scope 3: output projection + residual + post RMSNorm + MLP + residual ──
             resid1_tile = pl.create_tensor([BATCH, HIDDEN], dtype=pl.FP32)
 
-            # Stage 1 & 2: Output projection + residual addition with hidden_states.
-            for ob in pl.parallel(0, HIDDEN // Q_OUT_CHUNK, 2):
-                with pl.at(level=pl.Level.CORE_GROUP, optimizations=[pl.auto_chunk, pl.split(pl.SplitMode.UP_DOWN)], name_hint="out_proj_residual"):
-                    for oi in pl.range(ob, ob + 2):
-                        o0 = oi * Q_OUT_CHUNK
-                        hidden_chunk = hidden_states[:, o0 : o0 + Q_OUT_CHUNK]
-                        o_acc = pl.create_tensor([BATCH, Q_OUT_CHUNK], dtype=pl.FP32)
-                        for kb in pl.pipeline(0, HIDDEN // OUT_PROJ_K_CHUNK, stage=2):
-                            k0 = kb * OUT_PROJ_K_CHUNK
-                            a_chunk = attn_out[:, k0 : k0 + OUT_PROJ_K_CHUNK]
-                            w_chunk = wo[k0 : k0 + OUT_PROJ_K_CHUNK, o0 : o0 + Q_OUT_CHUNK]
-                            if k0 == 0:
-                                o_acc = pl.matmul(a_chunk, w_chunk, out_dtype=pl.FP32)
-                            else:
-                                o_acc = pl.matmul_acc(o_acc, a_chunk, w_chunk)
-                        resid = pl.cast(hidden_chunk, target_type=pl.FP32)
-                        resid_sum = pl.add(o_acc, resid)
-                        resid1_tile = pl.assemble(resid1_tile, resid_sum, [0, o0])
+            # Stage 1: Output projection with split-K (partial sums over K halves).
+            out_partial = pl.create_tensor([OUT_K_SPLIT * BATCH, HIDDEN], dtype=pl.FP32)
+            for pi in pl.spmd(OUT_PROJ_BLOCKS * OUT_K_SPLIT, name_hint="out_partial"):
+                nb = pi // OUT_K_SPLIT
+                ks = pi - nb * OUT_K_SPLIT
+                o0 = nb * Q_OUT_CHUNK
+                k_base = ks * OUT_KHALF
+                o_acc = pl.create_tensor([BATCH, Q_OUT_CHUNK], dtype=pl.FP32)
+                for kb in pl.pipeline(0, OUT_KHALF // OUT_PROJ_K_CHUNK, stage=2):
+                    k0 = k_base + kb * OUT_PROJ_K_CHUNK
+                    a_chunk = attn_out[:, k0 : k0 + OUT_PROJ_K_CHUNK]
+                    w_chunk = wo[k0 : k0 + OUT_PROJ_K_CHUNK, o0 : o0 + Q_OUT_CHUNK]
+                    if kb == 0:
+                        o_acc = pl.matmul(a_chunk, w_chunk, out_dtype=pl.FP32)
+                    else:
+                        o_acc = pl.matmul_acc(o_acc, a_chunk, w_chunk)
+                out_partial = pl.assemble(out_partial, o_acc, [ks * BATCH, o0])
+
+            # Stage 2: reduce partial sums + residual addition with hidden_states.
+            for nb in pl.spmd(OUT_PROJ_BLOCKS, name_hint="out_reduce"):
+                o0 = nb * Q_OUT_CHUNK
+                acc = pl.slice(out_partial, [BATCH, Q_OUT_CHUNK], [0, o0])
+                for ks in pl.range(1, OUT_K_SPLIT):
+                    acc = pl.add(acc, pl.slice(out_partial, [BATCH, Q_OUT_CHUNK], [ks * BATCH, o0]))
+                resid_sum = pl.add(acc, pl.cast(hidden_states[:, o0 : o0 + Q_OUT_CHUNK], target_type=pl.FP32))
+                resid1_tile = pl.assemble(resid1_tile, resid_sum, [0, o0])
 
             # Stage 3: Post-attention RMSNorm.
             post_norm_tile = pl.create_tensor([BATCH, HIDDEN], dtype=pl.BF16)
@@ -365,78 +376,84 @@ def build_qwen3_decode_program():
                     post_normed = pl.col_expand_mul(pl.row_expand_mul(resid_chunk, inv_rms_s3_col), post_gamma)
                     post_norm_tile = pl.assemble(post_norm_tile, pl.cast(post_normed, target_type=pl.BF16), [0, k0])
 
-            # Stage 4~6: keep outer parallel, run smaller SPMD groups and cache per-group only.
+            # Stage 4~6: gate/up projection via split-K, then reduce + SiLU.
             mlp_tile = pl.create_tensor([BATCH, INTERMEDIATE], dtype=pl.BF16)
-            for ob_base in pl.parallel(0, MLP_OUT_BLOCKS, MLP_SPMD_INNER):
-                gate_group = pl.create_tensor([BATCH_TILE, MLP_GROUP_CHUNK], dtype=pl.FP32)
-                up_group = pl.create_tensor([BATCH_TILE, MLP_GROUP_CHUNK], dtype=pl.FP32)
+            gate_partial = pl.create_tensor([MLP_K_SPLIT * BATCH, INTERMEDIATE], dtype=pl.FP32)
+            up_partial = pl.create_tensor([MLP_K_SPLIT * BATCH, INTERMEDIATE], dtype=pl.FP32)
 
-                # Stage 4: gate projection.
-                for ob in pl.spmd(MLP_SPMD_INNER, name_hint="gate_proj_spmd"):
-                    o0 = (ob_base + ob) * MLP_OUT_CHUNK
-                    g0 = ob * MLP_OUT_CHUNK
-                    post_chunk_0 = pl.slice(post_norm_tile, [BATCH_TILE, K_CHUNK], [0, 0])
-                    post_chunk_1 = pl.slice(post_norm_tile, [BATCH_TILE, K_CHUNK], [0, K_CHUNK])
-                    wg_0 = pl.slice(w_gate, [K_CHUNK, MLP_OUT_CHUNK], [0, o0])
-                    gate_acc = pl.matmul(post_chunk_0, wg_0, out_dtype=pl.FP32)
-
-                    wg_1 = pl.slice(w_gate, [K_CHUNK, MLP_OUT_CHUNK], [K_CHUNK, o0])
-                    gate_acc = pl.matmul_acc(gate_acc, post_chunk_1, wg_1)
-
-                    for kb in pl.pipeline(2, HIDDEN_BLOCKS, stage=2):
-                        k0 = kb * K_CHUNK
-                        post_chunk = pl.slice(post_norm_tile, [BATCH_TILE, K_CHUNK], [0, k0])
-                        wg = pl.slice(w_gate, [K_CHUNK, MLP_OUT_CHUNK], [k0, o0])
+            # Stage 4: gate projection partials.
+            for pi in pl.spmd(MLP_OUT_BLOCKS * MLP_K_SPLIT, name_hint="gate_proj"):
+                nb = pi // MLP_K_SPLIT
+                ks = pi - nb * MLP_K_SPLIT
+                o0 = nb * MLP_OUT_CHUNK
+                k_base = ks * MLP_KHALF
+                gate_acc = pl.create_tensor([BATCH, MLP_OUT_CHUNK], dtype=pl.FP32)
+                for kb in pl.pipeline(0, MLP_KHALF // K_CHUNK, stage=2):
+                    k0 = k_base + kb * K_CHUNK
+                    post_chunk = pl.slice(post_norm_tile, [BATCH_TILE, K_CHUNK], [0, k0])
+                    wg = pl.slice(w_gate, [K_CHUNK, MLP_OUT_CHUNK], [k0, o0])
+                    if kb == 0:
+                        gate_acc = pl.matmul(post_chunk, wg, out_dtype=pl.FP32)
+                    else:
                         gate_acc = pl.matmul_acc(gate_acc, post_chunk, wg)
-                    gate_group = pl.assemble(gate_group, gate_acc, [0, g0])
+                gate_partial = pl.assemble(gate_partial, gate_acc, [ks * BATCH, o0])
 
-                # Stage 5: up projection.
-                for ob in pl.spmd(MLP_SPMD_INNER, name_hint="up_proj_spmd"):
-                    o0 = (ob_base + ob) * MLP_OUT_CHUNK
-                    g0 = ob * MLP_OUT_CHUNK
-                    post_chunk_0 = pl.slice(post_norm_tile, [BATCH_TILE, K_CHUNK], [0, 0])
-                    post_chunk_1 = pl.slice(post_norm_tile, [BATCH_TILE, K_CHUNK], [0, K_CHUNK])
-                    wu_0 = pl.slice(w_up, [K_CHUNK, MLP_OUT_CHUNK], [0, o0])
-                    up_acc = pl.matmul(post_chunk_0, wu_0, out_dtype=pl.FP32)
-
-                    wu_1 = pl.slice(w_up, [K_CHUNK, MLP_OUT_CHUNK], [K_CHUNK, o0])
-                    up_acc = pl.matmul_acc(up_acc, post_chunk_1, wu_1)
-
-                    for kb in pl.pipeline(2, HIDDEN_BLOCKS, stage=2):
-                        k0 = kb * K_CHUNK
-                        post_chunk = pl.slice(post_norm_tile, [BATCH_TILE, K_CHUNK], [0, k0])
-                        wu = pl.slice(w_up, [K_CHUNK, MLP_OUT_CHUNK], [k0, o0])
+            # Stage 5: up projection partials.
+            for pi in pl.spmd(MLP_OUT_BLOCKS * MLP_K_SPLIT, name_hint="up_proj"):
+                nb = pi // MLP_K_SPLIT
+                ks = pi - nb * MLP_K_SPLIT
+                o0 = nb * MLP_OUT_CHUNK
+                k_base = ks * MLP_KHALF
+                up_acc = pl.create_tensor([BATCH, MLP_OUT_CHUNK], dtype=pl.FP32)
+                for kb in pl.pipeline(0, MLP_KHALF // K_CHUNK, stage=2):
+                    k0 = k_base + kb * K_CHUNK
+                    post_chunk = pl.slice(post_norm_tile, [BATCH_TILE, K_CHUNK], [0, k0])
+                    wu = pl.slice(w_up, [K_CHUNK, MLP_OUT_CHUNK], [k0, o0])
+                    if kb == 0:
+                        up_acc = pl.matmul(post_chunk, wu, out_dtype=pl.FP32)
+                    else:
                         up_acc = pl.matmul_acc(up_acc, post_chunk, wu)
-                    up_group = pl.assemble(up_group, up_acc, [0, g0])
+                up_partial = pl.assemble(up_partial, up_acc, [ks * BATCH, o0])
 
-                # Stage 6: SiLU + gate/up fuse.
-                for ob in pl.spmd(MLP_SPMD_INNER, name_hint="silu_spmd"):
-                    o0 = (ob_base + ob) * MLP_OUT_CHUNK
-                    g0 = ob * MLP_OUT_CHUNK
-                    gate_acc = pl.slice(gate_group, [BATCH_TILE, MLP_OUT_CHUNK], [0, g0])
-                    up_acc = pl.slice(up_group, [BATCH_TILE, MLP_OUT_CHUNK], [0, g0])
-                    sigmoid = pl.recip(pl.add(pl.exp(pl.neg(gate_acc)), 1.0))
-                    mlp_chunk = pl.mul(pl.mul(gate_acc, sigmoid), up_acc)
-                    mlp_chunk_bf16 = pl.cast(mlp_chunk, target_type=pl.BF16)
-                    mlp_tile = pl.assemble(mlp_tile, mlp_chunk_bf16, [0, o0])
+            # Stage 6: reduce partials + SiLU(gate) * up.
+            for nb in pl.spmd(MLP_OUT_BLOCKS, name_hint="silu"):
+                o0 = nb * MLP_OUT_CHUNK
+                gate_acc = pl.slice(gate_partial, [BATCH, MLP_OUT_CHUNK], [0, o0])
+                up_acc = pl.slice(up_partial, [BATCH, MLP_OUT_CHUNK], [0, o0])
+                for ks in pl.range(1, MLP_K_SPLIT):
+                    gate_acc = pl.add(gate_acc, pl.slice(gate_partial, [BATCH, MLP_OUT_CHUNK], [ks * BATCH, o0]))
+                    up_acc = pl.add(up_acc, pl.slice(up_partial, [BATCH, MLP_OUT_CHUNK], [ks * BATCH, o0]))
+                sigmoid = pl.recip(pl.add(pl.exp(pl.neg(gate_acc)), 1.0))
+                mlp_chunk = pl.mul(pl.mul(gate_acc, sigmoid), up_acc)
+                mlp_chunk_bf16 = pl.cast(mlp_chunk, target_type=pl.BF16)
+                mlp_tile = pl.assemble(mlp_tile, mlp_chunk_bf16, [0, o0])
 
-            # Stage 7 & 8: Down projection + final residual writeback.
-            for db in pl.parallel(0, HIDDEN // DOWN_N_CHUNK, 2):
-                with pl.at(level=pl.Level.CORE_GROUP, optimizations=[pl.auto_chunk, pl.split(pl.SplitMode.UP_DOWN)], name_hint="down_proj_residual"):
-                    for di in pl.range(db, db + 2):
-                        d0 = di * DOWN_N_CHUNK
-                        resid1_tile_chunk = resid1_tile[:, d0 : d0 + DOWN_N_CHUNK]
-                        down_acc = pl.create_tensor([BATCH, DOWN_N_CHUNK], dtype=pl.FP32)
-                        for ob in pl.pipeline(0, INTERMEDIATE // DOWN_K_CHUNK, stage=2):
-                            o0 = ob * DOWN_K_CHUNK
-                            down_mlp_chunk = mlp_tile[:, o0 : o0 + DOWN_K_CHUNK]
-                            w_down_chunk = w_down[o0 : o0 + DOWN_K_CHUNK, d0 : d0 + DOWN_N_CHUNK]
-                            if o0 == 0:
-                                down_acc = pl.matmul(down_mlp_chunk, w_down_chunk, out_dtype=pl.FP32)
-                            else:
-                                down_acc = pl.matmul_acc(down_acc, down_mlp_chunk, w_down_chunk)
-                        out_chunk = pl.add(down_acc, resid1_tile_chunk)
-                        out = pl.assemble(out, pl.cast(out_chunk, target_type=pl.BF16), [0, d0])
+            # Stage 7: Down projection with split-K (partial sums over K halves).
+            down_partial = pl.create_tensor([DOWN_K_SPLIT * BATCH, HIDDEN], dtype=pl.FP32)
+            for pi in pl.spmd(DOWN_PROJ_BLOCKS * DOWN_K_SPLIT, name_hint="down_partial"):
+                nb = pi // DOWN_K_SPLIT
+                ks = pi - nb * DOWN_K_SPLIT
+                d0 = nb * DOWN_N_CHUNK
+                k_base = ks * DOWN_KHALF
+                down_acc = pl.create_tensor([BATCH, DOWN_N_CHUNK], dtype=pl.FP32)
+                for ob in pl.pipeline(0, DOWN_KHALF // DOWN_K_CHUNK, stage=2):
+                    o0 = k_base + ob * DOWN_K_CHUNK
+                    down_mlp_chunk = mlp_tile[:, o0 : o0 + DOWN_K_CHUNK]
+                    w_down_chunk = w_down[o0 : o0 + DOWN_K_CHUNK, d0 : d0 + DOWN_N_CHUNK]
+                    if ob == 0:
+                        down_acc = pl.matmul(down_mlp_chunk, w_down_chunk, out_dtype=pl.FP32)
+                    else:
+                        down_acc = pl.matmul_acc(down_acc, down_mlp_chunk, w_down_chunk)
+                down_partial = pl.assemble(down_partial, down_acc, [ks * BATCH, d0])
+
+            # Stage 8: reduce partial sums + final residual writeback.
+            for nb in pl.spmd(DOWN_PROJ_BLOCKS, name_hint="down_reduce"):
+                d0 = nb * DOWN_N_CHUNK
+                acc = pl.slice(down_partial, [BATCH, DOWN_N_CHUNK], [0, d0])
+                for ks in pl.range(1, DOWN_K_SPLIT):
+                    acc = pl.add(acc, pl.slice(down_partial, [BATCH, DOWN_N_CHUNK], [ks * BATCH, d0]))
+                out_chunk = pl.add(acc, resid1_tile[:, d0 : d0 + DOWN_N_CHUNK])
+                out = pl.assemble(out, pl.cast(out_chunk, target_type=pl.BF16), [0, d0])
 
             return out
 
