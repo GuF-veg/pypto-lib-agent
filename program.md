@@ -6,7 +6,7 @@ This is an experiment to have the LLM do its own research.
 
 To set up a new experiment, work with the user to:
 
-1. **Create the branch**: `git checkout -b autoresearch` from current branch.
+1. **Create the branch**: `git checkout -b autoresearch` from current branch (if already on this branch, ignore this).
 2. **Read the in-scope files**: The repo is small. Read these files for full context:
    - `docs/` — The documents of pypto-lib.
    - `models/qwen3/32b/qwen3_32b_decode.py` — the file you modify.
@@ -25,10 +25,11 @@ pprofile models/qwen3/32b/qwen3_32b_decode.py
 ```
 
 **What you CAN do:**
-- Modify the script `models/qwen3/32b/qwen3_32b_decode.py` — this is the only file you can edit.
+- Modify the script `models/qwen3/32b/qwen3_32b_decode.py` (except the `golden_qwen3_decode` function) — this is the only file you can edit.
 
 **What you CANNOT do:**
 - Modify the evaluation harness.
+- Modify the `golden_qwen3_decode` function.
 
 **The goal is simple: get the lowest runtime.** You need to oprimize the performance of Qwen3Decode operator. The only constraint is that the code should be successfully compiled and runs without crashing and finishes with result checking succeed.
 
@@ -41,22 +42,20 @@ pprofile models/qwen3/32b/qwen3_32b_decode.py
 Once you run the script with `pprofile models/qwen3/32b/qwen3_32b_decode.py`, it prints a summary like this:
 
 ```
-[npu-lock] 获取设备 6 的锁 (无超时)...
-[npu-lock] 已获取设备 6 的锁 (pid=848507)
 [RUN] compile ...
-2026-05-28 14:06:27.775 I | [perf_hint] 50 hints across 21 sites; see build_output/Qwen3Decode_20260528_140626/report/perf_hints.log
-[RUN] compile done (1.52s)
+2026-05-29 09:48:05.350 I | [perf_hint] 50 hints across 21 sites; see build_output/Qwen3Decode_20260529_094804/report/perf_hints.log
+[RUN] compile done (1.55s)
 [RUN] generate inputs ...
-[RUN] generate inputs done (6.39s)
+[RUN] generate inputs done (5.67s)
 [RUN] compute golden ...
-[RUN] compute golden done (8.51s)
+[RUN] compute golden done (6.49s)
 [RUN] runtime ...
 
 ✓ Conversion complete
-  Input:  /data/gufeng/project/pypto-lib/build_output/Qwen3Decode_20260528_140626/dfx_outputs/l2_perf_records.json
-  Output: /data/gufeng/project/pypto-lib/build_output/Qwen3Decode_20260528_140626/dfx_outputs/merged_swimlane_20260528_140647.json
+  Input:  /data/gufeng/project/pypto-lib/build_output/Qwen3Decode_20260529_094804/dfx_outputs/l2_perf_records.json
+  Output: /data/gufeng/project/pypto-lib/build_output/Qwen3Decode_20260529_094804/dfx_outputs/merged_swimlane_20260529_094826.json
 
-To visualize: Open https://ui.perfetto.dev/ and drag in /data/gufeng/project/pypto-lib/build_output/Qwen3Decode_20260528_140626/dfx_outputs/merged_swimlane_20260528_140647.json
+To visualize: Open https://ui.perfetto.dev/ and drag in /data/gufeng/project/pypto-lib/build_output/Qwen3Decode_20260529_094804/dfx_outputs/merged_swimlane_20260529_094826.json
 
 ==============================================================================================================
 Task Statistics by Function
@@ -64,46 +63,45 @@ Task Statistics by Function
 ==============================================================================================================
 Func_ID  Func_Name    Count   Avg Exec(us)  Avg Latency(us)   Exec%   Avg Head OH(us)  Avg Tail OH(us)
 --------------------------------------------------------------------------------------------------------------
-0        rmsnorm          1          24.70            31.10   79.4%              1.50             4.90
-1        q_proj          32          93.54           121.56   76.9%             25.45             2.58
-2        kv_proj          4         105.40           199.94   52.7%             92.96             1.57
-3        rope_kv_cache    16           9.90            21.00   47.2%              0.55            10.55
-4        qk_matmul       64          28.04            43.73   64.1%             12.06             3.63
-5        softmax         64          15.82            21.34   74.1%              0.55             4.98
-6        sv_matmul       64          28.49            56.37   50.5%              9.84            18.04
-7        online_softmax    64           7.63            19.42   39.3%              0.49            11.29
-8        out_proj_residual_aic    16         171.06           177.97   96.1%              0.62             6.30
-9        out_proj_residual_aiv    32         170.68           178.51   95.6%              0.49             7.35
-10       post_rmsnorm     1          32.24            37.86   85.2%              0.42             5.20
-11       gate_proj      100          89.94           176.77   50.9%             84.87             1.96
-12       up_proj        100          94.42           172.03   54.9%             75.67             1.94
-13       silu           100           2.08             5.77   36.1%              0.47             3.22
-14       down_proj_residual__windowed_aic    16         416.14           424.95   97.9%              0.50             8.30
-15       down_proj_residual__windowed_aiv    32         415.81           425.60   97.7%              0.46             9.33
+0        rmsnorm          1          23.74            26.70   88.9%              0.98             1.98
+1        q_proj          32          97.18           130.01   74.7%             26.57             6.26
+2        kv_proj          4         104.88           202.95   51.7%             97.08             1.00
+3        rope_kv_cache    16           9.78            19.94   49.0%              0.54             9.63
+4        qk_matmul       64          22.71            44.89   50.6%             12.26             9.92
+5        softmax         64          12.96            29.39   44.1%              0.46            15.96
+6        sv_matmul       64          22.26            33.42   66.6%              3.22             7.94
+7        online_softmax    64           6.16            11.01   56.0%              0.43             4.42
+8        out_proj_residual_aic    16         164.52           171.17   96.1%              0.58             6.08
+9        out_proj_residual_aiv    32         164.18           171.93   95.5%              0.47             7.27
+10       post_rmsnorm     1          31.86            37.76   84.4%              0.66             5.24
+11       gate_proj      100          90.21           169.95   53.1%             77.49             2.25
+12       up_proj        100          88.96           168.77   52.7%             78.00             1.81
+13       silu           100           2.13             5.62   38.0%              0.45             3.03
+14       down_proj_residual__windowed_aic    16         412.85           418.37   98.7%              0.51             5.02
+15       down_proj_residual__windowed_aiv    32         412.56           418.83   98.5%              0.46             5.81
 --------------------------------------------------------------------------------------------------------------
-TOTAL                   706       55555.74         78544.62
+TOTAL                   706       53666.98         75722.48
 
-Total Test Time: 2074.76 us (from earliest dispatch to latest finish)
 
 --- Task execution vs Scheduler overhead ---
-  Per-task (all):  Avg Exec = 78.69 us,  Avg Latency (dispatch->finish) = 111.25 us,  Exec/Latency = 70.73%
+  Per-task (all):  Avg Exec = 76.02 us,  Avg Latency (dispatch->finish) = 107.26 us,  Exec/Latency = 70.87%
   (Latency = dispatch→finish; Exec = AICore kernel time per task)
 ==============================================================================================================
 
 === Scheduler Overhead Deep Dive ===
-Perf data:  /data/gufeng/project/pypto-lib/build_output/Qwen3Decode_20260528_140626/dfx_outputs/l2_perf_records.json
+Perf data:  /data/gufeng/project/pypto-lib/build_output/Qwen3Decode_20260529_094804/dfx_outputs/l2_perf_records.json
 
 ==========================================================================================
 Part 1: Per-task time breakdown (from perf profiling data)
 ==========================================================================================
 Total tasks: 706
-Wall-clock:  2074.8 us
+Wall-clock:  2032.3 us
 
   Component                             Total (us)  Avg/task (us)  % of Latency
   ------------------------------------------------------------------------------
-  Kernel Exec (end-start)                  55555.7          78.69         70.7%
-  Head OH (start-dispatch)                 18814.1          26.65         24.0%
-  Tail OH (finish-end)                      4174.7           5.91          5.3%
+  Kernel Exec (end-start)                  53667.0          76.02         70.9%
+  Head OH (start-dispatch)                 17938.2          25.41         23.7%
+  Tail OH (finish-end)                      4117.3           5.83          5.4%
 
 ==========================================================================================
 Part 2: AICPU scheduler loop breakdown
@@ -112,66 +110,63 @@ Part 2: AICPU scheduler loop breakdown
 
   Thread       Loops  Completed   Tasks/loop  Total (us)
   ------------------------------------------------------
-  T0            5160         79          0.0      1901.0
-  T1            2438        109          0.0      2031.3
-  T2            4968         78          0.0      2021.1
-  SUM          12566        266          0.0      5953.4
+  T0            5073         75          0.0      1842.2
+  T1            3554         93          0.0      1965.1
+  T2            3138         98          0.0      1988.3
+  SUM          11765        266          0.0      5795.6
 
   Phase                                               Total (us) % of total  Avg/task (us)
   -----------------------------------------------------------------------------------------
-  Complete (poll handshake, resolve deps)                  736.5      12.4%           2.77
+  Complete (poll handshake, resolve deps)                  711.4      12.3%           2.67
   Scan (update perf header)                                  0.0       0.0%           0.00
-  Dispatch (pop queue, build payload, flush)               683.0      11.5%           2.57
-  Idle (spinning, no progress)                            4533.9      76.2%          17.04
+  Dispatch (pop queue, build payload, flush)               641.4      11.1%           2.41
+  Idle (spinning, no progress)                            4442.7      76.7%          16.70
 
   Fanout / Fanin: (deps.json not provided — pass --deps-json or rerun with --enable-dep-gen)
 
-  Pop: hit=410, miss=35973, hit_rate=1.1%
+  Pop: hit=404, miss=33754, hit_rate=1.2%
 
 ==========================================================================================
 Part 3: Tail OH distribution & cause analysis
 ==========================================================================================
 
   Tail OH distribution (N=706):
-    P10        0.8 us
-    P25        1.4 us
-    P50        2.8 us
-    P75        6.2 us
-    P90       11.6 us
-    P95       14.4 us
-    P99       83.1 us
-    Max:      92.7 us
-    Mean:      5.9 us
+    P10        0.9 us
+    P25        1.5 us
+    P50        2.9 us
+    P75        5.8 us
+    P90       11.7 us
+    P95       15.9 us
+    P99       73.9 us
+    Max:      82.2 us
+    Mean:      5.8 us
 
   Avg scheduler loop iteration: 0.5 us (approx avg polling interval per loop)
 
-  Avg Tail OH = 5.9 us ~= 12.5 x avg loop iteration (0.5 us)
-  -> On average, a completed task waits ~12.5 loop iterations before being detected
+  Avg Tail OH = 5.8 us ~= 11.8 x avg loop iteration (0.5 us)
+  -> On average, a completed task waits ~11.8 loop iterations before being detected
 
   Key insight: Complete phase consumes ~12% of scheduler CPU.
   DAG stats unavailable (no deps.json); cannot attribute complete-phase cost further.
 ==========================================================================================
-Swimlane JSON written to: /data/gufeng/project/pypto-lib/build_output/Qwen3Decode_20260528_140626/dfx_outputs/merged_swimlane_20260528_140647.json
-[RUN] runtime done (5.79s)
+
+Total Test Time: 2033.48 us (avg over 5 repeat runs after 2 warmup; min=2012.72 max=2059.32 std=15.54)
+Swimlane JSON written to: /data/gufeng/project/pypto-lib/build_output/Qwen3Decode_20260529_094804/dfx_outputs/merged_swimlane_20260529_094826.json
+[RUN] runtime done (9.32s)
 [RUN] validate ...
 [RUN]   'out' PASS  shape=(16, 8192) dtype=torch.bfloat16
 [RUN] validate done (0.03s)
-[RUN] PASS (22.23s)
-[npu-lock] 已释放设备 6 的锁
-=== 任务完成 (exit=0) ===
+[RUN] PASS (23.06s)
 ```
 
 The first thing you need to care is at last it should report a `[RUN] PASS`. 
 This means the result is correct.
-The most important metric is the runtime of mk_gat operator. You can extract the key metric by:
-
-```bash
-python megakernels/scripts/gat.py -b | grep -oP 'mk_gat\s+:\s+\K[\d.]+'
-```
+The most important metric is the `Total Test Time`. 
+Other indicators can assist you in performance optimization.
 
 ## Logging results
 
-When an experiment is done, log it to `results/results.tsv` (tab-separated, NOT comma-separated — commas break in descriptions).
+When an experiment is done, log it to `log/results.tsv` (tab-separated, NOT comma-separated — commas break in descriptions).
 
 The TSV has a header row and 5 columns:
 
@@ -187,40 +182,37 @@ commit	runtime	status	description
 Example:
 
 ```
-commit	val_bpb	status	description
-a1b2c3d	23.997	keep	baseline
-b2c3d4e	20.993	keep	optimize...
+commit	runtime	status	description
+a1b2c3d	23.997	keep	  baseline
+b2c3d4e	20.993	keep	  optimize...
 c3d4e5f	18.005	discard	add...
-d4e5f6g	0.000	crash	deadlock
+d4e5f6g	0.000	  crash	  deadlock
 ```
 
 ## Oprimization tips
 
-You can refer to `src/gcn/` directory, which is a highly oprimized GNN kernel.
-You can use `ncu` (NVIDIA Nsight compute) instruction to profile the kernel and find the bottlenecks.
+You can refer to `models/` directory, which are highly oprimized model programs.
+You can refer to `docs/` and `../pypto/docs/en` directories, which are documents related to pypto.
 When necessary, conduct an online search for optimization ideas — after failing to make effective progress in three consecutive discussions, you need to search online for new optimization ideas.
 
 ## The experiment loop
 
-The experiment runs on a dedicated branch (e.g. `autoresearch`) created from the human development branch (`5090`).
+The experiment runs on a dedicated branch (e.g. `autoresearch`) created from the human development branch (`main`).
 
 LOOP FOREVER:
 
-1. Look at the git state: the current branch/commit we're on.
-2. Tune the codes in `src/gat` with an experimental idea by directly hacking the code, before you coding, please deep think and do the detailed plan.
-3. Run the command line instruction: `conda activate dev && source setup.py && make -C src/gat` to compile the code, you should make sure the compilation is successful.
-4. Run the validation: `python megakernels/scripts/gat.py` to make sure the results is correct, if it is not correct, you need to go back to step 3, debug and recompile the code.
-5. Run the benchmark: `python megakernels/scripts/gat.py -b | grep -oP 'mk_gat\s+:\s+\K[\d.]+'` to get the runtime of your code.
-6. The running process should be very fast, so if the script doesn't finish for a long time, it might be a deadlock in your code, and you need to kill the process and debug.
-7. Record the results in the tsv.
-8. If the runtime improved (lower), write your optimization method in `docs/GAT/optimization_log.md` and commit your changes in git.
-9. If the runtime is worse, discard all your changes and reset back to where you started.
+1. Look at the git state: the current branch/commit we're on, you maybe already on the autoresearch branch, then go to next step.
+2. Tune the codes in `models/qwen3/32b/qwen3_32b_decode.py` with an experimental idea by directly hacking the code, before you coding, please use superpower to brainstorm and do the detailed plan.
+3. Run the cmd instruction `rm -rf build_output/*` to clear the temp files.
+4. Run the script: `pprofile models/qwen3/32b/qwen3_32b_decode.py` to get the result of your code. You need to check there should be `[RUN] PASS` in the output which indicates the correctness of your algorithm. You can use `grep -oP 'Total Test Time:\s+\K[\d.]+'` to the output to get the runtime, but other information in the output maybe helpful for you to do the optimization.
+5. If the results don't pass, you need to debug by yourself. If the bug still cannot be resolved after multiple iterations, discard this modification and reset back to where you started.
+6. If the runtime improved (Due to timing inaccuracies in program execution, if there is a performance improvement, you need to run repeated experiments to ensure that the improvement is reproducible.), write your optimization method in `docs/successful_optimization.md` and commit your changes in git.
+7. If the runtime is worse, write your lessons learned in `docs/failed_optimization.md`, discard all your changes and reset back to where you started.
+8. Record the results in the tsv.
 
 The idea is that you are a completely autonomous researcher trying things out. If they work, keep. If they don't, discard. And you're advancing the branch so that you can iterate. If you feel like you're getting stuck in some way, you can rewind but you should probably do this very very sparingly (if ever).
 
-**Timeout**: Each experiment should take at most 5 minutes total. If a run exceeds 5 minutes, there must be a deadlock bug, kill it and treat it as a failure.
-
-**Crashes**: If a run crashes (deadlock or compile error), use your judgment: If it's something dumb and easy to fix (e.g. a typo, a missing import), fix it and re-run. If the idea itself is fundamentally broken, just discard it.
+**Crashes**: If a run fails, use your judgment: If it's something dumb and easy to fix (e.g. a typo, a missing import), fix it and re-run. If the idea itself is fundamentally broken, just discard it.
 
 **NEVER STOP**: Once the experiment loop has begun (after the initial setup), do NOT pause to ask the human if you should continue. Do NOT ask "should I keep going?" or "is this a good stopping point?". The human might be asleep, or gone from a computer and expects you to continue working *indefinitely*. You are autonomous. If you run out of ideas, think harder — read papers referenced in the code, re-read the in-scope files for new angles, try combining previous near-misses, try more radical architectural changes. The loop runs until the performance of mk_gat is significantly better than pytorch_compiled version.
 

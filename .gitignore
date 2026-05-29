@@ -15,3 +15,6 @@ pa_build/
 .venv/
 KNOWN_ISSUES.md
 *.log
+results.tsv
+successful_optimization.md
+failed_optimization.md
