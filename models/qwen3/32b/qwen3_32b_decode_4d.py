@@ -54,8 +54,12 @@ OUT_PROJ_INIT_SCALE = 0.5
 # Scope 1 tiles
 Q_OUT_CHUNK = 256
 Q_PROJ_K_CHUNK = 128
-KV_OUT_CHUNK = 256
+KV_OUT_CHUNK = 512
 KV_PROJ_K_CHUNK = 128
+# q_proj output chunk is decoupled from Q_OUT_CHUNK (which the golden reference uses as the
+# out_proj N half). A larger chunk halves q_proj task count (32 -> 16) and packs cores better.
+Q_PROJ_OUT_CHUNK = 512
+Q_PROJ_OUT_BLOCKS = HIDDEN // Q_PROJ_OUT_CHUNK
 HIDDEN_K_BLOCKS = HIDDEN // Q_PROJ_K_CHUNK
 Q_OUT_BLOCKS = HIDDEN // Q_OUT_CHUNK
 KV_OUT_BLOCKS = KV_HIDDEN // KV_OUT_CHUNK
@@ -69,12 +73,17 @@ TOTAL_Q_GROUPS = NUM_KV_HEADS * Q_GROUPS
 MAX_CTX_BLOCKS = (MAX_SEQ + SEQ_TILE - 1) // SEQ_TILE
 
 # Scope 3 tiles
-K_CHUNK = 128
+K_CHUNK = 256
+# post_rmsnorm is vector-only (no cube Mat buffer), so its K chunk can be larger than K_CHUNK.
+# With POST_RMS_K_CHUNK=512, each resid1_tile block maps 1:1 to a K chunk (512/512=1),
+# halving the iteration count and shrinking the critical-path bubble before gate/up.
+POST_RMS_K_CHUNK = 512
+POST_RMS_K_BLOCKS = HIDDEN // POST_RMS_K_CHUNK
 OUT_PROJ_K_CHUNK = 128
 OUT_PROJ_N_CHUNK = 512
 MLP_OUT_CHUNK = 256
 DOWN_N_CHUNK = 512
-DOWN_K_CHUNK = 64
+DOWN_K_CHUNK = 128
 K_BLOCKS = HIDDEN // K_CHUNK
 OUT_PROJ_K_BLOCKS = HIDDEN // OUT_PROJ_K_CHUNK
 OUT_PROJ_N_BLOCKS = HIDDEN // OUT_PROJ_N_CHUNK
@@ -91,7 +100,7 @@ def build_qwen3_decode_program():
             self,
             hidden_states: pl.Tensor[[HIDDEN_K_BLOCKS, 1, BATCH, Q_PROJ_K_CHUNK], pl.BF16],
             input_rms_weight: pl.Tensor[[HIDDEN_K_BLOCKS, 1, 1, Q_PROJ_K_CHUNK], pl.FP32],
-            wq: pl.Tensor[[HIDDEN_K_BLOCKS, Q_OUT_BLOCKS, Q_PROJ_K_CHUNK, Q_OUT_CHUNK], pl.BF16],
+            wq: pl.Tensor[[HIDDEN_K_BLOCKS, Q_PROJ_OUT_BLOCKS, Q_PROJ_K_CHUNK, Q_PROJ_OUT_CHUNK], pl.BF16],
             wk: pl.Tensor[[HIDDEN_K_BLOCKS, KV_OUT_BLOCKS, KV_PROJ_K_CHUNK, KV_OUT_CHUNK], pl.BF16],
             wv: pl.Tensor[[HIDDEN_K_BLOCKS, KV_OUT_BLOCKS, KV_PROJ_K_CHUNK, KV_OUT_CHUNK], pl.BF16],
             seq_lens: pl.Tensor[[BATCH, 1, 1, 1], pl.INT32],
@@ -100,13 +109,13 @@ def build_qwen3_decode_program():
             k_cache: pl.Tensor[[CACHE_ROWS // MAX_SEQ, MAX_CTX_BLOCKS, SEQ_TILE, HEAD_DIM], pl.BF16],
             v_cache: pl.Tensor[[CACHE_ROWS // MAX_SEQ, MAX_CTX_BLOCKS, SEQ_TILE, HEAD_DIM], pl.BF16],
             wo: pl.Tensor[[OUT_PROJ_K_BLOCKS, OUT_PROJ_N_BLOCKS, OUT_PROJ_K_CHUNK, OUT_PROJ_N_CHUNK], pl.BF16],
-            post_rms_weight: pl.Tensor[[K_BLOCKS, 1, 1, K_CHUNK], pl.FP32],
+            post_rms_weight: pl.Tensor[[POST_RMS_K_BLOCKS, 1, 1, POST_RMS_K_CHUNK], pl.FP32],
             w_gate: pl.Tensor[[K_BLOCKS, MLP_OUT_BLOCKS, K_CHUNK, MLP_OUT_CHUNK], pl.BF16],
             w_up: pl.Tensor[[K_BLOCKS, MLP_OUT_BLOCKS, K_CHUNK, MLP_OUT_CHUNK], pl.BF16],
             w_down: pl.Tensor[[DOWN_K_BLOCKS, DOWN_N_BLOCKS, DOWN_K_CHUNK, DOWN_N_CHUNK], pl.BF16],
             out: pl.Out[pl.Tensor[[DOWN_N_BLOCKS, 1, BATCH, DOWN_N_CHUNK], pl.BF16]],
         ) -> pl.Tensor[[DOWN_N_BLOCKS, 1, BATCH, DOWN_N_CHUNK], pl.BF16]:
-            q_proj = pl.create_tensor([Q_OUT_BLOCKS, 1, BATCH, Q_OUT_CHUNK], dtype=pl.FP32)
+            q_proj = pl.create_tensor([Q_PROJ_OUT_BLOCKS, 1, BATCH, Q_PROJ_OUT_CHUNK], dtype=pl.FP32)
             k_proj = pl.create_tensor([KV_OUT_BLOCKS, 1, BATCH, KV_OUT_CHUNK], dtype=pl.FP32)
             v_proj = pl.create_tensor([KV_OUT_BLOCKS, 1, BATCH, KV_OUT_CHUNK], dtype=pl.FP32)
 
@@ -127,7 +136,7 @@ def build_qwen3_decode_program():
                     normed_states = pl.assemble(normed_states, pl.cast(normed, target_type=pl.BF16), [kb, 0, 0, 0])
 
             # Q projection.
-            for qb in pl.parallel(Q_OUT_BLOCKS):
+            for qb in pl.parallel(Q_PROJ_OUT_BLOCKS):
                 with pl.at(level=pl.Level.CORE_GROUP, name_hint="q_proj"):
                     tile_a0 = normed_states[0:1, :, :, :]
                     tile_b0 = wq[0:1, qb : qb + 1, :, :]
@@ -144,7 +153,7 @@ def build_qwen3_decode_program():
                     tile_a0 = normed_states[0:1, :, :, :]
                     tile_wk0 = wk[0:1, kvb : kvb + 1, :, :]
                     k_acc = pl.matmul(tile_a0, tile_wk0, out_dtype=pl.FP32)
-                    for kb in pl.pipeline(1, HIDDEN_K_BLOCKS, stage=2):
+                    for kb in pl.pipeline(1, HIDDEN_K_BLOCKS, stage=3):
                         tile_a_i = normed_states[kb : kb + 1, :, :, :]
                         tile_wk_i = wk[kb : kb + 1, kvb : kvb + 1, :, :]
                         k_acc = pl.matmul_acc(k_acc, tile_a_i, tile_wk_i)
@@ -154,7 +163,7 @@ def build_qwen3_decode_program():
                     tile_a0 = normed_states[0:1, :, :, :]
                     tile_wv0 = wv[0:1, kvb : kvb + 1, :, :]
                     v_acc = pl.matmul(tile_a0, tile_wv0, out_dtype=pl.FP32)
-                    for kb in pl.pipeline(1, HIDDEN_K_BLOCKS, stage=2):
+                    for kb in pl.pipeline(1, HIDDEN_K_BLOCKS, stage=3):
                         tile_a_i = normed_states[kb : kb + 1, :, :, :]
                         tile_wv_i = wv[kb : kb + 1, kvb : kvb + 1, :, :]
                         v_acc = pl.matmul_acc(v_acc, tile_a_i, tile_wv_i)
@@ -195,8 +204,8 @@ def build_qwen3_decode_program():
                         q_pad_idx = b * TOTAL_Q_GROUPS + ki
                         for qi in pl.range(Q_HEAD_BATCH):
                             q_col = (q_base + qi) * HEAD_DIM
-                            q_block = q_col // Q_OUT_CHUNK
-                            q_offset = q_col - q_block * Q_OUT_CHUNK
+                            q_block = q_col // Q_PROJ_OUT_CHUNK
+                            q_offset = q_col - q_block * Q_PROJ_OUT_CHUNK
                             q_lo = q_proj[q_block : q_block + 1, :, b : b + 1, q_offset : q_offset + HALF_DIM]
                             q_hi = q_proj[q_block : q_block + 1, :, b : b + 1, q_offset + HALF_DIM : q_offset + HEAD_DIM]
                             q_rot_lo = pl.sub(pl.col_expand_mul(q_lo, cos_lo), pl.col_expand_mul(q_hi, sin_lo))
@@ -353,22 +362,17 @@ def build_qwen3_decode_program():
             # ── Scope 3: output projection + residual + post RMSNorm + MLP + residual ──
             out_proj_tile = pl.create_tensor([OUT_PROJ_N_BLOCKS, 1, BATCH, OUT_PROJ_N_CHUNK], dtype=pl.FP32)
 
-            # Stage 1: Output projection.
+            # Stage 1: Output projection. Single full-width (512) matmul per output block —
+            # the cube prefers one large N tile over two 256 halves, and the [128,512] weight
+            # tile fits the Mat buffer.
             for oi in pl.parallel(OUT_PROJ_N_BLOCKS):
                 with pl.at(level=pl.Level.CORE_GROUP, name_hint="out_proj"):
                     a_chunk0 = attn_proj_tile[0:1, :, :, :]
-                    w_chunk0_lo = wo[0:1, oi : oi + 1, :, 0:Q_OUT_CHUNK]
-                    o_acc_lo = pl.matmul(a_chunk0, w_chunk0_lo, out_dtype=pl.FP32)
-                    w_chunk0_hi = wo[0:1, oi : oi + 1, :, Q_OUT_CHUNK:OUT_PROJ_N_CHUNK]
-                    o_acc_hi = pl.matmul(a_chunk0, w_chunk0_hi, out_dtype=pl.FP32)
-                    for kb in pl.pipeline(1, OUT_PROJ_K_BLOCKS, stage=2):
+                    o_acc = pl.matmul(a_chunk0, wo[0:1, oi : oi + 1, :, :], out_dtype=pl.FP32)
+                    for kb in pl.pipeline(1, OUT_PROJ_K_BLOCKS, stage=3):
                         a_chunk_i = attn_proj_tile[kb : kb + 1, :, :, :]
-                        w_chunk_i_lo = wo[kb : kb + 1, oi : oi + 1, :, 0:Q_OUT_CHUNK]
-                        o_acc_lo = pl.matmul_acc(o_acc_lo, a_chunk_i, w_chunk_i_lo)
-                        w_chunk_i_hi = wo[kb : kb + 1, oi : oi + 1, :, Q_OUT_CHUNK:OUT_PROJ_N_CHUNK]
-                        o_acc_hi = pl.matmul_acc(o_acc_hi, a_chunk_i, w_chunk_i_hi)
-                    out_proj_tile = pl.assemble(out_proj_tile, o_acc_lo, [oi, 0, 0, 0])
-                    out_proj_tile = pl.assemble(out_proj_tile, o_acc_hi, [oi, 0, 0, Q_OUT_CHUNK])
+                        o_acc = pl.matmul_acc(o_acc, a_chunk_i, wo[kb : kb + 1, oi : oi + 1, :, :])
+                    out_proj_tile = pl.assemble(out_proj_tile, o_acc, [oi, 0, 0, 0])
 
             # Stage 2: Residual addition with hidden_states.
             resid1_tile = pl.create_tensor([OUT_PROJ_N_BLOCKS, 1, BATCH, OUT_PROJ_N_CHUNK], dtype=pl.FP32)
@@ -396,21 +400,19 @@ def build_qwen3_decode_program():
                     resid1_tile = pl.assemble(resid1_tile, resid_tail, [oi, 0, 0, Q_OUT_CHUNK + Q_PROJ_K_CHUNK])
 
             # Stage 3: Post-attention RMSNorm.
-            post_norm_tile = pl.create_tensor([K_BLOCKS, 1, BATCH, K_CHUNK], dtype=pl.BF16)
+            # POST_RMS_K_CHUNK=512 matches OUT_PROJ_N_CHUNK so each resid1_tile block is one
+            # iteration (no offset arithmetic). Halves the loop count vs K_CHUNK=256.
+            post_norm_tile = pl.create_tensor([POST_RMS_K_BLOCKS, 1, BATCH, POST_RMS_K_CHUNK], dtype=pl.BF16)
             with pl.at(level=pl.Level.CORE_GROUP, name_hint="post_rmsnorm"):
                 sq_sum = pl.full([1, BATCH], dtype=pl.FP32, value=0.0)
-                for kb in pl.pipeline(K_BLOCKS, stage=2):
-                    resid_block = kb // (OUT_PROJ_N_CHUNK // K_CHUNK)
-                    resid_offset = (kb - resid_block * (OUT_PROJ_N_CHUNK // K_CHUNK)) * K_CHUNK
-                    resid_chunk = resid1_tile[resid_block : resid_block + 1, :, :, resid_offset : resid_offset + K_CHUNK]
+                for kb in pl.pipeline(POST_RMS_K_BLOCKS, stage=2):
+                    resid_chunk = resid1_tile[kb : kb + 1, :, :, :]
                     sq_chunk = pl.reshape(pl.row_sum(pl.mul(resid_chunk, resid_chunk)), [1, BATCH])
                     sq_sum = pl.add(sq_sum, sq_chunk)
                 inv_rms_s3 = pl.recip(pl.sqrt(pl.add(pl.mul(sq_sum, HIDDEN_INV), EPS)))
                 inv_rms_s3_col = pl.reshape(inv_rms_s3, [BATCH, 1])
-                for kb in pl.pipeline(K_BLOCKS, stage=2):
-                    resid_block = kb // (OUT_PROJ_N_CHUNK // K_CHUNK)
-                    resid_offset = (kb - resid_block * (OUT_PROJ_N_CHUNK // K_CHUNK)) * K_CHUNK
-                    resid_chunk = resid1_tile[resid_block : resid_block + 1, :, :, resid_offset : resid_offset + K_CHUNK]
+                for kb in pl.pipeline(POST_RMS_K_BLOCKS, stage=2):
+                    resid_chunk = resid1_tile[kb : kb + 1, :, :, :]
                     post_gamma = post_rms_weight[kb : kb + 1, :, :, :]
                     post_normed = pl.col_expand_mul(pl.row_expand_mul(resid_chunk, inv_rms_s3_col), post_gamma)
                     post_norm_tile = pl.assemble(post_norm_tile, pl.cast(post_normed, target_type=pl.BF16), [kb, 0, 0, 0])
@@ -419,20 +421,24 @@ def build_qwen3_decode_program():
             mlp_tile = pl.create_tensor([MLP_OUT_BLOCKS, 1, BATCH, MLP_OUT_CHUNK], dtype=pl.BF16)
             for mb in pl.parallel(MLP_OUT_BLOCKS):
                 with pl.at(level=pl.Level.CORE_GROUP, name_hint="gate_proj"):
-                    post0 = post_norm_tile[0:1, :, :, :]
+                    post0 = post_norm_tile[0:1, :, :, 0:K_CHUNK]
                     wg0 = w_gate[0:1, mb : mb + 1, :, :]
                     gate_acc = pl.matmul(post0, wg0, out_dtype=pl.FP32)
                     for kb in pl.pipeline(1, K_BLOCKS, stage=2):
-                        post_chunk = post_norm_tile[kb : kb + 1, :, :, :]
+                        prb = kb // (POST_RMS_K_CHUNK // K_CHUNK)
+                        pro = (kb - prb * (POST_RMS_K_CHUNK // K_CHUNK)) * K_CHUNK
+                        post_chunk = post_norm_tile[prb : prb + 1, :, :, pro : pro + K_CHUNK]
                         wg = w_gate[kb : kb + 1, mb : mb + 1, :, :]
                         gate_acc = pl.matmul_acc(gate_acc, post_chunk, wg)
 
                 with pl.at(level=pl.Level.CORE_GROUP, name_hint="up_proj"):
-                    post0 = post_norm_tile[0:1, :, :, :]
+                    post0 = post_norm_tile[0:1, :, :, 0:K_CHUNK]
                     wu0 = w_up[0:1, mb : mb + 1, :, :]
                     up_acc = pl.matmul(post0, wu0, out_dtype=pl.FP32)
                     for kb in pl.pipeline(1, K_BLOCKS, stage=2):
-                        post_chunk = post_norm_tile[kb : kb + 1, :, :, :]
+                        prb = kb // (POST_RMS_K_CHUNK // K_CHUNK)
+                        pro = (kb - prb * (POST_RMS_K_CHUNK // K_CHUNK)) * K_CHUNK
+                        post_chunk = post_norm_tile[prb : prb + 1, :, :, pro : pro + K_CHUNK]
                         wu = w_up[kb : kb + 1, mb : mb + 1, :, :]
                         up_acc = pl.matmul_acc(up_acc, post_chunk, wu)
 
@@ -485,7 +491,7 @@ def build_tensor_specs(use_max_seq: bool = False):
         return (torch.rand(HIDDEN_K_BLOCKS, 1, 1, Q_PROJ_K_CHUNK) - 0.5) * ACTIVATION_INIT_SCALE
 
     def init_wq():
-        return torch.rand(HIDDEN_K_BLOCKS, Q_OUT_BLOCKS, Q_PROJ_K_CHUNK, Q_OUT_CHUNK) / HIDDEN ** 0.5
+        return torch.rand(HIDDEN_K_BLOCKS, Q_PROJ_OUT_BLOCKS, Q_PROJ_K_CHUNK, Q_PROJ_OUT_CHUNK) / HIDDEN ** 0.5
 
     def init_wk():
         return torch.rand(HIDDEN_K_BLOCKS, KV_OUT_BLOCKS, KV_PROJ_K_CHUNK, KV_OUT_CHUNK) / HIDDEN ** 0.5
@@ -514,7 +520,7 @@ def build_tensor_specs(use_max_seq: bool = False):
         return (torch.rand(OUT_PROJ_K_BLOCKS, OUT_PROJ_N_BLOCKS, OUT_PROJ_K_CHUNK, OUT_PROJ_N_CHUNK) - 0.5) * OUT_PROJ_INIT_SCALE / HIDDEN ** 0.5
 
     def init_post_rms_weight():
-        return torch.ones(K_BLOCKS, 1, 1, K_CHUNK) * POST_RMS_INIT_SCALE
+        return torch.ones(POST_RMS_K_BLOCKS, 1, 1, POST_RMS_K_CHUNK) * POST_RMS_INIT_SCALE
 
     def init_w_gate():
         return (torch.rand(K_BLOCKS, MLP_OUT_BLOCKS, K_CHUNK, MLP_OUT_CHUNK) - 0.5) / HIDDEN ** 0.5
@@ -528,7 +534,7 @@ def build_tensor_specs(use_max_seq: bool = False):
     return [
         TensorSpec("hidden_states", [HIDDEN_K_BLOCKS, 1, BATCH, Q_PROJ_K_CHUNK], torch.bfloat16, init_value=init_hidden_states),
         TensorSpec("input_rms_weight", [HIDDEN_K_BLOCKS, 1, 1, Q_PROJ_K_CHUNK], torch.float32, init_value=init_rms_weight),
-        TensorSpec("wq", [HIDDEN_K_BLOCKS, Q_OUT_BLOCKS, Q_PROJ_K_CHUNK, Q_OUT_CHUNK], torch.bfloat16, init_value=init_wq),
+        TensorSpec("wq", [HIDDEN_K_BLOCKS, Q_PROJ_OUT_BLOCKS, Q_PROJ_K_CHUNK, Q_PROJ_OUT_CHUNK], torch.bfloat16, init_value=init_wq),
         TensorSpec("wk", [HIDDEN_K_BLOCKS, KV_OUT_BLOCKS, KV_PROJ_K_CHUNK, KV_OUT_CHUNK], torch.bfloat16, init_value=init_wk),
         TensorSpec("wv", [HIDDEN_K_BLOCKS, KV_OUT_BLOCKS, KV_PROJ_K_CHUNK, KV_OUT_CHUNK], torch.bfloat16, init_value=init_wv),
         TensorSpec("seq_lens", [BATCH, 1, 1, 1], torch.int32, init_value=init_seq_lens),
@@ -537,7 +543,7 @@ def build_tensor_specs(use_max_seq: bool = False):
         TensorSpec("k_cache", [BATCH * NUM_KV_HEADS, MAX_CTX_BLOCKS, SEQ_TILE, HEAD_DIM], torch.bfloat16, init_value=init_k_cache),
         TensorSpec("v_cache", [BATCH * NUM_KV_HEADS, MAX_CTX_BLOCKS, SEQ_TILE, HEAD_DIM], torch.bfloat16, init_value=init_v_cache),
         TensorSpec("wo", [OUT_PROJ_K_BLOCKS, OUT_PROJ_N_BLOCKS, OUT_PROJ_K_CHUNK, OUT_PROJ_N_CHUNK], torch.bfloat16, init_value=init_wo),
-        TensorSpec("post_rms_weight", [K_BLOCKS, 1, 1, K_CHUNK], torch.float32, init_value=init_post_rms_weight),
+        TensorSpec("post_rms_weight", [POST_RMS_K_BLOCKS, 1, 1, POST_RMS_K_CHUNK], torch.float32, init_value=init_post_rms_weight),
         TensorSpec("w_gate", [K_BLOCKS, MLP_OUT_BLOCKS, K_CHUNK, MLP_OUT_CHUNK], torch.bfloat16, init_value=init_w_gate),
         TensorSpec("w_up", [K_BLOCKS, MLP_OUT_BLOCKS, K_CHUNK, MLP_OUT_CHUNK], torch.bfloat16, init_value=init_w_up),
         TensorSpec("w_down", [DOWN_K_BLOCKS, DOWN_N_BLOCKS, DOWN_K_CHUNK, DOWN_N_CHUNK], torch.bfloat16, init_value=init_w_down),

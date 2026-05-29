@@ -1,0 +1,37 @@
+commit	runtime	status	description
+7662590	2072.91	keep	baseline (unmodified qwen3_32b_decode_4d.py, 100 repeat / 5 warmup)
+ea1b701	2079.39	discard	MLP_OUT_CHUNK 256->512: flat (HBM-bound region), exec down 1100us but wall unchanged
+6e41480	2050.80	keep	DOWN_K_CHUNK 64->128, halve down_proj K iters (400->200), exec 388->369us
+6e41480	2064.94	discard	down_proj split-K=2: regressed (exec% 98.9->77.5, +head OH); 16-task down already HBM-saturated
+6e41480	2054.33	discard	gate/up pipeline stage 2->3: flat, exec% unchanged 53% (head OH is HBM bw queue not pipe fill)
+55a8bea	2021.19	keep	decouple q_proj output chunk 256->512, q_proj 32->16 tasks, exec% 62.8->89.1%
+55a8bea	0.000	crash	down_proj DOWN_K_CHUNK=256 + N-split: Mat buffer OOM 557KB (K-chunk caps buffer regardless of N split); 128 is ceiling
+55a8bea	2021.97	discard	MLP_OUT_CHUNK 256->512 (retest on q_proj-fixed base): exactly flat, more UB used; bw-bound
+55a8bea	2159.37	discard	down_proj DOWN_N_CHUNK 512->256: regressed badly (exec 5915->9056 core-us); smaller N tile starves cube
+506ed27	2013.69	keep	KV_OUT_CHUNK 256->512, k/v_proj 4->2 tasks each @96% (separate scopes, no OOM)
+506ed27	2012.94	discard	SEQ_TILE 256->512: flat, attention not wall-bound (hidden under cube); more mem/padding
+da1d803	1967.28	keep	K_CHUNK 128->256, halve gate/up+post_rmsnorm K iters, post_rmsnorm tail OH 63->12us
+da1d803	0.000	crash	K_CHUNK=512: gate_proj Mat buffer OOM 557KB; 256 is ceiling
+da1d803	0.000	crash	fuse out_proj+residual: FlattenTileNdTo2D slice unsupported on >2D matmul accumulator tile
+da1d803	1971.06	discard	down_proj pipeline stage 2->3: flat, down is exec-bound (98.9%) no fill bubble
+69d6608	1965.78	keep	out_proj single 512-wide matmul (drop lo/hi 256 split), out_proj exec 152->136us, simpler
+f3905ad	0.000	crash	OUT_PROJ_K_CHUNK=256: Mat buffer OOM 540KB (B=[256,512]=256KB ping-pong=512KB; hits same 512KB ceiling as before)
+80190e7	1950.28	keep	POST_RMS_K_CHUNK 256->512 (decouple from K_CHUNK), post_rmsnorm 32->16 iters, exec 23->18us
+80190e7	1960.76	discard	q_proj K pipeline stage 2->3: flat/noise, q_proj already 97% exec-efficient
+80190e7	1960.46	discard	post_rmsnorm pipeline stage 2->3: flat/worse, stage=4 OOMs vec buffer 192KB
+80190e7	1949.47	discard	rmsnorm pipeline stage 4->6: flat (1945/1953 across runs), exec increased 31->34us
+80190e7	0.000	crash	fuse down_proj+residual: AIV Vec buffer OOM 344KB (auto_chunk window holds full down_acc+resid simultaneously)
+80190e7	0.000	crash	fuse out_proj+residual (reshape-to-2D): ptoas alignment error on column slice (row_byte_size=4 not 32-aligned)
+80190e7	0.000	crash	fuse out_proj+residual (assemble-full-then-add): AIV Vec buffer OOM 340KB (windowed auto_chunk needs 3x buffers)
+80190e7	0.000	crash	out_proj+residual spmd+UP_DOWN: SplitVectorKernel error (4D acc [1,1,16,512] has dim-0=1; UP_DOWN needs 2D [BATCH,N] like 14b)
+e04aec0	1950.77	keep	out_proj pipeline stage 2->3, exec% 96.3->97.2%, marginal but consistent
+95f75a8	1944.49	keep	k/v_proj pipeline stage 2->3 (B=[128,512]=128KB, 3x=384KB<512KB), exec% 97->98%
+95f75a8	1945.62	discard	q_proj pipeline stage 2->3: flat/noise (avg 1945 vs prev 1944, negligible)
+95f75a8	1954.84	discard	down_proj pipeline stage 2->3: worse (1954 vs 1944), exec-bound at 99%, stage depth overhead dominant
+95f75a8	1945.51	discard	gate/up pipeline stage 2->3: flat (1945 vs 1944), head OH is HBM queue not pipeline depth
+95f75a8	0.000	crash	gate+up+silu fused pl.at: Mat buffer OOM 557KB (two interleaved B-tiles wg+wu in same pipeline = 2×128KB×2 > 512KB)
+5d52a87	0.000	crash	MLP_OUT_CHUNK 256->512 (with K_CHUNK=256): Mat buffer OOM 540KB (B=[256,512]=256KB×2=512KB+overhead)
+95f75a8	0.000	crash	MLP_OUT_CHUNK 256->512 (with K_CHUNK=256 current): Mat buffer OOM 540KB same wall
+c96abe2	2174.66	discard	gate+up+silu fused with pl.range (no ping-pong): regressed 1944->2174us (exec 75->177us; serial loads without prefetch cost too much)
+a2cfd43	0.000	crash	KV_OUT_CHUNK=1024: OOM 798KB (B=[128,1024]=256KB×2ping-pong+overhead); KV_OUT=512 is absolute ceiling
+95f75a8	0.000	crash	KV_OUT_CHUNK=1024: OOM 798KB (B=[128,1024]=256KB×2; KV=512 is absolute ceiling for b=[128,N])

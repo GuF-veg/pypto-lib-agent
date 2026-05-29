@@ -9,8 +9,8 @@ To set up a new experiment, work with the user to:
 1. **Create the branch**: `git checkout -b autoresearch` from current branch (if already on this branch, ignore this).
 2. **Read the in-scope files**: The repo is small. Read these files for full context:
    - `docs/` — The documents of pypto-lib.
-   - `models/qwen3/32b/qwen3_32b_decode.py` — the file you modify.
-3. **Initialize results.tsv**: Create `results/results.tsv` with just the header row. The baseline will be recorded after the first run.
+   - `models/qwen3/32b/qwen3_32b_decode_4d.py` — the file you modify.
+3. **Initialize results.tsv**: Create `log/results_qwen3_32b_decode_4d.tsv` with just the header row. The baseline will be recorded after the first run.
 4. **Confirm and go**: Confirm setup looks good.
 
 Once you get confirmation, kick off the experimentation.
@@ -21,11 +21,11 @@ Each experiment runs on a single GPU.
 You can run an experiment simply as: 
 ```bash
 conda activate pypto
-pprofile models/qwen3/32b/qwen3_32b_decode.py
+PYPTO_PROG_BUILD_DIR=/tmp/gufeng pprofile models/qwen3/32b/qwen3_32b_decode_4d.py
 ```
 
 **What you CAN do:**
-- Modify the script `models/qwen3/32b/qwen3_32b_decode.py` (except the `golden_qwen3_decode` function) — this is the only file you can edit.
+- Modify the script `models/qwen3/32b/qwen3_32b_decode_4d.py` (except the `golden_qwen3_decode` function) — this is the only file you can edit.
 
 **What you CANNOT do:**
 - Modify the evaluation harness.
@@ -39,7 +39,7 @@ pprofile models/qwen3/32b/qwen3_32b_decode.py
 
 ## Output format
 
-Once you run the script with `pprofile models/qwen3/32b/qwen3_32b_decode.py`, it prints a summary like this:
+Once you run the script with `PYPTO_PROG_BUILD_DIR=/tmp/gufeng pprofile models/qwen3/32b/qwen3_32b_decode_4d.py`, it prints a summary like this:
 
 ```
 [RUN] compile ...
@@ -166,7 +166,7 @@ Other indicators can assist you in performance optimization.
 
 ## Logging results
 
-When an experiment is done, log it to `log/results.tsv` (tab-separated, NOT comma-separated — commas break in descriptions).
+When an experiment is done, log it to `log/results_qwen3_32b_decode_4d.tsv` (tab-separated, NOT comma-separated — commas break in descriptions).
 
 The TSV has a header row and 5 columns:
 
@@ -202,12 +202,12 @@ The experiment runs on a dedicated branch (e.g. `autoresearch`) created from the
 LOOP FOREVER:
 
 1. Look at the git state: the current branch/commit we're on, you maybe already on the autoresearch branch, then go to next step.
-2. Tune the codes in `models/qwen3/32b/qwen3_32b_decode.py` with an experimental idea by directly hacking the code, before you coding, please use superpower to brainstorm and do the detailed plan.
-3. Run the cmd instruction `rm -rf build_output/*` to clear the temp files.
-4. Run the script: `pprofile models/qwen3/32b/qwen3_32b_decode.py` to get the result of your code. You need to check there should be `[RUN] PASS` in the output which indicates the correctness of your algorithm. You can use `grep -oP 'Total Test Time:\s+\K[\d.]+'` to the output to get the runtime, but other information in the output maybe helpful for you to do the optimization.
+2. Tune the codes in `models/qwen3/32b/qwen3_32b_decode_4d.py` with an experimental idea by directly hacking the code, before you coding, please use superpower to brainstorm and do the detailed plan.
+3. Run the cmd instruction `rm -rf /tmp/gufeng` to delete the temp files.
+4. Run the script: `PYPTO_PROG_BUILD_DIR=/tmp/gufeng pprofile models/qwen3/32b/qwen3_32b_decode_4d.py` to get the result of your code. You need to check there should be `[RUN] PASS` in the output which indicates the correctness of your algorithm. You can use `grep -oP 'Total Test Time:\s+\K[\d.]+'` to the output to get the runtime, but other information in the output maybe helpful for you to do the optimization.
 5. If the results don't pass, you need to debug by yourself. If the bug still cannot be resolved after multiple iterations, discard this modification and reset back to where you started.
-6. If the runtime improved (Due to timing inaccuracies in program execution, if there is a performance improvement, you need to run repeated experiments to ensure that the improvement is reproducible.), write your optimization method in `docs/successful_optimization.md` and commit your changes in git.
-7. If the runtime is worse, write your lessons learned in `docs/failed_optimization.md`, discard all your changes and reset back to where you started.
+6. If the runtime improved (Due to timing inaccuracies in program execution, if there is a performance improvement, you need to run repeated experiments to ensure that the improvement is reproducible.), write your optimization method in `log/qwen3_32b_decode_4d/successful_optimization.md` and commit your changes in git.
+7. If the runtime is worse, write your lessons learned in `log/qwen3_32b_decode_4d/failed_optimization.md`, discard all your changes and reset back to where you started.
 8. Record the results in the tsv.
 
 The idea is that you are a completely autonomous researcher trying things out. If they work, keep. If they don't, discard. And you're advancing the branch so that you can iterate. If you feel like you're getting stuck in some way, you can rewind but you should probably do this very very sparingly (if ever).

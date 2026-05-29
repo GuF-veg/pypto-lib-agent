@@ -1,0 +1,14 @@
+commit	runtime	status	description
+08d3539	2013.47	keep	baseline (unmodified qwen3_32b_decode.py, 100 repeat / 5 warmup)
+e9b163f	1953.00	keep	MLP_OUT_CHUNK 256->512, fewer gate/up tasks, less head OH
+7f6d476	1920.00	keep	DOWN_K_CHUNK 128->256, halve down_proj K pipeline iters
+8ff8ee0	1942.81	discard	OUT_PROJ_K_CHUNK 128->256 regressed, reverted
+2b37881	1932.61	discard	MLP_SPMD_INNER 2->5 mild regression, reverted
+91c1723	1978.82	discard	fuse MLP gate+up+silu, OOM at 512 / slower at 256, reverted
+7aa8a6a	1888.00	keep	Q_PROJ_OUT_CHUNK 256->512 decoupled, halves q_proj tasks
+3e0f5da	0.000	crash	down_proj stride 1 breaks auto_chunk UP_DOWN; Q1024/KV512/K256/stage4/DOWNN512/DOWNK512 OOM
+c9ab234	1820.00	keep	down_proj split-K=2, 64 partial tasks + reduce, fills idle cores
+77fef1d	1799.00	keep	out_proj split-K=2, 64 partial + reduce w/ residual
+d76cb85	1836.09	discard	DOWN_K_SPLIT=5 / OUT_K_SPLIT=4 over-split, reverted to =2
+f0022d6	1789.00	keep	MLP gate/up split-K=2, reduce+silu, simpler code
+9011a43	0.000	crash	MLP_OUT_CHUNK=256 + split-K runtime timeout (too many tasks)
