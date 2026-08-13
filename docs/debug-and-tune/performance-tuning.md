@@ -144,6 +144,12 @@ merged Perfetto view and dependency arrows.
 The trace shows one lane per AICPU / AIC / AIV with task name, duration
 and dependency edges — gaps and stalls are visible directly.
 
+For an automated optimization loop, do not place the merged Perfetto JSON in
+the model context. Use [Agent Profile Feedback](agent-profile-feedback.md) as
+a read-only evidence toolbox for L2 dependencies and timing, scheduler phases,
+compiler reports, PMU counters, and in-core artifacts. It returns objective
+facts; the optimization loop remains responsible for choosing an action.
+
 ### What to look for
 
 Look for these shapes on the swimlane that indicate a problem:

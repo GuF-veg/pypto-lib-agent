@@ -1,0 +1,4 @@
+interface:
+  display_name: "Profile Feedback"
+  short_description: "Query objective facts from existing PyPTO profiles"
+  default_prompt: "Use $profile-feedback to inspect the existing profile artifacts and return objective evidence only."
