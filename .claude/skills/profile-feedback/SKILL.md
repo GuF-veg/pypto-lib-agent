@@ -29,7 +29,8 @@ decide what, if anything, to optimize.
 Run the narrowest query that answers the caller's question:
 
 ```bash
-python -m tools.profile_feedback <artifact-root> [--rank <label>] \
+python .claude/skills/profile-feedback/scripts/profile_feedback.py \
+  <artifact-root> [--rank <label>] \
   [--format facts|markdown] [--max-bytes N] <query> [options]
 ```
 

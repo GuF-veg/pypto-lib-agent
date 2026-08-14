@@ -10,7 +10,7 @@ PyPTO-Lib implements this as two layers:
 ```text
 existing profile artifacts
         ↓
-tools.profile_feedback — read-only parsers and evidence queries
+profile feedback analyzer — read-only parsers and evidence queries
         ↓
 profile-feedback skill — instructions for selecting a query
         ↓
@@ -20,23 +20,27 @@ caller — decides whether and how to optimize
 Neither layer collects a profile, changes source code, identifies an
 optimization, or invokes another tuning workflow.
 
+The examples below use `python <profile-feedback-script>` as the analyzer
+entry point. Agent integrations provide its concrete location; this guide
+defines the stable arguments, records, and evidence semantics.
+
 ## Quick start
 
 Inspect the artifact set before assuming which evidence is present:
 
 ```bash
-python -m tools.profile_feedback build_output/<case> inventory
+python <profile-feedback-script> build_output/<case> inventory
 ```
 
 Request the machine-oriented fact stream (the default), or a neutral Markdown
 wrapper for human review:
 
 ```bash
-python -m tools.profile_feedback \
+python <profile-feedback-script> \
   build_output/Qwen3Decode_<timestamp>/dfx_outputs \
   --format facts summary
 
-python -m tools.profile_feedback \
+python <profile-feedback-script> \
   build_output/Qwen3Decode_<timestamp>/dfx_outputs \
   --format markdown critical-path --kind observed
 ```
@@ -66,22 +70,22 @@ Examples:
 
 ```bash
 # Find all exact task IDs for one repeated family.
-python -m tools.profile_feedback <profile-root> tasks \
+python <profile-feedback-script> <profile-root> tasks \
   --family down_proj_residual
 
 # Inspect one exact task and all tensor-edge metadata around it.
-python -m tools.profile_feedback <profile-root> task 8589934937
-python -m tools.profile_feedback <profile-root> deps 8589934937
+python <profile-feedback-script> <profile-root> task 8589934937
+python <profile-feedback-script> <profile-root> deps 8589934937
 
 # Inspect scheduler counts or retain every recorded phase.
-python -m tools.profile_feedback <profile-root> scheduler
-python -m tools.profile_feedback <profile-root> scheduler --raw
+python <profile-feedback-script> <profile-root> scheduler
+python <profile-feedback-script> <profile-root> scheduler --raw
 
 # Read optional artifacts without requiring an L2 capture.
-python -m tools.profile_feedback <build-root> perf-hints
-python -m tools.profile_feedback <build-root> memory
-python -m tools.profile_feedback <build-root> pmu --task-id 0x200000a00
-python -m tools.profile_feedback <build-root> incore
+python <profile-feedback-script> <build-root> perf-hints
+python <profile-feedback-script> <build-root> memory
+python <profile-feedback-script> <build-root> pmu --task-id 0x200000a00
+python <profile-feedback-script> <build-root> incore
 ```
 
 For multi-rank captures, `summary`, `metadata`, and `inventory` can enumerate

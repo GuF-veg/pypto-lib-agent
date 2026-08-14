@@ -10,12 +10,29 @@
 from __future__ import annotations
 
 import csv
+import importlib.util
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
-from tools.profile_feedback import ProfileAnalyzer, ProfileError, main
+
+REPOSITORY = Path(__file__).resolve().parents[2]
+PROFILE_FEEDBACK_SCRIPT = (
+    REPOSITORY / ".claude" / "skills" / "profile-feedback" / "scripts" / "profile_feedback.py"
+)
+MODULE_SPEC = importlib.util.spec_from_file_location("profile_feedback_skill", PROFILE_FEEDBACK_SCRIPT)
+if MODULE_SPEC is None or MODULE_SPEC.loader is None:
+    raise RuntimeError(f"cannot load profile feedback script: {PROFILE_FEEDBACK_SCRIPT}")
+PROFILE_FEEDBACK = importlib.util.module_from_spec(MODULE_SPEC)
+sys.modules[MODULE_SPEC.name] = PROFILE_FEEDBACK
+MODULE_SPEC.loader.exec_module(PROFILE_FEEDBACK)
+
+ProfileAnalyzer = PROFILE_FEEDBACK.ProfileAnalyzer
+ProfileError = PROFILE_FEEDBACK.ProfileError
+main = PROFILE_FEEDBACK.main
 
 
 PASS_DUMP = """# pypto.program: _jit_memory
@@ -555,6 +572,24 @@ def test_markdown_renderer_and_cli_output(profile: Path, tmp_path: Path) -> None
     assert "<code>PROFILE</code>" in text
 
 
+def test_direct_skill_script_entrypoint(profile: Path) -> None:
+    help_result = subprocess.run(
+        [sys.executable, str(PROFILE_FEEDBACK_SCRIPT), "--help"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "Render bounded objective facts" in help_result.stdout
+
+    query_result = subprocess.run(
+        [sys.executable, str(PROFILE_FEEDBACK_SCRIPT), str(profile), "summary"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "PROFILE rank=single program=profile level=l2.4" in query_result.stdout
+
+
 def test_rejects_non_level_four_capture(tmp_path: Path) -> None:
     path = _write_profile(tmp_path / "bad", level=2)
 
@@ -585,8 +620,7 @@ def test_rejects_incomplete_spmd_rows(tmp_path: Path) -> None:
 
 
 def test_qwen3_capture_regression_when_available() -> None:
-    repository = Path(__file__).resolve().parents[2]
-    capture = repository / "build_output" / "Qwen3Decode_20260811_203942" / "dfx_outputs"
+    capture = REPOSITORY / "build_output" / "Qwen3Decode_20260811_203942" / "dfx_outputs"
     if not capture.is_dir():
         pytest.skip("generated Qwen3 level-4 capture is not present")
 

@@ -7,9 +7,9 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 
-"""Create compact, graph-aware feedback from an L2 swimlane capture.
+"""Create compact, graph-aware feedback from existing profile artifacts.
 
-The merged Perfetto trace is a visualization artifact.  This module consumes
+The merged Perfetto trace is a visualization artifact.  This script consumes
 the structured records and dependency graph instead, then exposes bounded
 queries that return a line-oriented fact DSL suitable for an optimization
 agent.  All causal claims are deliberately labelled with the evidence that
