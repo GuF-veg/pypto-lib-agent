@@ -163,14 +163,20 @@ sampling is fused into the same program.
 mtp_projection   e_proj(enorm(hidden)) + h_proj(hnorm(prev_hidden))
 decode_mtp       lookup_embedding → mtp_projection → decode_swa → moe
                  → hc_head → rmsnorm → lm_head
-decode_fwd_mtp   decode_fwd → decode_mtp_verify → decode_mtp
+decode_fwd_mtp   decode_fwd → verify_and_pack_mtp_tokens → decode_mtp
 prefill_mtp      mtp_projection → prefill_swa → moe → hc_head → rmsnorm → lm_head
 ```
 
-`decode_mtp_verify` checks the draft token against the main-model sample and
-packs the committed window. `decode_input_pack` and `decode_metadata` lower the
-packed input IDs and the paged-cache metadata on device; `utils` is their
-host-side torch counterpart used by the test fixtures.
+`decode_fwd_mtp` holds the persistent MTP serving state inline: it loads each
+request's previous tail/draft, checks the draft against the main-model sample,
+packs the committed window, and commits the result back to the same slot. It
+also owns the device-side preamble for both halves: metadata lowering and input
+packing before the main layers, embedding lookup and MTP hidden packing before
+the draft layer. `decode_fwd` and `decode_mtp` therefore cover the model body
+alone and take the preamble's results as inputs, which their fixtures build in
+torch. `decode_prepare` lowers the packed input
+IDs and the paged-cache metadata on device; `utils` is its host-side torch
+counterpart used by the test fixtures.
 
 ## Files
 
@@ -178,16 +184,16 @@ host-side torch counterpart used by the test fixtures.
 | --- | --- |
 | Full forward | [decode_fwd.py](../../models/deepseek_v4_flash_mtp/decode_fwd.py), [prefill_fwd.py](../../models/deepseek_v4_flash_mtp/prefill_fwd.py), [decode_fwd_mtp.py](../../models/deepseek_v4_flash_mtp/decode_fwd_mtp.py) |
 | Layer composition | [decode_layer.py](../../models/deepseek_v4_flash_mtp/decode_layer.py), [prefill_layer.py](../../models/deepseek_v4_flash_mtp/prefill_layer.py) |
-| MTP | [decode_mtp.py](../../models/deepseek_v4_flash_mtp/decode_mtp.py), [prefill_mtp.py](../../models/deepseek_v4_flash_mtp/prefill_mtp.py), [decode_mtp_verify.py](../../models/deepseek_v4_flash_mtp/decode_mtp_verify.py), [mtp_projection.py](../../models/deepseek_v4_flash_mtp/mtp_projection.py) |
+| MTP | [decode_mtp.py](../../models/deepseek_v4_flash_mtp/decode_mtp.py), [prefill_mtp.py](../../models/deepseek_v4_flash_mtp/prefill_mtp.py), [mtp_projection.py](../../models/deepseek_v4_flash_mtp/mtp_projection.py) |
 | Decode attention orchestration | [decode_swa.py](../../models/deepseek_v4_flash_mtp/decode_swa.py), [decode_csa.py](../../models/deepseek_v4_flash_mtp/decode_csa.py), [decode_hca.py](../../models/deepseek_v4_flash_mtp/decode_hca.py) |
 | Decode sparse attention (fused o-proj) | [decode_sparse_attn_swa.py](../../models/deepseek_v4_flash_mtp/decode_sparse_attn_swa.py), [decode_sparse_attn_csa.py](../../models/deepseek_v4_flash_mtp/decode_sparse_attn_csa.py), [decode_sparse_attn_hca.py](../../models/deepseek_v4_flash_mtp/decode_sparse_attn_hca.py) |
 | Decode compressors and indexer | [decode_compressor_ratio4.py](../../models/deepseek_v4_flash_mtp/decode_compressor_ratio4.py), [decode_compressor_ratio128.py](../../models/deepseek_v4_flash_mtp/decode_compressor_ratio128.py), [decode_indexer.py](../../models/deepseek_v4_flash_mtp/decode_indexer.py), [decode_indexer_compressor.py](../../models/deepseek_v4_flash_mtp/decode_indexer_compressor.py) |
 | Prefill attention and cache | [prefill_swa.py](../../models/deepseek_v4_flash_mtp/prefill_swa.py), [prefill_csa.py](../../models/deepseek_v4_flash_mtp/prefill_csa.py), [prefill_hca.py](../../models/deepseek_v4_flash_mtp/prefill_hca.py), [prefill_sparse_attn.py](../../models/deepseek_v4_flash_mtp/prefill_sparse_attn.py), [prefill_compressor_ratio4.py](../../models/deepseek_v4_flash_mtp/prefill_compressor_ratio4.py), [prefill_compressor_ratio128.py](../../models/deepseek_v4_flash_mtp/prefill_compressor_ratio128.py), [prefill_indexer.py](../../models/deepseek_v4_flash_mtp/prefill_indexer.py), [prefill_indexer_compressor.py](../../models/deepseek_v4_flash_mtp/prefill_indexer_compressor.py) |
 | Shared transforms | [rmsnorm.py](../../models/deepseek_v4_flash_mtp/rmsnorm.py), [qkv_proj_rope.py](../../models/deepseek_v4_flash_mtp/qkv_proj_rope.py), [hc_pre.py](../../models/deepseek_v4_flash_mtp/hc_pre.py), [hc_post.py](../../models/deepseek_v4_flash_mtp/hc_post.py), [hc_head.py](../../models/deepseek_v4_flash_mtp/hc_head.py), [rope_interleave.py](../../models/deepseek_v4_flash_mtp/rope_interleave.py), [lookup_embedding.py](../../models/deepseek_v4_flash_mtp/lookup_embedding.py) |
 | MoE and output | [moe.py](../../models/deepseek_v4_flash_mtp/moe.py), [gate.py](../../models/deepseek_v4_flash_mtp/gate.py), [expert_shared.py](../../models/deepseek_v4_flash_mtp/expert_shared.py), [expert_routed.py](../../models/deepseek_v4_flash_mtp/expert_routed.py), [lm_head.py](../../models/deepseek_v4_flash_mtp/lm_head.py) |
-| Metadata and host helpers | [decode_metadata.py](../../models/deepseek_v4_flash_mtp/decode_metadata.py), [decode_input_pack.py](../../models/deepseek_v4_flash_mtp/decode_input_pack.py), [config.py](../../models/deepseek_v4_flash_mtp/config.py), [utils.py](../../models/deepseek_v4_flash_mtp/utils.py) |
+| Metadata and host helpers | [decode_prepare.py](../../models/deepseek_v4_flash_mtp/decode_prepare.py), [config.py](../../models/deepseek_v4_flash_mtp/config.py), [utils.py](../../models/deepseek_v4_flash_mtp/utils.py) |
 
-`config.py`, `utils.py`, `rope_interleave.py`, and `decode_input_pack.py` have
+`config.py`, `utils.py`, `rope_interleave.py`, and `decode_prepare.py` have
 no `__main__` block: they are imported rather than run. Executable compositions,
 including `decode_fwd_mtp.py`, are scheduled by the
 [daily model workflow](../../.github/workflows/daily_ci.yml).
