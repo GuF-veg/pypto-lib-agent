@@ -1963,7 +1963,11 @@ class TestDeepSeekV4ProQkvValidation:
         ok, detail = _call_qkv_comparator(comparator, actual, expected)
 
         assert not ok
-        assert "rows>7 changed codes: 1" in detail
+        # The per-row floor is Q_LORA-derived so the assertion holds under any
+        # variant geometry the driver module was imported with (pro: rows>7,
+        # flash: rows>5); eight changed codes in one row exceed both.
+        per_row_floor = int(_QKV.Q_LORA * 0.005)
+        assert f"rows>{per_row_floor} changed codes: 1" in detail
 
     def test_quantized_qr_zero_per_row_ratio_is_strict(self):
         expected = torch.zeros(2, _QKV.Q_LORA, dtype=torch.int8)
