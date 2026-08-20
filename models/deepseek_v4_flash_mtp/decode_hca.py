@@ -64,6 +64,7 @@ O_GROUP_IN = H * HEAD_DIM // O_GROUPS
 
 # kernel-local (HCA: ratio-128 main compressor, no indexer)
 COMPRESS_RATIO = 128  # HCA
+CMP_STORAGE_BLOCK_SIZE = BLOCK_SIZE // COMPRESS_RATIO
 OVERLAP = COMPRESS_RATIO == 4   # always False for HCA
 COFF = 1 + int(OVERLAP)         # always 1 for HCA
 MAIN_OUT_DIM = COFF * HEAD_DIM
@@ -123,7 +124,7 @@ def attention_hca(
     # KV cache split into ori (sliding window) and cmp (compressed) pools to match sparse_attn's contract.
     # cmp_kv is shared with the compressor: it writes the compressed row directly into this pool.
     kv_cache: pl.Tensor[[ORI_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
-    cmp_kv: pl.Tensor[[CMP_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
+    cmp_kv: pl.Tensor[[CMP_BLOCK_NUM_DYN, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
     cmp_block_table: pl.Tensor[[B, CMP_MAX_BLOCKS], pl.INT32],
     ori_slot_mapping: pl.Tensor[[T], pl.INT64],
     window_swa_indices: pl.Tensor[[T, WIN], pl.INT32],
@@ -286,7 +287,7 @@ def attention_hca_test(
     compress_state: pl.Tensor[[COMPRESS_STATE_BLOCK_NUM_DYN, COMPRESS_STATE_BLOCK_SIZE, COMPRESS_STATE_DIM], pl.FP32],
     compress_state_block_table: pl.Tensor[[B, COMPRESS_STATE_MAX_BLOCKS], pl.INT32],
     kv_cache: pl.InOut[pl.Tensor[[ORI_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
-    cmp_kv: pl.Tensor[[CMP_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
+    cmp_kv: pl.Tensor[[CMP_BLOCK_NUM_DYN, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
     cmp_block_table: pl.Tensor[[B, CMP_MAX_BLOCKS], pl.INT32],
     ori_slot_mapping: pl.Tensor[[T], pl.INT64],
     window_swa_indices: pl.Tensor[[T, WIN], pl.INT32],
@@ -564,7 +565,9 @@ def build_tensor_specs(start_pos=None):
     def init_kv_cache():
         return init_normalized_cache((ORI_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM))
     def init_cmp_kv():
-        return init_normalized_cache((CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM))
+        return init_normalized_cache(
+            (CMP_BLOCK_NUM, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM)
+        )
 
     def init_window_block_table():
         return block_table(batch=B, table_blocks=ORI_TABLE_MAX_BLOCKS, physical_blocks=ORI_MAX_BLOCKS)
@@ -573,7 +576,7 @@ def build_tensor_specs(start_pos=None):
         return block_table(
             batch=B,
             table_blocks=CMP_MAX_BLOCKS,
-            physical_blocks=CMP_MAX_BLOCKS,
+            physical_blocks=CMP_BLOCK_NUM,
         )
 
     def init_attn_sink():
@@ -617,7 +620,7 @@ def build_tensor_specs(start_pos=None):
             positions,
             init_cmp_block_table(),
             compress_ratio=COMPRESS_RATIO,
-            block_size=BLOCK_SIZE,
+            block_size=CMP_STORAGE_BLOCK_SIZE,
         ).reshape(-1).contiguous()
     def init_state_slot_mapping():
         return state_slot_mapping(
@@ -656,7 +659,7 @@ def build_tensor_specs(start_pos=None):
         TensorSpec("compress_state", [COMPRESS_STATE_BLOCK_NUM, COMPRESS_STATE_BLOCK_SIZE, COMPRESS_STATE_DIM], torch.float32, init_value=init_compress_state),
         TensorSpec("compress_state_block_table", [B, COMPRESS_STATE_MAX_BLOCKS], torch.int32, init_value=init_compress_state_block_table),
         TensorSpec("kv_cache", [ORI_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], torch.bfloat16, init_value=init_kv_cache, is_output=True),
-        TensorSpec("cmp_kv", [CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], torch.bfloat16, init_value=init_cmp_kv),
+        TensorSpec("cmp_kv", [CMP_BLOCK_NUM, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], torch.bfloat16, init_value=init_cmp_kv),
         TensorSpec("cmp_block_table", [B, CMP_MAX_BLOCKS], torch.int32, init_value=init_cmp_block_table),
         TensorSpec("ori_slot_mapping", [T], torch.int64, init_value=init_ori_slot_mapping),
         TensorSpec("window_swa_indices", [T, WIN], torch.int32, init_value=init_window_swa_indices),

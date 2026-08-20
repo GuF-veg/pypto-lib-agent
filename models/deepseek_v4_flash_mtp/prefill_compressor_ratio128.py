@@ -39,6 +39,7 @@ NOPE_HEAD_DIM = HEAD_DIM - ROPE_HEAD_DIM
 MAX_SEQ_LEN = M.max_position_embeddings
 START_POS = 0
 COMPRESS_RATIO = 128
+CMP_STORAGE_BLOCK_SIZE = BLOCK_SIZE // COMPRESS_RATIO
 OUT_DIM = HEAD_DIM
 STATE_LEN = COMPRESS_RATIO
 COMPRESS_STATE_DIM = 2 * OUT_DIM
@@ -73,7 +74,7 @@ def prefill_compressor_ratio128(
     norm_w: pl.Tensor[[HEAD_DIM], pl.BF16],
     freqs_cos: pl.Tensor[[MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16],
     freqs_sin: pl.Tensor[[MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16],
-    cmp_kv: pl.Out[pl.Tensor[[CMP_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
+    cmp_kv: pl.Out[pl.Tensor[[CMP_BLOCK_NUM_DYN, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
     position_ids: pl.Tensor[[T], pl.INT32],
     num_tokens: pl.Scalar[pl.INT32],
     cmp_slot_mapping: pl.Tensor[[T], pl.INT64],
@@ -88,7 +89,7 @@ def prefill_compressor_ratio128(
         compress_state,
         [state_block_num * HCA_STATE_BLOCK_SIZE, COMPRESS_STATE_DIM],
     )
-    cmp_kv_flat = pl.reshape(cmp_kv, [cmp_block_num * BLOCK_SIZE, HEAD_DIM])
+    cmp_kv_flat = pl.reshape(cmp_kv, [cmp_block_num * CMP_STORAGE_BLOCK_SIZE, HEAD_DIM])
     pooled_kv_pad = pl.create_tensor(
         [HCA_C128_RMS_PAD_ROWS, HEAD_DIM], dtype=pl.FP32, init_value=0
     )
@@ -278,7 +279,7 @@ def prefill_compressor_ratio128_test(
     norm_w: pl.Tensor[[HEAD_DIM], pl.BF16],
     freqs_cos: pl.Tensor[[MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16],
     freqs_sin: pl.Tensor[[MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16],
-    cmp_kv: pl.InOut[pl.Tensor[[CMP_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
+    cmp_kv: pl.InOut[pl.Tensor[[CMP_BLOCK_NUM_DYN, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
     position_ids: pl.Tensor[[T], pl.INT32],
     num_tokens: pl.Scalar[pl.INT32],
     cmp_slot_mapping: pl.Tensor[[T], pl.INT64],
@@ -303,7 +304,7 @@ def golden_prefill_compressor_ratio128(tensors):
     kv_state_flat = compress_state_flat[:, :OUT_DIM]
     score_state_flat = compress_state_flat[:, OUT_DIM:]
     state_block_table = tensors["compress_state_block_table"]
-    cmp_kv_flat = tensors["cmp_kv"].view(HCA_CMP_BLOCK_NUM * BLOCK_SIZE, HEAD_DIM)
+    cmp_kv_flat = tensors["cmp_kv"].view(HCA_CMP_BLOCK_NUM * CMP_STORAGE_BLOCK_SIZE, HEAD_DIM)
 
     def state_row(abs_pos):
         if abs_pos < 0 or abs_pos >= MAX_SEQ_LEN:
@@ -408,7 +409,7 @@ def build_tensor_specs(start_pos: int = START_POS):
     def init_freqs_sin():
         return shared_freqs_sin.clone()
     def init_cmp_kv():
-        return torch.zeros(HCA_CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM, dtype=torch.bfloat16)
+        return torch.zeros(HCA_CMP_BLOCK_NUM, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM, dtype=torch.bfloat16)
     def init_position_ids():
         return torch.arange(start_pos, start_pos + T, dtype=torch.int32)
     def init_cmp_slot_mapping():
@@ -434,7 +435,7 @@ def build_tensor_specs(start_pos: int = START_POS):
         TensorSpec("norm_w", [HEAD_DIM], torch.bfloat16, init_value=init_norm_w),
         TensorSpec("freqs_cos", [MAX_SEQ_LEN, ROPE_HEAD_DIM], torch.bfloat16, init_value=init_freqs_cos),
         TensorSpec("freqs_sin", [MAX_SEQ_LEN, ROPE_HEAD_DIM], torch.bfloat16, init_value=init_freqs_sin),
-        TensorSpec("cmp_kv", [HCA_CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], torch.bfloat16, init_value=init_cmp_kv, is_output=True),
+        TensorSpec("cmp_kv", [HCA_CMP_BLOCK_NUM, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], torch.bfloat16, init_value=init_cmp_kv, is_output=True),
         TensorSpec("position_ids", [T], torch.int32, init_value=init_position_ids),
         ScalarSpec("num_tokens", torch.int32, num_tokens),
         TensorSpec("cmp_slot_mapping", [T], torch.int64, init_value=init_cmp_slot_mapping),

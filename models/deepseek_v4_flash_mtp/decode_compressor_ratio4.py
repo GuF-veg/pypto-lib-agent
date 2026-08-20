@@ -41,6 +41,7 @@ MAX_SEQ_LEN = M.max_position_embeddings
 
 # kernel-local (ratio-4 overlapping compressor)
 COMPRESS_RATIO = 4
+CMP_STORAGE_BLOCK_SIZE = BLOCK_SIZE // COMPRESS_RATIO
 OVERLAP = COMPRESS_RATIO == 4
 COFF = 1 + int(OVERLAP)
 OUT_DIM = COFF * HEAD_DIM
@@ -84,7 +85,7 @@ def compressor_ratio4(
     #   cos[j] = cos_half[j>>1];  sin[j] = sin_half[j>>1] * sign[j], sign = [-1,+1,...]
     cos: pl.Tensor[[B, ROPE_HEAD_DIM], pl.FP32],
     sin: pl.Tensor[[B, ROPE_HEAD_DIM], pl.FP32],
-    cmp_kv_cache: pl.Tensor[[CMP_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
+    cmp_kv_cache: pl.Tensor[[CMP_BLOCK_NUM_DYN, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
     position_ids: pl.Tensor[[B, S], pl.INT32],
     cmp_slot_mapping: pl.Tensor[[B, S], pl.INT64],
     state_slot_mapping: pl.Tensor[[B, S], pl.INT64],
@@ -97,7 +98,7 @@ def compressor_ratio4(
     cmp_block_num = pl.tensor.dim(cmp_kv_cache, 0)
     compress_state_flat = pl.reshape(compress_state, [compress_state_block_num * COMPRESS_STATE_BLOCK_SIZE, COMPRESS_STATE_DIM])
     kv_flat = pl.reshape(kv, [B * S, HEAD_DIM])
-    cmp_kv_cache_flat = pl.reshape(cmp_kv_cache, [cmp_block_num * BLOCK_SIZE, HEAD_DIM])
+    cmp_kv_cache_flat = pl.reshape(cmp_kv_cache, [cmp_block_num * CMP_STORAGE_BLOCK_SIZE, HEAD_DIM])
 
     # Deferred behind the caller's rms_norm dummy barrier: qkv's qr_proj_matmul is the
     # critical path and must win the cores when rms_norm retires.
@@ -275,7 +276,7 @@ def compressor_test(
     norm_w: pl.Tensor[[HEAD_DIM], pl.BF16],
     cos: pl.Tensor[[B, ROPE_HEAD_DIM // 2], pl.FP32],
     sin: pl.Tensor[[B, ROPE_HEAD_DIM // 2], pl.FP32],
-    cmp_kv_cache: pl.InOut[pl.Tensor[[CMP_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
+    cmp_kv_cache: pl.InOut[pl.Tensor[[CMP_BLOCK_NUM_DYN, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
     position_ids: pl.Tensor[[B, S], pl.INT32],
     cmp_slot_mapping: pl.Tensor[[B, S], pl.INT64],
     state_slot_mapping: pl.Tensor[[B, S], pl.INT64],
@@ -433,8 +434,8 @@ def golden_compressor(tensors):
             # Kernel writes committed pooled result only to kv[:, 0, :]; leave
             # speculative-boundary rows and kv[:, 1:, :] zero-initialized.
             tensors["kv"][b : b + 1, 0:1, :] = kv_b
-            blk_id = cmp_row // BLOCK_SIZE
-            cmp_kv_cache[blk_id, cmp_row % BLOCK_SIZE, 0] = kv_b[0, 0]
+            blk_id = cmp_row // CMP_STORAGE_BLOCK_SIZE
+            cmp_kv_cache[blk_id, cmp_row % CMP_STORAGE_BLOCK_SIZE, 0] = kv_b[0, 0]
 
     tensors["cmp_kv_cache"][:] = cmp_kv_cache
 
@@ -486,7 +487,7 @@ def build_tensor_specs(start_pos=None):
     def init_sin():
         return materialize_half_rope_tables(shared_freqs_cos, shared_freqs_sin, init_rope_positions())[1]
     def init_cmp_kv_cache():
-        return torch.zeros(CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM)
+        return torch.zeros(CMP_BLOCK_NUM, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM)
     def init_cmp_block_table():
         return block_table(
             batch=B,
@@ -520,7 +521,7 @@ def build_tensor_specs(start_pos=None):
             positions,
             init_cmp_block_table(),
             compress_ratio=COMPRESS_RATIO,
-            block_size=BLOCK_SIZE,
+            block_size=CMP_STORAGE_BLOCK_SIZE,
         )
 
     return [
@@ -534,7 +535,7 @@ def build_tensor_specs(start_pos=None):
         TensorSpec("norm_w", [HEAD_DIM], torch.bfloat16, init_value=init_norm_w),
         TensorSpec("cos", [B, ROPE_HEAD_DIM // 2], torch.float32, init_value=init_cos),
         TensorSpec("sin", [B, ROPE_HEAD_DIM // 2], torch.float32, init_value=init_sin),
-        TensorSpec("cmp_kv_cache", [CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], torch.bfloat16, init_value=init_cmp_kv_cache, is_output=True),
+        TensorSpec("cmp_kv_cache", [CMP_BLOCK_NUM, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], torch.bfloat16, init_value=init_cmp_kv_cache, is_output=True),
         TensorSpec("position_ids", [B, S], torch.int32, init_value=init_position_ids),
         TensorSpec("cmp_slot_mapping", [B, S], torch.int64, init_value=init_cmp_slot_mapping),
         TensorSpec("state_slot_mapping", [B, S], torch.int64, init_value=init_state_slot_mapping),

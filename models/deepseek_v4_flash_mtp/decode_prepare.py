@@ -44,12 +44,17 @@ CSA_INNER_STATE_MAX_BLOCKS = 4096
 
 # block_counts columns
 GROUP_ORI = 0
-GROUP_CMP = 1
-GROUP_IDX = 2
-GROUP_HCA_STATE = 3
-GROUP_CSA_STATE = 4
-GROUP_CSA_INNER_STATE = 5
-N_CACHE_GROUPS = 6
+GROUP_HCA_CMP = 1
+GROUP_CSA_CMP = 2
+GROUP_IDX = 3
+GROUP_HCA_STATE = 4
+GROUP_CSA_STATE = 5
+GROUP_CSA_INNER_STATE = 6
+N_CACHE_GROUPS = 7
+HCA_COMPRESS_RATIO = 128
+CSA_COMPRESS_RATIO = 4
+HCA_CMP_STORAGE_BLOCK_SIZE = BLOCK_SIZE // HCA_COMPRESS_RATIO
+CSA_CMP_STORAGE_BLOCK_SIZE = BLOCK_SIZE // CSA_COMPRESS_RATIO
 
 # tiling
 X_HC_HIDDEN_TILE = 512
@@ -121,7 +126,8 @@ def build_decode_metadata(
     # Inputs: bare Tensor parameters have PyPTO's default In direction.
     position_ids: pl.Tensor[[T], pl.INT32],
     ori_block_table: pl.Tensor[[B, ORI_TABLE_MAX_BLOCKS], pl.INT32],
-    cmp_block_table: pl.Tensor[[B, CMP_MAX_BLOCKS], pl.INT32],
+    hca_cmp_block_table: pl.Tensor[[B, CMP_MAX_BLOCKS], pl.INT32],
+    csa_cmp_block_table: pl.Tensor[[B, CMP_MAX_BLOCKS], pl.INT32],
     idx_block_table: pl.Tensor[[B, IDX_MAX_BLOCKS], pl.INT32],
     hca_state_block_table: pl.Tensor[[B, HCA_STATE_MAX_BLOCKS], pl.INT32],
     csa_state_block_table: pl.Tensor[[B, CSA_STATE_MAX_BLOCKS], pl.INT32],
@@ -166,42 +172,41 @@ def build_decode_metadata(
             )
 
             hca_cmp_slot = pl.cast(-1, pl.INT64)
-            if (position + 1) % 128 == 0:
-                logical = position // 128
-                count = pl.read(block_counts, [request, GROUP_CMP])
+            if (position + 1) % HCA_COMPRESS_RATIO == 0:
+                source_block = position // BLOCK_SIZE
+                storage_offset = position % BLOCK_SIZE // HCA_COMPRESS_RATIO
+                count = pl.read(block_counts, [request, GROUP_HCA_CMP])
                 physical_block = pl.read(
-                    cmp_block_table,
-                    [
-                        request,
-                        pl.cast(logical // BLOCK_SIZE % count, pl.INDEX),
-                    ],
+                    hca_cmp_block_table,
+                    [request, pl.cast(source_block % count, pl.INDEX)],
                 )
                 hca_cmp_slot = pl.cast(
-                    physical_block * BLOCK_SIZE + logical % BLOCK_SIZE,
+                    physical_block * HCA_CMP_STORAGE_BLOCK_SIZE + storage_offset,
                     pl.INT64,
                 )
             pl.write(hca_cmp_slot_mapping, [token], hca_cmp_slot)
 
             csa_cmp_slot = pl.cast(-1, pl.INT64)
             csa_idx_slot = pl.cast(-1, pl.INT64)
-            if (position + 1) % 4 == 0:
-                logical = position // 4
-                cmp_count = pl.read(block_counts, [request, GROUP_CMP])
+            if (position + 1) % CSA_COMPRESS_RATIO == 0:
+                source_block = position // BLOCK_SIZE
+                storage_offset = position % BLOCK_SIZE // CSA_COMPRESS_RATIO
+                cmp_count = pl.read(block_counts, [request, GROUP_CSA_CMP])
                 cmp_physical_block = pl.read(
-                    cmp_block_table,
-                    [request, pl.cast(logical // BLOCK_SIZE % cmp_count, pl.INDEX)],
+                    csa_cmp_block_table,
+                    [request, pl.cast(source_block % cmp_count, pl.INDEX)],
                 )
                 csa_cmp_slot = pl.cast(
-                    cmp_physical_block * BLOCK_SIZE + logical % BLOCK_SIZE,
+                    cmp_physical_block * CSA_CMP_STORAGE_BLOCK_SIZE + storage_offset,
                     pl.INT64,
                 )
                 idx_count = pl.read(block_counts, [request, GROUP_IDX])
                 idx_physical_block = pl.read(
                     idx_block_table,
-                    [request, pl.cast(logical // BLOCK_SIZE % idx_count, pl.INDEX)],
+                    [request, pl.cast(source_block % idx_count, pl.INDEX)],
                 )
                 csa_idx_slot = pl.cast(
-                    idx_physical_block * BLOCK_SIZE + logical % BLOCK_SIZE,
+                    idx_physical_block * CSA_CMP_STORAGE_BLOCK_SIZE + storage_offset,
                     pl.INT64,
                 )
             pl.write(csa_cmp_slot_mapping, [token], csa_cmp_slot)

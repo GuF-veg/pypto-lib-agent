@@ -44,6 +44,7 @@ OFFSET = M.sliding_window
 
 # kernel-local
 COMPRESS_RATIO = 4   # the indexer only runs on ratio-4 layers
+IDX_STORAGE_BLOCK_SIZE = BLOCK_SIZE // COMPRESS_RATIO
 IDX_TOPK = M.index_topk
 INNER_OVERLAP = COMPRESS_RATIO == 4
 INNER_COFF = 1 + int(INNER_OVERLAP)
@@ -64,8 +65,8 @@ SCORE_LEN = IDX_KV_LEN
 # tiling
 CACHE_TILE = 64
 assert BLOCK_SIZE % CACHE_TILE == 0, "CACHE_TILE must not cross a paged idx_kv_cache block"
-# REDUCE_TILE tiles the paged C8 cache one 128-row page per fused matmul+reduce step.
-REDUCE_TILE = 128
+# One scheduler block covers 128 source tokens and stores 32 C4 rows.
+REDUCE_TILE = BLOCK_SIZE // COMPRESS_RATIO
 # the fused score scope fans the cache-page loop across REDUCE_NSPLIT extra lanes: T * NSPLIT.
 # T*NSPLIT=16 mixed blocks map to 16 AIC + 32 AIV (1:2), one clean wave on the 24+48 chip.
 REDUCE_NSPLIT = 2
@@ -127,8 +128,8 @@ def indexer(
     inner_ape: pl.Tensor[[COMPRESS_RATIO, INNER_OUT_DIM], pl.FP32],
     inner_norm_w: pl.Tensor[[INNER_HEAD_DIM], pl.BF16],
     # C8 indexer cache: INT8 KV (quant-on-write) + per-position FP32 dequant scale; no bf16 cache.
-    idx_kv_cache: pl.InOut[pl.Tensor[[IDX_CACHE_BLOCK_NUM_DYN, BLOCK_SIZE, 1, IDX_HEAD_DIM], pl.INT8]],
-    idx_kv_scale: pl.InOut[pl.Tensor[[IDX_CACHE_BLOCK_NUM_DYN, BLOCK_SIZE, 1, 1], pl.FP32]],
+    idx_kv_cache: pl.InOut[pl.Tensor[[IDX_CACHE_BLOCK_NUM_DYN, IDX_STORAGE_BLOCK_SIZE, 1, IDX_HEAD_DIM], pl.INT8]],
+    idx_kv_scale: pl.InOut[pl.Tensor[[IDX_CACHE_BLOCK_NUM_DYN, IDX_STORAGE_BLOCK_SIZE, 1, 1], pl.FP32]],
     idx_block_table: pl.Tensor[[B, IDX_CACHE_MAX_BLOCKS], pl.INT32],
     score: pl.Tensor[[B, S, SCORE_LEN], pl.FP32],
     topk_idxs: pl.Tensor[[B, S, SCORE_LEN], pl.INT32],
@@ -266,8 +267,8 @@ def indexer(
     )
 
     idx_block_num = pl.tensor.dim(idx_kv_cache, 0)
-    kv_cache_i8_flat = pl.reshape(idx_kv_cache, [idx_block_num * BLOCK_SIZE, IDX_HEAD_DIM])
-    kv_scale_flat = pl.reshape(idx_kv_scale, [idx_block_num * BLOCK_SIZE, 1])
+    kv_cache_i8_flat = pl.reshape(idx_kv_cache, [idx_block_num * IDX_STORAGE_BLOCK_SIZE, IDX_HEAD_DIM])
+    kv_scale_flat = pl.reshape(idx_kv_scale, [idx_block_num * IDX_STORAGE_BLOCK_SIZE, 1])
     idx_block_table_flat = pl.reshape(idx_block_table, [B * IDX_CACHE_MAX_BLOCKS])
     score_flat = pl.reshape(score, [T, SCORE_LEN])
 
@@ -301,8 +302,8 @@ def indexer(
                 pl.read(idx_block_table_flat, [b * IDX_CACHE_MAX_BLOCKS + cb]),
                 pl.INDEX,
             )
-            kv0 = idx_blk_id * BLOCK_SIZE
-            kv_i8_mat = kv_cache_i8_flat[kv0 : kv0 + BLOCK_SIZE, :]
+            kv0 = idx_blk_id * IDX_STORAGE_BLOCK_SIZE
+            kv_i8_mat = kv_cache_i8_flat[kv0 : kv0 + REDUCE_TILE, :]
             score_acc_red = pl.matmul(kv_i8_mat, qr_full, out_dtype=pl.INT32, b_trans=True)
             kv_dq_red = kv_scale_flat[kv0 : kv0 + REDUCE_TILE, :]  # paged per-position dequant scale
             score_tile_red = pl.cast(score_acc_red, target_type=pl.FP32, mode="none")
@@ -369,8 +370,8 @@ def indexer_test(
     inner_wgate: pl.Tensor[[INNER_OUT_DIM, D], pl.BF16],
     inner_ape: pl.Tensor[[COMPRESS_RATIO, INNER_OUT_DIM], pl.FP32],
     inner_norm_w: pl.Tensor[[INNER_HEAD_DIM], pl.BF16],
-    idx_kv_cache: pl.InOut[pl.Tensor[[IDX_CACHE_BLOCK_NUM_DYN, BLOCK_SIZE, 1, IDX_HEAD_DIM], pl.INT8]],
-    idx_kv_scale: pl.InOut[pl.Tensor[[IDX_CACHE_BLOCK_NUM_DYN, BLOCK_SIZE, 1, 1], pl.FP32]],
+    idx_kv_cache: pl.InOut[pl.Tensor[[IDX_CACHE_BLOCK_NUM_DYN, IDX_STORAGE_BLOCK_SIZE, 1, IDX_HEAD_DIM], pl.INT8]],
+    idx_kv_scale: pl.InOut[pl.Tensor[[IDX_CACHE_BLOCK_NUM_DYN, IDX_STORAGE_BLOCK_SIZE, 1, 1], pl.FP32]],
     idx_block_table: pl.Tensor[[B, IDX_CACHE_MAX_BLOCKS], pl.INT32],
     score: pl.Out[pl.Tensor[[B, S, SCORE_LEN], pl.FP32]],
     topk_idxs: pl.Out[pl.Tensor[[B, S, SCORE_LEN], pl.INT32]],
@@ -531,9 +532,9 @@ def golden_indexer(tensors):
         kv_i8_rows = []
         kv_scale_rows = []
         for slot in range(cache_len):
-            blk_id = int(idx_block_table[b, slot // BLOCK_SIZE].item())
-            kv_i8_rows.append(idx_kv_cache_i8[blk_id, slot % BLOCK_SIZE, 0])
-            kv_scale_rows.append(idx_kv_scale[blk_id, slot % BLOCK_SIZE, 0, 0])
+            block_id = int(idx_block_table[b, slot // REDUCE_TILE].item())
+            kv_i8_rows.append(idx_kv_cache_i8[block_id, slot % REDUCE_TILE, 0])
+            kv_scale_rows.append(idx_kv_scale[block_id, slot % REDUCE_TILE, 0, 0])
         kv_i8 = torch.stack(kv_i8_rows, dim=0).view(cache_len, IDX_HEAD_DIM)
         kv_scale = torch.stack(kv_scale_rows, dim=0).view(cache_len, 1)
         score_i32 = torch.einsum("shd,td->sht", q_i8[b].to(torch.int32), kv_i8.to(torch.int32))
@@ -611,7 +612,7 @@ def build_tensor_specs(start_pos=None):
         return block_table(
             batch=B,
             table_blocks=IDX_CACHE_MAX_BLOCKS,
-            physical_blocks=IDX_CACHE_MAX_BLOCKS,
+            physical_blocks=IDX_CACHE_BLOCK_NUM,
         )
     def init_default_start_pos():
         # Canonical CSA start-position set (ratio-4 compressor + indexer + sliding-window + 8k).
@@ -642,7 +643,7 @@ def build_tensor_specs(start_pos=None):
             positions,
             init_idx_block_table(),
             compress_ratio=COMPRESS_RATIO,
-            block_size=BLOCK_SIZE,
+            block_size=IDX_STORAGE_BLOCK_SIZE,
         )
 
     # idx wq_b: simulate the real MXFP8 (e4m3 + 128x128-block E8M0) grid (~200 levels, scaleCV
@@ -654,11 +655,18 @@ def build_tensor_specs(start_pos=None):
     qr_i8, qr_scale = int8_quant_per_row(init_qr())
 
     # C8 indexer cache fixture: INT8 + scale from one bf16-rounded random draw
-    idx_kv_cache_bf16 = torch.rand(IDX_CACHE_BLOCK_NUM, BLOCK_SIZE, 1, IDX_HEAD_DIM).to(torch.bfloat16)
+    idx_kv_cache_bf16 = torch.rand(
+        IDX_CACHE_BLOCK_NUM, IDX_STORAGE_BLOCK_SIZE, 1, IDX_HEAD_DIM
+    ).to(torch.bfloat16)
     idx_kv_i8, idx_kv_sc = int8_quant_per_row(
-        idx_kv_cache_bf16.float().reshape(IDX_CACHE_BLOCK_NUM * BLOCK_SIZE, IDX_HEAD_DIM))
-    idx_kv_i8 = idx_kv_i8.view(IDX_CACHE_BLOCK_NUM, BLOCK_SIZE, 1, IDX_HEAD_DIM)
-    idx_kv_sc = idx_kv_sc.view(IDX_CACHE_BLOCK_NUM, BLOCK_SIZE, 1, 1)
+        idx_kv_cache_bf16.float().reshape(
+            IDX_CACHE_BLOCK_NUM * IDX_STORAGE_BLOCK_SIZE, IDX_HEAD_DIM
+        )
+    )
+    idx_kv_i8 = idx_kv_i8.view(
+        IDX_CACHE_BLOCK_NUM, IDX_STORAGE_BLOCK_SIZE, 1, IDX_HEAD_DIM
+    )
+    idx_kv_sc = idx_kv_sc.view(IDX_CACHE_BLOCK_NUM, IDX_STORAGE_BLOCK_SIZE, 1, 1)
 
     return [
         TensorSpec("x", [B, S, D], torch.bfloat16, init_value=init_x),
@@ -677,8 +685,8 @@ def build_tensor_specs(start_pos=None):
         TensorSpec("inner_wgate", [INNER_OUT_DIM, D], torch.bfloat16, init_value=init_inner_wgate),
         TensorSpec("inner_ape", [COMPRESS_RATIO, INNER_OUT_DIM], torch.float32, init_value=init_inner_ape),
         TensorSpec("inner_norm_w", [INNER_HEAD_DIM], torch.bfloat16, init_value=init_inner_norm_w),
-        TensorSpec("idx_kv_cache", [IDX_CACHE_BLOCK_NUM, BLOCK_SIZE, 1, IDX_HEAD_DIM], torch.int8, init_value=lambda: idx_kv_i8, is_output=True),
-        TensorSpec("idx_kv_scale", [IDX_CACHE_BLOCK_NUM, BLOCK_SIZE, 1, 1], torch.float32, init_value=lambda: idx_kv_sc, is_output=True),
+        TensorSpec("idx_kv_cache", [IDX_CACHE_BLOCK_NUM, IDX_STORAGE_BLOCK_SIZE, 1, IDX_HEAD_DIM], torch.int8, init_value=lambda: idx_kv_i8, is_output=True),
+        TensorSpec("idx_kv_scale", [IDX_CACHE_BLOCK_NUM, IDX_STORAGE_BLOCK_SIZE, 1, 1], torch.float32, init_value=lambda: idx_kv_sc, is_output=True),
         TensorSpec("idx_block_table", [B, IDX_CACHE_MAX_BLOCKS], torch.int32, init_value=init_idx_block_table),
         # Outputs are fixed to SCORE_LEN; positions past cache_len are -inf for score and -1 for topk_idxs.
         TensorSpec("score", [B, S, SCORE_LEN], torch.float32, is_output=True),
