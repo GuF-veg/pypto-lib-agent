@@ -6,7 +6,7 @@ AICPU side (L2 swimlane), then optimize each kernel's internal pipeline
 (L1/L0 swimlane + PMU).
 
 For the underlying levels see simpler's
-[hierarchical_level_runtime.md](https://github.com/hw-native-sys/simpler/blob/main/docs/hierarchical_level_runtime.md):
+[Hierarchical Level Runtime](https://www.pypto.ai/simpler/hierarchical-level-runtime/):
 L2 = one chip (AICPU + AIC/AIV cores), L1 = die / L2 cache, L0 = single
 compute core.
 
@@ -155,6 +155,13 @@ Look for these shapes on the swimlane that indicate a problem:
 | Cube / vector unit utilization low even though kernel is busy | Tile size under-fills the user-visible on-chip buffers | Re-tile against `Mat` / `Acc` for cube or `Vec` for vector work (item 4) |
 | Cube lane busy while vector lane idle (or vice versa) | Vec/cube epilogue is split into separate kernels | Merge into a mixed kernel (item 2c) |
 | Sequential AICPU dispatch trail per region | Region issues one kernel per iteration | Use `pl.spmd` to dispatch a block fan-out once (item 5) |
+
+A gap on this trace is not automatically a scheduling problem: the interval
+before a task splits into producer-FIN detection, ready-but-undispatched
+scheduler delay, and post-dispatch pickup, and each has a different fix. See
+[Dependencies and Scheduling](dependency-and-scheduling.md) for how edges are
+formed, what the four per-task timestamps mean, and how to attribute a gap
+without guessing.
 
 ### Tuning rules
 
