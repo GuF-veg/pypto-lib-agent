@@ -213,6 +213,21 @@ Two EP8 caveats, pending a proper fix:
   tokens. Keep the extent small until the stall is root-caused (EP2 at 128
   and EP8 at 6/16 both run).
 
+The [daily model workflow](../../.github/workflows/daily_ci.yml) runs this
+EP8 loop nightly on the A5 runner (job `e2e-flash-a5`: real
+DeepSeek-V4-Flash weights, `--prefill-tokens 16 --prefill-no-retire`,
+32 greedy decode steps from the prompt "The capital of France is") and
+publishes the prompt and the generated text in the run summary under
+"Daily CI Model Test Results", so a reviewer can read the continuation
+every day instead of a pass/fail tick. The runner finds the checkpoint
+through `PYPTO_DSV4_FLASH_CKPT_DIR` in its `.env` (falling back to the A5
+host's `/home/pyptouser/models/DeepSeek-V4-Flash-0731`). The
+`weights_flash.py` cache (ep8/tp2) is resolved in this order:
+`PYPTO_DSV4_FLASH_WEIGHTS_DIR` from the runner's `.env` if set, else the
+shared cache next to the checkpoint (`pypto-weights-cache/flash_ep8_tp2`),
+else the runner's own `CI_CACHE_ROOT/dsv4-flash-weights/flash_ep8_tp2`,
+which the job builds from the checkpoint once (~25 min) when it is missing.
+
 ## Files
 
 | Group | Files |
