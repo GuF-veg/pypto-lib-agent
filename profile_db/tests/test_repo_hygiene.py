@@ -36,7 +36,7 @@ HEADER = (
 
 
 def _python_files() -> list[Path]:
-    files = sorted(SRC_ROOT.rglob("*.py")) + sorted(TESTS_ROOT.rglob("*.py"))
+    files = list(dict.fromkeys(sorted(SRC_ROOT.rglob("*.py")) + sorted(TESTS_ROOT.rglob("*.py"))))
     return [p for p in files if "__pycache__" not in p.parts]
 
 
@@ -77,15 +77,25 @@ def test_design_doc_exists_and_references_calibrate_tool() -> None:
 # ---------------------------------------------------------------------------
 
 LAYERS: dict[str, int] = {
-    "profile_db.__main__": 5,
-    "profile_db.__init__": 4,
-    "profile_db.cli": 4,
+    "profile_db.__main__": 6,
+    "profile_db.__init__": 5,
+    "profile_db.cli": 5,
+    "profile_db.ingest": 4,
+    "profile_db.ingest.source": 4,
+    "profile_db.ingest.swimlane": 4,
+    "profile_db.ingest.swimlane_us": 4,
+    "profile_db.ingest.deps": 4,
+    "profile_db.ingest.writer": 4,
     "profile_db.db": 3,
     "profile_db.facts": 2,
     "profile_db.schema": 1,
     "profile_db.errors": 0,
     "profile_db._version": 0,
 }
+
+# Packages whose modules may import each other within their shared prefix
+# (ingest is one subsystem: the orchestrator imports its sibling modules).
+_SIBLING_PREFIXES = {"profile_db.ingest"}
 
 
 def _internal_imports(path: Path) -> list[tuple[int, str]]:
@@ -122,6 +132,12 @@ def test_import_layering_respected() -> None:
         importer_layer = LAYERS[module_name]
         for lineno, imported in _internal_imports(path):
             assert imported in LAYERS, f"{module_name}:{lineno}: unknown internal import {imported}"
-            assert (
+            sibling = any(
+                module_name.startswith(prefix + ".")
+                and imported.startswith(prefix + ".")
+                for prefix in _SIBLING_PREFIXES
+            )
+            ancestor = module_name.startswith(imported + ".")
+            assert sibling or imported == module_name or ancestor or (
                 LAYERS[imported] < importer_layer
             ), f"{module_name}:{lineno}: layer violation: imports {imported} from same-or-higher layer"

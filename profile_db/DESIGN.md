@@ -207,7 +207,7 @@
 | `task` | 逻辑任务（deps + 时序拼接后） | `run_id`、`task_id`、`name`、`family`、`engine`、`scope`、`early_dispatch_flag`、`kernel_ids/json`、`block_num`、`num_rows`、`busy_us`、`wall_us`、`min_dispatch_us`…`max_finish_us`、`on_cpm_observed`、`on_cpm_static` |
 | `task_row` | 物理执行行（泳道每一格） | `run_id`、`task_id`、`core_index`、`engine`、`thread`、`row_index`、`start_us`、`end_us`、`aux` |
 | `dep_edge` | 任务依赖边（原始字段保真） | `run_id`、`pred`、`succ`、`source`、`arg`、`flags/json`、`tensor_id`、`consumer_dtype`、`consumer_shape/json`、`consumer_start_offset`、`consumer_strides/json` |
-| `scheduler_phase` | AICPU 调度相位 | `run_id`、`lane`、`kind(dispatch/complete/resolve/release)`、`t0_us`、`t1_us`、`loop_iter`、`tasks_processed`、`pop_hit`、`pop_miss`、`shared_at_start`、`shared_at_end` |
+| `scheduler_phase` | AICPU 调度相位 | `run_id`、`lane`、`kind(dispatch/complete/resolve/release)`、`t0_us`、`t1_us`、`loop_iter`、`tasks_processed`、`pop_hit`、`pop_miss`、`shared_at_start`、`shared_at_end`（后两者为**每队列深度的 JSON 列表**，迁移 0002 修正了 v1 误标 INTEGER） |
 | `orch_phase` | AICPU 编排提交 | `run_id`、`lane`、`submit_idx`、`task_id`、`t0_us`、`t1_us` |
 | `time_band`（衍生） | 密度索引：run 时间轴按固定粒度切带 | `run_id`、`band_idx`、`t0_us`、`t1_us`、`engine`、`total_cores`、`busy_cores`、`task_ids/json`、`sparse`、`drain_tail` |
 | `idle_gap`（衍生） | 核级空闲段及确定性分类 | `run_id`、`engine`、`core_index`、`t0_us`、`t1_us`、`kind(dispatch_wait/ready_starved/drain_tail/unknown)`、`ready_task_ids/json`、`evidence` |
@@ -270,6 +270,8 @@ TRUNCATED limit_bytes=4096
 ### 5.5 版本与迁移
 
 - `schema_version` 全局记档 + `migrations/NNNN_*.sql` 顺序迁移，连接打开时自动执行。
+  已有迁移：`0001_init.sql`（18 表全量建表）、`0002_sched_queue_depths.sql`
+  （`scheduler_phase.shared_at_*` 改 JSON 列表——T1 对真实捕获的保真修正）。
 - schema 自 v1 起**一次性预留**全部表（含 trial/baseline 与衍生表），避免后期大迁移。
 - 库文件可整体删除重建（数据可弃），因此不提供降级/回滚语义——迁移只前进。
 
@@ -589,21 +591,24 @@ tests ────▶ 可直接触达任何层，但金质题库只走 api/CLI/M
 ### T1 摄取：L2 泳道族 ｜ 依赖：T0 ｜ 规模：M
 
 - **做什么**：适配器 `chip_swimlane_records.json`（及 `l2_swimlane_records` /
-  `l2_perf_records` 兼容名归一）+ `deps.json`（26 个原始字段保真、边逐条入库）+
+  `l2_perf_records` 兼容名归一）+ `deps.json`（边原始字段保真、逐条入库）+
   `name_map*.json` + merged trace 清单；时钟域合并复用
   `simpler_setup.tools.swimlane_converter.read_perf_data`；`store_mode`
   默认 link（sha256 照算、文件不复制）；ingest 幂等（同 run 重复 ingest
   结果稳定；事务保护，失败不留半库）；run 环境元数据采集（git commit/dirty、
-  runtime_cfg、cmdline，脱敏）。
+  runtime_cfg、cmdline，脱敏）。（**T1 已完成**，见 README 状态表。）
 - **不做什么**：不做 PMU/in-core；不做查询接口；不复制文件（link 默认）。
 - **验收**：
-  - [ ] 对真实 Qwen3Decode 捕获：task=266、task_row=706、dep_edge=2546，
+  - [x] 对真实 Qwen3Decode 捕获：task=266、task_row=706、dep_edge=2546，
         artifact 表 4 个条目 sha256 正确、store_mode 全为 link、无文件复制；
-  - [ ] 同 run 重复 ingest 两次，任何表行数不变（幂等）；
-  - [ ] 抽样 5 个 task 的 µs 时序与 `read_perf_data` 直出对拍（误差 0）；
-  - [ ] 截断/损坏 JSON、缺失 name_map：报结构化错误，事务回滚，库保持一致；
-  - [ ] `chip_swimlane` 与 `l2_swimlane` 两种命名摄取结果一致（对拍测试）；
-  - [ ] makespan/busy/wall 口径与 5.3 决策表一致（数值断言）。
+  - [x] 同 run 重复 ingest 两次，任何表行数不变（幂等）；
+  - [x] 抽样 5 个 task 的 µs 时序与 `read_perf_data` 直出对拍（误差 0）；
+  - [x] 截断/损坏 JSON、缺失 name_map：报结构化错误，事务回滚，库保持一致；
+  - [x] `chip_swimlane` 与 `l2_swimlane` 两种命名摄取结果一致（对拍测试）；
+  - [x] makespan/busy/wall 口径与 5.3 决策表一致（数值断言）。
+- **实施备注**：`scheduler_phase.shared_at_*` 实证为每队列深度列表（v1 误标
+  INTEGER），以迁移 `0002` 修正为 JSON；真实捕获 makespan=2828.500µs
+  （converter 口径），相位入表 746 条调度 + 365 条编排记录。
 
 ### T2 摄取：文本类证据 ｜ 依赖：T0（可与 T1 并行） ｜ 规模：S
 

@@ -58,7 +58,7 @@ def test_tampered_name_map_is_rejected(tmp_path: Path) -> None:
     root = generate(tmp_path / "fx")
     path = next(root.glob("name_map_*.json"))
     name_map = json.loads(path.read_text(encoding="utf-8"))
-    del name_map["1"]
+    del name_map["callable_id_to_name"]["1"]
     path.write_text(json.dumps(name_map), encoding="utf-8")
     with pytest.raises(AssertionError, match="name_map missing"):
         validate_fixture(root)

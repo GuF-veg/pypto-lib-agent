@@ -28,3 +28,7 @@ class LockError(PfdbError):
 
 class FactError(PfdbError):
     """A fact cannot be constructed or serialized."""
+
+
+class IngestError(PfdbError):
+    """A capture source is missing, malformed, or cannot be ingested."""

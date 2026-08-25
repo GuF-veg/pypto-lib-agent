@@ -12,9 +12,13 @@
 
 ## 当前状态
 
-- ✅ T0 骨架：schema v1 迁移、事实 DSL v2、连接与写锁、合成工件生成器、
-  CLI `init`、CI/lint 接线。
-- ⬜ T1+ 见 DESIGN.md 第 11 节。
+- ✅ T0 骨架：schema 迁移（v1 建表 + 0002 修正）、事实 DSL v2、连接与写锁、
+  合成工件生成器、CLI `init`、CI/lint 接线。
+- ✅ T1 摄取：L2 泳道族（records/deps/name_map/merged 清单）——时钟域合并
+  复用上游 `read_perf_data`，link 默认存档 + sha256，事务幂等；真实
+  Qwen3Decode 捕获验收通过（266 任务 / 706 物理行 / 2546 边，与转换器直出
+  零容差对拍）。
+- ⬜ T2+ 见 DESIGN.md 第 11 节。
 
 ## 安装与使用
 
@@ -24,6 +28,11 @@ pip install -e ./profile_db --no-build-isolation
 
 # 初始化数据库（默认 <cwd>/.pfdb/profile.duckdb；PFDB_PATH 可覆盖）
 pfdb init
+
+# 摄取一次采集（profiling 命令跑完后 build_output/ 下的 dfx_outputs 目录）
+pfdb ingest build_output/Qwen3Decode_<ts>/dfx_outputs --platform a2a3 --device 0
+# 重复 ingest 幂等（按 records 文件 sha256 识别同一 run，行数不变）；
+# 需要归档副本时加 --copy（默认 link 只记路径 + sha256）
 
 # 查看版本
 pfdb --version

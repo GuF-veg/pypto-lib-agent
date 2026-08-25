@@ -130,15 +130,23 @@ def _edge(pred: str, succ: str, tensor_id: str, shape: list[int], dtype: str) ->
     }
 
 
-def chip_records() -> dict[str, Any]:
+def chip_records(level: int = 1) -> dict[str, Any]:
+    """Build the records document.
+
+    level=1 mirrors AICORE_TIMING captures (no AICPU stream). level=4
+    adds the AICPU task rows the runtime emits (matched by
+    (core, reg_task_id), dispatch before receive, finish after end) plus
+    one scheduler lane record and one orchestrator record, so the
+    upstream converter's join path is exercised.
+    """
     rows: list[list[int]] = []
     for task_id, _name, _kernels, _blocks, spec in _TASKS:
         for core, row_index, start_us, end_us in spec:
             rows.append(
                 [core, int(task_id), row_index, _us_to_cycles(start_us), _us_to_cycles(end_us), 0]
             )
-    return {
-        "chip_swimlane_level": 4,
+    payload: dict[str, Any] = {
+        "chip_swimlane_level": level,
         "metadata": {
             "clock_freq_hz": CLOCK_FREQ_HZ,
             "num_cores": NUM_CORES,
@@ -146,10 +154,50 @@ def chip_records() -> dict[str, Any]:
             "core_to_thread": CORE_TO_THREAD,
         },
         "aicore_tasks": rows,
-        "aicpu_tasks": [],
-        "aicpu_scheduler_phases": {},
-        "aicpu_orchestrator_phases": {},
     }
+    if level == 1:
+        payload["aicpu_tasks"] = []
+        payload["aicpu_scheduler_phases"] = []
+        payload["aicpu_orchestrator_phases"] = []
+        return payload
+
+    # r2s is 0 in the synthetic rows, so receive == start; dispatch sits
+    # 100 cycles earlier and finish 50 cycles after end.
+    payload["aicpu_tasks"] = [
+        [core, row_index, start_c - 100, end_c + 50]
+        for core, _task, row_index, start_c, end_c, _aux in rows
+    ]
+    if level == 4:
+        first_dispatch = rows[0][3] - 100
+        payload["aicpu_scheduler_phases"] = [
+            [
+                {
+                    "kind": "dispatch",
+                    "start_cycles": first_dispatch,
+                    "end_cycles": first_dispatch + 20,
+                    "loop_iter": 0,
+                    "tasks_processed": 3,
+                    "pop_hit": True,
+                    "pop_miss": False,
+                    "shared_at_start": 0,
+                    "shared_at_end": 0,
+                }
+            ]
+        ]
+        payload["aicpu_orchestrator_phases"] = [
+            [
+                {
+                    "submit_idx": 0,
+                    "task_id": int(_TASKS[0][0]),
+                    "start_cycles": first_dispatch - 20,
+                    "end_cycles": first_dispatch,
+                }
+            ]
+        ]
+    else:
+        payload["aicpu_scheduler_phases"] = []
+        payload["aicpu_orchestrator_phases"] = []
+    return payload
 
 
 def deps_doc() -> dict[str, Any]:
@@ -162,16 +210,21 @@ def deps_doc() -> dict[str, Any]:
     }
 
 
-def name_map_doc() -> dict[str, str]:
-    return {"0": "rmsnorm", "1": "q_proj", "2": "kv_proj"}
+def name_map_doc() -> dict[str, Any]:
+    """Real name_map structure: {level, orchestrator_name, callable_id_to_name}."""
+    return {
+        "level": 2,
+        "orchestrator_name": None,
+        "callable_id_to_name": {"0": "rmsnorm", "1": "q_proj", "2": "kv_proj"},
+    }
 
 
-def generate(root: Path | str) -> Path:
+def generate(root: Path | str, *, level: int = 1) -> Path:
     """Write the synthetic artifact family under ``root``; returns ``root``."""
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
     files = {
-        "chip_swimlane_records.json": chip_records(),
+        "chip_swimlane_records.json": chip_records(level),
         "deps.json": deps_doc(),
         f"name_map_{PROGRAM}_{TIMESTAMP}.json": name_map_doc(),
     }
@@ -214,7 +267,8 @@ def validate_fixture(root: Path | str) -> None:
     assert records_path.is_file(), f"missing {records_path.name}"
     rec = json.loads(records_path.read_text(encoding="utf-8"))
 
-    assert rec.get("chip_swimlane_level") == 4, "capture level must be 4"
+    level = rec.get("chip_swimlane_level")
+    assert level in (1, 4), f"capture level must be 1 or 4, got {level!r}"
     meta = rec.get("metadata", {})
     for key in ("clock_freq_hz", "num_cores", "core_types", "core_to_thread"):
         assert key in meta, f"metadata missing {key}"
@@ -237,6 +291,21 @@ def validate_fixture(root: Path | str) -> None:
             if prev_end is not None:
                 assert start_c >= prev_end, "rows on one core must not overlap"
             prev_end = end_c
+
+    if level >= 2:
+        aicore_keys = {(row[0], row[2]) for row in rec.get("aicore_tasks", [])}
+        aicpu_rows = rec.get("aicpu_tasks") or []
+        assert len(aicpu_rows) == len(aicore_keys), "aicpu_tasks must mirror aicore rows"
+        for row in aicpu_rows:
+            assert isinstance(row, list) and len(row) == 4, f"aicpu row must have 4 ints: {row}"
+            assert (row[0], row[1]) in aicore_keys, f"aicpu row unmatched: {row}"
+        if level == 4:
+            for lane in rec.get("aicpu_scheduler_phases") or []:
+                for phase in lane:
+                    assert "kind" in phase and int(phase["start_cycles"]) < int(phase["end_cycles"])
+            for lane in rec.get("aicpu_orchestrator_phases") or []:
+                for phase in lane:
+                    assert {"submit_idx", "task_id", "start_cycles", "end_cycles"} <= set(phase), phase
 
     deps_path = root / "deps.json"
     assert deps_path.is_file(), "missing deps.json"
@@ -266,10 +335,11 @@ def validate_fixture(root: Path | str) -> None:
     name_maps = list(root.glob("name_map_*.json"))
     assert len(name_maps) == 1, "exactly one name_map expected"
     name_map = json.loads(name_maps[0].read_text(encoding="utf-8"))
+    mapping = name_map.get("callable_id_to_name") or {}
     callables = {
         str(k)
         for task in tasks
         for k in task["kernel_ids"]
         if int(k) >= 0
     }
-    assert callables <= set(name_map), f"name_map missing callables: {callables - set(name_map)}"
+    assert callables <= set(mapping), f"name_map missing callables: {callables - set(mapping)}"
