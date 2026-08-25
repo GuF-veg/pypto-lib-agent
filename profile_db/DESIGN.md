@@ -686,9 +686,20 @@ tests ────▶ 可直接触达任何层，但金质题库只走 api/CLI/M
 - **做什么**：公开 API 定型（Result 模型 + pydantic 参数校验 +
   `ProfileDB.memory()` 内存模式）；`pfdb` CLI 全查询子命令与
   `facts/json/markdown` 格式化；`agents/openai.yaml` 风格接入示例。
-- **验收**：[ ] CLI 与 API 输出逐字节一致；[ ] `pfdb --help` 与 README 示例
-  全部可执行；[ ] 参数非法时报结构化错误（快照）；[ ] 内存模式行为与磁盘
-  模式一致（同 fixture 对拍）。
+  （**T5 已完成**，见 README 状态表。）
+- **验收**：
+  - [x] CLI 与 API 输出逐字节一致（`facts` 格式，测试兜底）；
+  - [x] `pfdb --help` 与 README 示例全部可执行；
+  - [x] 参数非法时报结构化错误（快照）；
+  - [x] 内存模式行为与磁盘模式一致（同 fixture 对拍）。
+- **实施备注**：`profile_db/api.py` 为唯一事实源——`ProfileDB(db.ProfileDB
+  子类)` 上挂 `ingest`/`query` 两法，`Result(facts, images, truncated)` +
+  `format_result(facts/json/markdown)`；CLI 与（未来）MCP 都走同一
+  `format_result`，`facts` 输出逐字节一致。CLI 新增 `list`（runs_list
+  便捷）与 `query <name>`（参数由 `QuerySpec.params` 的 pydantic 模型
+  **自动生成** argparse flag，新查询无需改 cli.py）；`--format/--budget`
+  通配。内存模式 `ProfileDB.memory()` 与磁盘模式同 fixture 对拍通过；
+  接入示例落在 `profile_db/examples/agents/openai.yaml`。
 
 ### T6 可视化渲染层 ｜ 依赖：T3（可与 T4/T5 并行） ｜ 规模：M
 

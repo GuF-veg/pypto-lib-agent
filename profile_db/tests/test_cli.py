@@ -67,3 +67,82 @@ def test_version_flag() -> None:
 def test_missing_command_is_usage_error() -> None:
     result = _run()
     assert result.returncode == 2
+
+
+# ---------------------------------------------------------------------------
+# T5: list + query subcommands, formats, byte-identity with the API
+# ---------------------------------------------------------------------------
+
+
+def _populate(tmp_path: Path) -> Path:
+    """Ingest the synthetic capture into a fresh DB file and return its path."""
+    from fixtures import synth_artifacts
+
+    source = synth_artifacts.generate(tmp_path / "cap")
+    db = tmp_path / "db.duckdb"
+    result = _run("ingest", str(source), env={"PFDB_PATH": str(db)})
+    assert result.returncode == 0, result.stderr
+    return db
+
+
+def test_list_runs(tmp_path: Path) -> None:
+    db = _populate(tmp_path)
+    result = _run("list", env={"PFDB_PATH": str(db)})
+    assert result.returncode == 0, result.stderr
+    assert 'program="Qwen3Decode"' in result.stdout
+    assert "tasks=3" in result.stdout and "rows=4" in result.stdout
+
+
+def test_query_overview(tmp_path: Path) -> None:
+    db = _populate(tmp_path)
+    result = _run("query", "overview", "--run-id", "1", env={"PFDB_PATH": str(db)})
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.startswith("RUN ")
+    assert "clock_freq_hz=50000000" in result.stdout
+    assert "METRIC" in result.stdout and "tasks=3" in result.stdout
+
+
+def test_query_formats(tmp_path: Path) -> None:
+    db = _populate(tmp_path)
+    json_out = _run("query", "task", "--run-id", "1", "--task-id", "4294967297",
+                    "--format", "json", env={"PFDB_PATH": str(db)})
+    assert json_out.returncode == 0
+    assert json_out.stdout.lstrip().startswith("[{")
+    assert '"rec":"TASK"' in json_out.stdout
+    md_out = _run("query", "task", "--run-id", "1", "--task-id", "4294967297",
+                  "--format", "markdown", env={"PFDB_PATH": str(db)})
+    assert md_out.returncode == 0
+    assert md_out.stdout.startswith("| record | fields | evidence |")
+    assert "| TASK |" in md_out.stdout
+
+
+def test_query_cli_is_api_byte_identical(tmp_path: Path) -> None:
+    from profile_db.api import ProfileDB, format_result
+
+    db = _populate(tmp_path)
+    api_db = ProfileDB(db, read_only=True)
+    try:
+        api_text = format_result(api_db.query("overview", run_id=1), "facts")
+    finally:
+        api_db.close()
+    cli = _run("query", "overview", "--run-id", "1", env={"PFDB_PATH": str(db)})
+    assert cli.returncode == 0
+    assert cli.stdout == api_text + "\n"
+
+
+def test_query_invalid_param_is_structured(tmp_path: Path) -> None:
+    db = _populate(tmp_path)
+    result = _run("query", "density", "--run-id", "1", "--bands", "0",
+                  env={"PFDB_PATH": str(db)})
+    assert result.returncode == 1
+    assert "pfdb: error: invalid parameters for 'density'" in result.stderr
+
+
+def test_help_lists_query_and_list(tmp_path: Path) -> None:
+    result = _run("--help")
+    assert result.returncode == 0
+    assert "query" in result.stdout and "list" in result.stdout
+    # registry-generated per-query help surfaces the owner question
+    help_out = _run("query", "overview", "--help")
+    assert help_out.returncode == 0
+    assert "--run-id" in help_out.stdout

@@ -1,0 +1,4 @@
+interface:
+  display_name: "PFDB Query"
+  short_description: "Query the profile feedback database via the pfdb CLI"
+  default_prompt: "Use $pfdb-query to answer profiling questions from the local .pfdb working set. Prefer `pfdb query overview --run-id <id>`, `density`, `why_sparse`, `task`, `deps`, and `why_late` to read the swimlane the way a human does: overall density, then sparse regions, then the operator and its dependency latency. Quote only returned facts; never fabricate numbers."

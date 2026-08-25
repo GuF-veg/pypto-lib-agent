@@ -34,7 +34,11 @@
   why_late/why_long/rows/scheduler/early_dispatch/pmu）；事实 DSL v2 输出、
   字节预算 `TRUNCATED` 显式收尾、unavailable 语义、多 rank 守门、无原始
   JSON 泄漏检查器；金质题库 20 题快照（含 6.4 全会话）+ 真实捕获锚点。
-- ⬜ T5+ 见 DESIGN.md 第 11 节。
+- ✅ T5 接口：公开 Python API（`profile_db.api.ProfileDB` + `Result` +
+  `format_result`）与 CLI `list` / `query` 子命令（参数由注册表 pydantic
+  模型自动生成，`facts/json/markdown` 三种输出）；CLI 与 API 输出逐字节
+  一致（测试兜底）；`ProfileDB.memory()` 内存模式与磁盘模式对拍。
+- ⬜ T6+ 见 DESIGN.md 第 11 节。
 
 ## 安装与使用
 
@@ -52,6 +56,39 @@ pfdb ingest build_output/Qwen3Decode_<ts>/dfx_outputs --platform a2a3 --device 0
 
 # 查看版本
 pfdb --version
+```
+
+### 查询
+
+```bash
+# 列出可用 run（多 rank 库需 --rank 消歧）
+pfdb list
+
+# 顶线指标与拓扑（run id 由 ingest / list 给出）
+pfdb query overview --run-id 1
+
+# 密度带：整体哪里密集哪里稀疏
+pfdb query density --run-id 1 --engine aiv --bands 20
+
+# 稀疏带归因、单算子、依赖、微观测时
+pfdb query why_sparse --run-id 1 --band 9 --engine aiv
+pfdb query task --run-id 1 --task-id 4294967298
+pfdb query deps --run-id 1 --task-id 4294967298 --direction in
+pfdb query why_late --run-id 1 --task-id 4294967298
+
+# 输出格式：facts（默认 DSL）/ json / markdown；字节预算 --budget
+pfdb query overview --run-id 1 --format markdown
+```
+
+Python API（CLI 与它走同一引擎，`facts` 输出逐字节一致）：
+
+```python
+from profile_db.api import ProfileDB, format_result
+
+db = ProfileDB()                    # 或 ProfileDB.memory() 纯内存工作集
+r = db.query("overview", run_id=1)  # -> Result(facts, images, truncated)
+print(format_result(r, "facts"))
+db.close()
 ```
 
 ## 测试与检查

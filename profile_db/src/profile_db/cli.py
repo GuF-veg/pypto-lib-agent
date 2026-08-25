@@ -9,9 +9,11 @@
 
 """``pfdb`` command-line interface.
 
-T0 exposes ``init`` and ``--version``; T1 adds ``ingest`` (ingest a
-``dfx_outputs/`` capture directory). Later milestones add query/render/
-prune subcommands through ``_parser()``.
+T0 exposes ``init`` and ``--version``; T1 adds ``ingest``; T5 adds the
+``list`` convenience and the registry-driven ``query`` subcommand. The
+query arguments are generated from each registered query's pydantic
+parameter model, so a new query appears in the CLI without touching this
+file.
 
 --path resolution order for ``init``: the explicit ``--path``, then the
 $PFDB_PATH environment variable, then ``<cwd>/.pfdb/profile.duckdb``.
@@ -22,14 +24,16 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+import typing
 from pathlib import Path
 from typing import Sequence
 
 from profile_db._version import __version__
-from profile_db.db import ProfileDB
+from profile_db.api import ProfileDB, format_result
 from profile_db.errors import PfdbError
 from profile_db.ingest import ingest_capture
 from profile_db.ingest.text_evidence import parse_bench_line
+from profile_db.query import get_query, list_queries
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -66,7 +70,58 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help='bench summary string, e.g. "min=12.1 median=13.0 mean=13.2 max=15.0 rounds=100"',
     )
+
+    list_cmd = sub.add_parser("list", help="list runs (runs_list query)")
+    list_cmd.add_argument("--rank", default=None, help="restrict to one rank label")
+    _add_format_args(list_cmd)
+
+    query_cmd = sub.add_parser("query", help="run a registered query")
+    query_sub = query_cmd.add_subparsers(dest="query_name", required=True)
+    for spec in list_queries():
+        query_parser = query_sub.add_parser(spec.name, help=spec.owner_question)
+        _add_query_params(query_parser, spec)
+        _add_format_args(query_parser)
     return parser
+
+
+def _add_format_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--format", choices=("facts", "json", "markdown"), default="facts")
+    parser.add_argument("--budget", type=int, default=4096, help="byte budget for the facts format")
+
+
+def _field_kind(field_info) -> str:
+    annotation = field_info.annotation
+    if annotation is None:
+        return "str"
+    origin = typing.get_origin(annotation)
+    if origin in (typing.Union,):
+        args = [a for a in typing.get_args(annotation) if a is not type(None)]
+        annotation = args[0] if len(args) == 1 else None
+    if annotation is int:
+        return "int"
+    if annotation is float:
+        return "float"
+    if annotation is bool:
+        return "bool"
+    return "str"
+
+
+def _add_query_params(parser: argparse.ArgumentParser, spec) -> None:
+    """Generate one CLI flag per pydantic field of the query's params model."""
+    for name, field_info in spec.params.model_fields.items():
+        flag = "--" + name.replace("_", "-")
+        kind = _field_kind(field_info)
+        kwargs: dict = {"help": field_info.description or ""}
+        if kind == "bool":
+            kwargs["action"] = "store_true"
+            kwargs["default"] = False
+        else:
+            kwargs["type"] = {"int": int, "float": float, "str": str}[kind]
+            if field_info.is_required():
+                kwargs["required"] = True
+            else:
+                kwargs["default"] = field_info.default
+        parser.add_argument(flag, **kwargs)
 
 
 def _git_metadata(source: Path) -> tuple[str | None, bool | None]:
@@ -146,6 +201,57 @@ def _run_ingest(args: argparse.Namespace) -> int:
     return 0
 
 
+def _query_params(spec, args: argparse.Namespace) -> dict:
+    params: dict = {}
+    for name in spec.params.model_fields:
+        value = getattr(args, name, None)
+        if value is not None:
+            params[name] = value
+    return params
+
+
+def _emit(result, args: argparse.Namespace) -> None:
+    text = format_result(result, args.format, args.budget)
+    sys.stdout.write(text)
+    if not text.endswith("\n"):
+        sys.stdout.write("\n")
+
+
+def _run_query(args: argparse.Namespace) -> int:
+    spec = get_query(args.query_name)
+    try:
+        db = ProfileDB(read_only=True)
+    except PfdbError as exc:
+        print(f"pfdb: error: {exc}", file=sys.stderr)
+        return 1
+    try:
+        result = db.query(args.query_name, budget_bytes=args.budget, **_query_params(spec, args))
+        _emit(result, args)
+        return 0
+    except PfdbError as exc:
+        print(f"pfdb: error: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        db.close()
+
+
+def _run_list(args: argparse.Namespace) -> int:
+    try:
+        db = ProfileDB(read_only=True)
+    except PfdbError as exc:
+        print(f"pfdb: error: {exc}", file=sys.stderr)
+        return 1
+    try:
+        result = db.query("runs_list", budget_bytes=args.budget, rank=args.rank)
+        _emit(result, args)
+        return 0
+    except PfdbError as exc:
+        print(f"pfdb: error: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        db.close()
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "init":
@@ -162,6 +268,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command == "ingest":
         return _run_ingest(args)
+    if args.command == "list":
+        return _run_list(args)
+    if args.command == "query":
+        return _run_query(args)
     print(f"pfdb: error: unknown command {args.command!r}", file=sys.stderr)
     return 2
 
