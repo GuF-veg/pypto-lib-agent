@@ -50,6 +50,11 @@ def test_level1_ingest_counts_and_artifacts(tmp_path: Path, db_file: Path) -> No
     assert report["level"] == 1
     assert report["store_mode"] == "link"
     assert report["run_id"] == 1
+    # T3 derived rows: 2 engines × 19 bands, one core gap, both paths
+    assert report["time_bands"] == 38
+    assert report["idle_gaps"] == 1
+    assert report["cpm_path"] == 5
+    assert report["cpm_us"] == 55.0
 
     db = ProfileDB(db_file)
     try:
@@ -94,6 +99,38 @@ def test_level1_ingest_counts_and_artifacts(tmp_path: Path, db_file: Path) -> No
             "SELECT min_dispatch_us, max_finish_us FROM task WHERE run_id = 1 AND task_id = '4294967297'"
         ).fetchone()
         assert row == (0.0, 0.0)
+        # derived: bands over the [0, 90] axis (the level-1 path subtracts the
+        # shared cycle base like the converter), the core-0 gap [50, 70]
+        # classified drain_tail (level-1 has no FIN stream), and the CPM:
+        # observed front-gap->data-wait->core-wait, static rmsnorm->q_proj
+        # (55.0 µs: kv_proj hangs off rmsnorm, never off q_proj)
+        assert conn.execute(
+            "SELECT COUNT(*) FROM time_band WHERE run_id = 1 AND engine = 'aic'"
+        ).fetchone()[0] == 19
+        gap = conn.execute(
+            "SELECT core_index, t0_us, t1_us, kind, evidence FROM idle_gap WHERE run_id = 1"
+        ).fetchone()
+        assert gap == (0, 50.0, 70.0, "drain_tail", "proven")
+        observed = conn.execute(
+            "SELECT task_id, gap_kind FROM cpm_path WHERE run_id = 1 AND kind = 'observed' "
+            "ORDER BY seq"
+        ).fetchall()
+        assert observed == [
+            ("4294967297", "front-gap"),
+            ("4294967298", "data-wait"),
+            ("4294967299", "core-wait"),
+        ]
+        static = conn.execute(
+            "SELECT task_id FROM cpm_path WHERE run_id = 1 AND kind = 'static' ORDER BY seq"
+        ).fetchall()
+        assert static == [("4294967297",), ("4294967298",)]
+        assert conn.execute("SELECT cpm_us FROM run WHERE run_id = 1").fetchone()[0] == 55.0
+        assert conn.execute(
+            "SELECT COUNT(*) FROM task WHERE run_id = 1 AND on_cpm_observed"
+        ).fetchone()[0] == 3
+        assert conn.execute(
+            "SELECT COUNT(*) FROM task WHERE run_id = 1 AND on_cpm_static"
+        ).fetchone()[0] == 2
     finally:
         db.close()
     # link mode copied nothing
@@ -113,6 +150,10 @@ def test_reingest_is_idempotent(tmp_path: Path, db_file: Path) -> None:
         assert _count(conn, "task_row", first["run_id"]) == 4
         assert _count(conn, "dep_edge", first["run_id"]) == 2
         assert _count(conn, "artifact", first["run_id"]) == 3
+        # derived rows are re-inserted exactly once
+        assert _count(conn, "time_band", first["run_id"]) == second["time_bands"]
+        assert _count(conn, "idle_gap", first["run_id"]) == 1
+        assert _count(conn, "cpm_path", first["run_id"]) == 5
     finally:
         db.close()
 
@@ -142,16 +183,37 @@ def test_chip_vs_l2_naming_parity(tmp_path: Path) -> None:
         assert report_a["tasks"] == report_b["tasks"]
         assert report_a["task_rows"] == report_b["task_rows"]
         assert report_a["edges"] == report_b["edges"]
-        for table, cols in (
-            ("task", "task_id, name, family, engine, num_rows, busy_us"),
-            ("task_row", "task_id, core_index, row_index, start_us, end_us"),
-            ("dep_edge", "pred, succ, source, arg, tensor_id"),
+        for table, cols, order in (
+            ("task", "task_id, name, family, engine, num_rows, busy_us", "ORDER BY task_id"),
+            (
+                "task_row",
+                "task_id, core_index, row_index, start_us, end_us",
+                "ORDER BY core_index, row_index, task_id",
+            ),
+            ("dep_edge", "pred, succ, source, arg, tensor_id", "ORDER BY edge_id"),
+            (
+                "time_band",
+                "band_idx, engine, t0_us, t1_us, busy_cores, "
+                "CAST(task_ids AS VARCHAR), sparse, drain_tail",
+                "ORDER BY engine, band_idx",
+            ),
+            (
+                "idle_gap",
+                "engine, core_index, t0_us, t1_us, kind, "
+                "CAST(ready_task_ids AS VARCHAR), evidence",
+                "ORDER BY engine, core_index, t0_us",
+            ),
+            (
+                "cpm_path",
+                "kind, seq, task_id, gap_kind, early_dispatch_proven",
+                "ORDER BY kind, seq",
+            ),
         ):
             dump_a = db_a.connection.execute(
-                f"SELECT {cols} FROM {table} WHERE run_id = ? ORDER BY 1", [1]
+                f"SELECT {cols} FROM {table} WHERE run_id = ? {order}", [1]
             ).fetchall()
             dump_b = db_b.connection.execute(
-                f"SELECT {cols} FROM {table} WHERE run_id = ? ORDER BY 1", [1]
+                f"SELECT {cols} FROM {table} WHERE run_id = ? {order}", [1]
             ).fetchall()
             assert dump_a == dump_b, table
     finally:
@@ -284,5 +346,49 @@ def test_level4_converter_join_path(tmp_path: Path, db_file: Path) -> None:
         )
         row = conn.execute("SELECT makespan_us FROM run WHERE run_id = 1").fetchone()
         assert row[0] == span
+        # per-row AICPU columns (migration 0003) persist exactly what the
+        # converter emits for every joined row
+        expected_rows = {
+            (str(t["task_id"]), int(t["core_id"])): (
+                float(t["start_time_us"]),
+                float(t["end_time_us"]),
+                float(t.get("dispatch_time_us") or 0.0),
+                float(t.get("receive_time_us") or 0.0),
+                float(t.get("finish_time_us") or 0.0),
+            )
+            for t in joined["tasks"]
+        }
+        stored_rows = conn.execute(
+            "SELECT task_id, core_index, start_us, end_us, dispatch_us, "
+            "receive_us, finish_us FROM task_row WHERE run_id = 1"
+        ).fetchall()
+        assert {
+            (r[0], r[1]): (r[2], r[3], r[4], r[5], r[6]) for r in stored_rows
+        } == expected_rows
+        # the core-0 gap [50, 70] now has real AICPU FINs: rmsnorm FIN 11
+        # makes kv_proj (start 70) ready at t0=50 -> dispatch_wait
+        gap = conn.execute(
+            "SELECT kind, CAST(ready_task_ids AS VARCHAR), evidence FROM idle_gap "
+            "WHERE run_id = 1"
+        ).fetchone()
+        assert gap == ("dispatch_wait", '["4294967299"]', "proven")
+        # observed/static paths match the level-1 shape (the µs join does
+        # not move start/end relative to the shared base in this fixture)
+        observed = conn.execute(
+            "SELECT task_id, gap_kind FROM cpm_path WHERE run_id = 1 AND kind = 'observed' "
+            "ORDER BY seq"
+        ).fetchall()
+        assert observed == [
+            ("4294967297", "front-gap"),
+            ("4294967298", "data-wait"),
+            ("4294967299", "core-wait"),
+        ]
+        static = conn.execute(
+            "SELECT task_id FROM cpm_path WHERE run_id = 1 AND kind = 'static' ORDER BY seq"
+        ).fetchall()
+        assert static == [("4294967297",), ("4294967298",)]
+        assert conn.execute(
+            "SELECT cpm_us FROM run WHERE run_id = 1"
+        ).fetchone()[0] == 55.0
     finally:
         db.close()

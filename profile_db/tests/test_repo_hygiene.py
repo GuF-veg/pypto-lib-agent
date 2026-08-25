@@ -87,6 +87,13 @@ LAYERS: dict[str, int] = {
     "profile_db.ingest.deps": 4,
     "profile_db.ingest.writer": 4,
     "profile_db.ingest.text_evidence": 4,
+    "profile_db.derived": 3,
+    "profile_db.derived.types": 3,
+    "profile_db.derived.time_band": 3,
+    "profile_db.derived.idle_gap": 3,
+    "profile_db.derived.cpm": 3,
+    "profile_db.derived.stall": 3,
+    "profile_db.derived.early_dispatch": 3,
     "profile_db.db": 3,
     "profile_db.facts": 2,
     "profile_db.schema": 1,
@@ -95,8 +102,9 @@ LAYERS: dict[str, int] = {
 }
 
 # Packages whose modules may import each other within their shared prefix
-# (ingest is one subsystem: the orchestrator imports its sibling modules).
-_SIBLING_PREFIXES = {"profile_db.ingest"}
+# (ingest is one subsystem: the orchestrator imports its sibling modules;
+# derived likewise: the derivators share profile_db.derived.types).
+_SIBLING_PREFIXES = {"profile_db.ingest", "profile_db.derived"}
 
 
 def _internal_imports(path: Path) -> list[tuple[int, str]]:
@@ -133,9 +141,12 @@ def test_import_layering_respected() -> None:
         importer_layer = LAYERS[module_name]
         for lineno, imported in _internal_imports(path):
             assert imported in LAYERS, f"{module_name}:{lineno}: unknown internal import {imported}"
+            # A package and its submodules form one subsystem: the package
+            # __init__ may import its own submodules (and vice versa) at
+            # the same layer, mirroring the ingest package convention.
             sibling = any(
-                module_name.startswith(prefix + ".")
-                and imported.startswith(prefix + ".")
+                (module_name == prefix or module_name.startswith(prefix + "."))
+                and (imported == prefix or imported.startswith(prefix + "."))
                 for prefix in _SIBLING_PREFIXES
             )
             ancestor = module_name.startswith(imported + ".")

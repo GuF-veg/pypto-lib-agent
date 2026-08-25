@@ -23,7 +23,12 @@
   `dfx_outputs/pmu.csv` 动态列名长表化；缺省文件合法（表空、查询层报
   unavailable）；`--bench` / `--bench-log` 注册基准数据（重摄取时保留合并）；
   环境元数据（runtime_cfg）路径脱敏。
-- ⬜ T3+ 见 DESIGN.md 第 11 节。
+- ✅ T3 衍生层：入库即衍生（`derived/` 纯函数，随 ingest 事务落表）——
+  `time_band` 5µs 密度带与 sparse/drain_tail 判定、`idle_gap` 核级空闲段
+  四类确定性分类（证据标注）、`cpm_path` observed/static 双路径（与上游
+  `critical_path` 逐条件同构，真实捕获对拍零差）、stall 四段分解与
+  early-dispatch 四态证明；迁移 `0003` 补行级 dispatch/receive/finish。
+- ⬜ T4+ 见 DESIGN.md 第 11 节。
 
 ## 安装与使用
 

@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from profile_db.db import WriterGuard
+from profile_db.derived import derive_run
 from profile_db.errors import IngestError
 from profile_db.ingest import deps, source as source_mod, swimlane, text_evidence, writer
 
@@ -46,6 +47,9 @@ _CHILD_TABLES = (
     "perf_hint",
     "memory_entry",
     "pmu_counter",
+    "time_band",
+    "idle_gap",
+    "cpm_path",
 )
 
 
@@ -295,6 +299,17 @@ def ingest_capture(
                 writer.next_id(conn, "pmu_counter", "pmu_id"),
                 pmu_rows,
             )
+            derivation = derive_run(conn, run_id)
+            writer.insert_time_bands(conn, run_id, derivation.bands)
+            writer.insert_idle_gaps(
+                conn,
+                run_id,
+                writer.next_id(conn, "idle_gap", "gap_id"),
+                derivation.gaps,
+            )
+            writer.insert_cpm_paths(conn, run_id, derivation.paths)
+            writer.update_task_path_flags(conn, run_id, derivation.task_flags)
+            writer.update_run_cpm(conn, run_id, derivation.cpm_us)
             conn.execute("COMMIT")
         except Exception as exc:
             conn.execute("ROLLBACK")
@@ -317,6 +332,10 @@ def ingest_capture(
         "pmu_counters": len(pmu_rows),
         "store_mode": store_mode,
         "makespan_us": swimlane_run.makespan_us,
+        "time_bands": len(derivation.bands),
+        "idle_gaps": len(derivation.gaps),
+        "cpm_path": len(derivation.paths),
+        "cpm_us": derivation.cpm_us,
     }
 
 
@@ -381,6 +400,9 @@ def _task_row_rows(swimlane_run: swimlane.Swimlane) -> list[dict[str, Any]]:
             "row_index": row.row_index,
             "start_us": row.start_us,
             "end_us": row.end_us,
+            "dispatch_us": row.dispatch_us,
+            "receive_us": row.receive_us,
+            "finish_us": row.finish_us,
         }
         for row in swimlane_run.rows
     ]

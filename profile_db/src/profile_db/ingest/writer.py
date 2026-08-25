@@ -210,13 +210,17 @@ def insert_task_rows(conn: duckdb.DuckDBPyConnection, run_id: int, rows: Sequenc
             row["row_index"],
             row["start_us"],
             row["end_us"],
+            row["dispatch_us"],
+            row["receive_us"],
+            row["finish_us"],
         )
         for row in rows
     ]
     _executemany(
         conn,
         "INSERT INTO task_row (run_id, task_id, core_index, engine, thread, "
-        "row_index, start_us, end_us) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "row_index, start_us, end_us, dispatch_us, receive_us, finish_us) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         data,
     )
 
@@ -378,3 +382,117 @@ def insert_pmu_counters(
         "VALUES (?, ?, ?, ?, ?)",
         rows,
     )
+
+
+# ---------------------------------------------------------------------------
+# Derived tables (T3): the derived layer computes the row lists, these
+# writers only persist them.
+# ---------------------------------------------------------------------------
+
+
+def insert_time_bands(
+    conn: duckdb.DuckDBPyConnection, run_id: int, bands: Sequence[Mapping[str, Any]]
+) -> None:
+    rows = [
+        (
+            run_id,
+            band["band_idx"],
+            band["t0_us"],
+            band["t1_us"],
+            band["engine"],
+            band["total_cores"],
+            band["busy_cores"],
+            json.dumps(band["task_ids"]),
+            band["sparse"],
+            band["drain_tail"],
+        )
+        for band in bands
+    ]
+    _executemany(
+        conn,
+        "INSERT INTO time_band (run_id, band_idx, t0_us, t1_us, engine, "
+        "total_cores, busy_cores, task_ids, sparse, drain_tail) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, CAST(? AS JSON), ?, ?)",
+        rows,
+    )
+
+
+def insert_idle_gaps(
+    conn: duckdb.DuckDBPyConnection,
+    run_id: int,
+    first_id: int,
+    gaps: Sequence[Mapping[str, Any]],
+) -> None:
+    rows = [
+        (
+            first_id + index,
+            run_id,
+            gap["engine"],
+            gap["core_index"],
+            gap["t0_us"],
+            gap["t1_us"],
+            gap["kind"],
+            json.dumps(gap["ready_task_ids"]) if gap["ready_task_ids"] is not None else None,
+            gap["evidence"],
+        )
+        for index, gap in enumerate(gaps)
+    ]
+    _executemany(
+        conn,
+        "INSERT INTO idle_gap (gap_id, run_id, engine, core_index, t0_us, t1_us, "
+        "kind, ready_task_ids, evidence) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, CAST(? AS JSON), ?)",
+        rows,
+    )
+
+
+def insert_cpm_paths(
+    conn: duckdb.DuckDBPyConnection, run_id: int, paths: Sequence[Mapping[str, Any]]
+) -> None:
+    rows = [
+        (
+            run_id,
+            path["kind"],
+            path["seq"],
+            path["task_id"],
+            path["wall_us"],
+            path["busy_us"],
+            path["compute_us"],
+            path["stall_us"],
+            path["gap_us"],
+            path["gap_kind"],
+            path["early_dispatch_proven"],
+        )
+        for path in paths
+    ]
+    _executemany(
+        conn,
+        "INSERT INTO cpm_path (run_id, kind, seq, task_id, wall_us, busy_us, "
+        "compute_us, stall_us, gap_us, gap_kind, early_dispatch_proven) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+
+
+def update_task_path_flags(
+    conn: duckdb.DuckDBPyConnection, run_id: int, flags: Sequence[Mapping[str, Any]]
+) -> None:
+    rows = [
+        (
+            flag["on_cpm_observed"],
+            flag["on_cpm_static"],
+            run_id,
+            flag["task_id"],
+        )
+        for flag in flags
+    ]
+    _executemany(
+        conn,
+        "UPDATE task SET on_cpm_observed = ?, on_cpm_static = ? "
+        "WHERE run_id = ? AND task_id = ?",
+        rows,
+    )
+
+
+def update_run_cpm(conn: duckdb.DuckDBPyConnection, run_id: int, cpm_us: float | None) -> None:
+    conn.execute("UPDATE run SET cpm_us = ? WHERE run_id = ?", [cpm_us, run_id])

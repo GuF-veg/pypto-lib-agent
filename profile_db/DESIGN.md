@@ -205,13 +205,13 @@
 | `run` | 一次采集的上下文与顶线指标 | `run_id`、`program`、`platform`、`device_id`、`captured_at`、`swimlane_level`、`clock_freq_hz`、`num_cores`、`core_types/json`、`core_to_thread/json`、`rank_label`、`git_commit`、`git_dirty`、`runtime_cfg/json`、`cmdline/json`（脱敏）、`bench_min/median/mean/max_us`、`bench_rounds`、`makespan_us`、`raw_span_us`、`cpm_us`、`retained`、`notes`、`tags[]` |
 | `artifact` | 工件清单与存档凭据 | `artifact_id`、`run_id`、`kind`、`rel_path`、`sha256`、`size_bytes`、`store_mode(link/copy)` |
 | `task` | 逻辑任务（deps + 时序拼接后） | `run_id`、`task_id`、`name`、`family`、`engine`、`scope`、`early_dispatch_flag`、`kernel_ids/json`、`block_num`、`num_rows`、`busy_us`、`wall_us`、`min_dispatch_us`…`max_finish_us`、`on_cpm_observed`、`on_cpm_static` |
-| `task_row` | 物理执行行（泳道每一格） | `run_id`、`task_id`、`core_index`、`engine`、`thread`、`row_index`、`start_us`、`end_us`、`aux` |
+| `task_row` | 物理执行行（泳道每一格） | `run_id`、`task_id`、`core_index`、`engine`、`thread`、`row_index`、`start_us`、`end_us`、`dispatch_us`、`receive_us`、`finish_us`、`aux`（disp/receive/finish 由迁移 0003 补齐，level-1 维持转换器合成的 0.0） |
 | `dep_edge` | 任务依赖边（原始字段保真） | `run_id`、`pred`、`succ`、`source`、`arg`、`flags/json`、`tensor_id`、`consumer_dtype`、`consumer_shape/json`、`consumer_start_offset`、`consumer_strides/json` |
 | `scheduler_phase` | AICPU 调度相位 | `run_id`、`lane`、`kind(dispatch/complete/resolve/release)`、`t0_us`、`t1_us`、`loop_iter`、`tasks_processed`、`pop_hit`、`pop_miss`、`shared_at_start`、`shared_at_end`（后两者为**每队列深度的 JSON 列表**，迁移 0002 修正了 v1 误标 INTEGER） |
 | `orch_phase` | AICPU 编排提交 | `run_id`、`lane`、`submit_idx`、`task_id`、`t0_us`、`t1_us` |
 | `time_band`（衍生） | 密度索引：run 时间轴按固定粒度切带 | `run_id`、`band_idx`、`t0_us`、`t1_us`、`engine`、`total_cores`、`busy_cores`、`task_ids/json`、`sparse`、`drain_tail` |
-| `idle_gap`（衍生） | 核级空闲段及确定性分类 | `run_id`、`engine`、`core_index`、`t0_us`、`t1_us`、`kind(dispatch_wait/ready_starved/drain_tail/unknown)`、`ready_task_ids/json`、`evidence` |
-| `cpm_path`（衍生） | 关键路径任务序列与间隔分解 | `run_id`、`kind(observed/static)`、`seq`、`task_id`、`wall_us`、`busy_us`、`compute_us`、`stall_us`、`gap_us`、`gap_kind`、`early_dispatch_proven(full/partial/none/unavailable)` |
+| `idle_gap`（衍生） | 核级空闲段及确定性分类 | `run_id`、`engine`、`core_index`、`t0_us`、`t1_us`、`kind(dispatch_wait/ready_starved/drain_tail/unknown)`、`ready_task_ids/json`、`evidence`。<br>判定优先级按 6.3 逐条（dispatch_wait → ready_starved → drain_tail → unknown），1/2 类仅 level≥2 可用（level-1 无 FIN 流，占位 0.0 绝不解释为时刻）；payload 语义分 kind：dispatch_wait=就绪未派任务 id 列表，ready_starved=`[{task_id, fin_us}]` 滞后生产者，其余为空；三实类 `evidence=proven`，unknown `evidence=unproven`。记录阈值：同核相邻行间隔 ≥5µs（含边界）。 |
+| `cpm_path`（衍生） | 关键路径任务序列与间隔分解 | `run_id`、`kind(observed/static)`、`seq`、`task_id`、`wall_us`、`busy_us`、`compute_us`、`stall_us`、`gap_us`、`gap_kind`、`early_dispatch_proven(full/partial/none/unavailable)`。<br>算法与上游 `critical_path` 逐条件同构（对拍即真）：observed 行 `compute_us`=非重叠实际贡献、`stall_us`=距 frontier 的间隔、`gap_kind∈data-wait/core-wait/front-gap`、`gap_us=start-ready`（level≥2 且生产者带时刻时）；static 行为依赖受限最长路径，`compute_us=busy_us`，gap 列空。early-dispatch 用结构规则（直接生产者全部 creator 或 allow_early_resolve）＋两 tick 容差时间戳证明。 |
 | `pmu_counter` | PMU 长表（列名随架构动态） | `run_id`、`task_id`、`counter`、`value`、`total_cycles` |
 | `perf_hint` | 编译器提示逐行 | `run_id`、`seq`、`text`、`source_path`、`origin='compiler'` |
 | `memory_entry` | 缓冲占用报告 | `run_id`、`kernel`、`space(Vec/Mat/Left/Right/Acc)`、`usage`、`limit` |
@@ -271,7 +271,9 @@ TRUNCATED limit_bytes=4096
 
 - `schema_version` 全局记档 + `migrations/NNNN_*.sql` 顺序迁移，连接打开时自动执行。
   已有迁移：`0001_init.sql`（18 表全量建表）、`0002_sched_queue_depths.sql`
-  （`scheduler_phase.shared_at_*` 改 JSON 列表——T1 对真实捕获的保真修正）。
+  （`scheduler_phase.shared_at_*` 改 JSON 列表——T1 对真实捕获的保真修正）、
+  `0003_task_row_dispatch.sql`（`task_row` 补 `dispatch/receive/finish_us`
+  三列——T3 行级 early-dispatch 证明与最早行 stall 分解所需）。
 - schema 自 v1 起**一次性预留**全部表（含 trial/baseline 与衍生表），避免后期大迁移。
 - 库文件可整体删除重建（数据可弃），因此不提供降级/回滚语义——迁移只前进。
 
@@ -630,16 +632,26 @@ tests ────▶ 可直接触达任何层，但金质题库只走 api/CLI/M
   sparse/drain_tail 判定按 5.3）；`idle_gap` 分类（≥5µs 记录）；CPM
   observed/static 落 `cpm_path`；stall 分解四段；early-dispatch 证明。
   全部纯函数、幂等、带证据标注；输入输出约束检查（核数/时钟从工件读，
-  不硬编码）。
+  不硬编码）。（**T3 已完成**，见 README 状态表。）
 - **不做什么**：不写查询输出格式。
 - **验收**：
-  - [ ] 对真实捕获：CPM 任务序列与 `python -m simpler_setup.tools.critical_path`
+  - [x] 对真实捕获：CPM 任务序列与 `python -m simpler_setup.tools.critical_path`
         输出一致（对拍）；stall 分解和 = gap（一致性断言）；
-  - [ ] 每个 `idle_gap.kind` 至少一个构造场景单测，`evidence` 标注正确；
-  - [ ] 稀疏判定单测：复制真实 AIV 双峰分布（48% 空带）的合成数据，
+  - [x] 每个 `idle_gap.kind` 至少一个构造场景单测，`evidence` 标注正确；
+  - [x] 稀疏判定单测：复制真实 AIV 双峰分布（48% 空带）的合成数据，
         判定结果与 5.3 阈值一致；drain_tail 形态规则单测；
-  - [ ] 重复运行衍生器结果逐字段一致；空输入/单任务/零边边界不崩、
+  - [x] 重复运行衍生器结果逐字段一致；空输入/单任务/零边边界不崩、
         标注 unknown/unavailable。
+- **实施备注**：`derived/` 为纯函数子包（输入=表、输出=行清单，不碰原始
+  JSON），ingest 事务内触发入库；`time_band/idle_gap/cpm_path` 与
+  `run.cpm_us`、`task.on_cpm_*` 随 run 一并重建，重摄取幂等。真实捕获对拍：
+  static 路径 12 任务 / observed 20 任务序列、gap kind、逐任务
+  compute/stall 与上游零差（fp 噪声 ≤3e-13µs），static CPM 2405.98µs；
+  密度带复现标定数字（aic 566 带/空 20/稀疏 37/drain 5，aiv 566 带/空 270/
+  稀疏 364/drain 5 —— 附录 B 的 3.5% 与 47.7% 空带精确吻合）；idle_gap
+  340 条（dispatch_wait 68 / ready_starved 269 / unknown 3，drain_tail 在
+  该捕获为 0）；level-1 边界按"FIN 流不可用"语义处理（绝不解释 0.0
+  占位符）。
 
 ### T4 分层查询引擎（核心，最大的里程碑） ｜ 依赖：T1、T3 ｜ 规模：L
 
