@@ -37,3 +37,8 @@ class IngestError(PfdbError):
 class QueryError(PfdbError):
     """A query cannot be answered: unknown name, invalid parameters, or a
     multi-rank database that requires an explicit rank selection."""
+
+
+class RenderError(PfdbError):
+    """A render request cannot be satisfied: unknown kind, invalid window
+    or parameters, or a target (run/task/core) that does not exist."""

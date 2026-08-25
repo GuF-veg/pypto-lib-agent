@@ -704,10 +704,34 @@ tests ────▶ 可直接触达任何层，但金质题库只走 api/CLI/M
 ### T6 可视化渲染层 ｜ 依赖：T3（可与 T4/T5 并行） ｜ 规模：M
 
 - **做什么**：R0–R3 渲染器 + 确定性样式常量 + 缓存（总量上限 LRU）+
-  `render_manifest.json` + 尺寸/字节预算与降采样。
-- **验收**：[ ] 同参数两次渲染 SHA-256 一致；[ ] 窗口渲染 x 轴范围与来源表
-  区间对拍；[ ] manifest 字段完整；[ ] 空窗口/无边任务渲染出带说明的图或
-  显式 unavailable，不崩；[ ] 缓存上限生效（写入超量后旧缓存被逐出）。
+  `render_manifest.json` + 尺寸/字节预算与降采样。（**T6 已完成**，见
+  README 状态表。）
+- **验收**：
+  - [x] 同参数两次渲染 SHA-256 一致（两个独立缓存目录对拍，逐字节相等）；
+  - [x] 窗口渲染 x 轴范围与来源表区间对拍（`x_axis_us == [t0, t1]`，
+        且与 `task_row` 的 min start / max end 直接对拍）；
+  - [x] manifest 字段完整（kind/run_id/params/params_key/generator_version/
+        python/matplotlib 版本/width/height/dpi/us_per_px/x_axis_us/legend/
+        num_rows/size_bytes/sha256/downsampled 全量断言）；
+  - [x] 空窗口/无边任务渲染出带说明的图或显式 unavailable，不崩（空窗口
+        与无边任务产出带 `note` 的注解图；未知 run/task/core 回
+        `unavailable=True` + 结构化 reason，PNG 为空且不崩）；
+  - [x] 缓存上限生效（写入超量后旧缓存被逐出，最新条目保留）。
+- **实施备注**：`render/` 子包（分层 2，只依赖 schema 表）＝ `styles.py`
+  （确定性样式常量：8×4.5in、DPI 100、引擎配色、字节/缓存上限）＋
+  `renderers.py`（R0 whole / R1 window 依赖箭头 / R2 task 就绪线 /
+  R3 core 空闲段着色，Agg 后端、matplotlib 对象 API 无 pyplot 状态）＋
+  `cache.py`（`<kind>-<params_key>.png` + 同名 `.manifest.json`，
+  `params_key` 为参数规范 JSON 的 SHA-256 前 16 hex，mtime 记访问序、
+  超预算按 LRU 逐出，PNG 与 manifest 成对删除）＋ `types.py`。`render()`
+  编排：校验参数 → 查缓存 → 命中即返（清单已含 sha256/size）→ 否则渲染 →
+  按 `image_max_bytes` 折半 DPI 降采样（`downsampled` 标注）→ 落清单与 PNG。
+  `ProfileDB.render(kind, run_id, ...)`（API）返回 `Result`（`IMAGE` fact +
+  `ImageRef`），渲染目录默认 `<db>/.pfdb/render`，内存库需显式
+  `render_dir`。CLI 增 `pfdb render <whole|window|task|core> --run <id>
+  [--t0 --t1 --task-id --core --render-dir]`，与 API 走同一 `format_result`。
+  空窗/无边任务/未知目标均不崩（`RenderError` / unavailable），14 条
+  新增渲染测试 + 4 条 CLI 测试全绿。
 
 ### T7 MCP 服务 ｜ 依赖：T5（图像工具依赖 T6） ｜ 规模：M
 

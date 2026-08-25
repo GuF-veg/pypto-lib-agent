@@ -38,7 +38,14 @@
   `format_result`）与 CLI `list` / `query` 子命令（参数由注册表 pydantic
   模型自动生成，`facts/json/markdown` 三种输出）；CLI 与 API 输出逐字节
   一致（测试兜底）；`ProfileDB.memory()` 内存模式与磁盘模式对拍。
-- ⬜ T6+ 见 DESIGN.md 第 11 节。
+- ✅ T6 可视化渲染：`render/` 子包（只依赖 schema 表）——R0 whole /
+  R1 window（依赖箭头）/ R2 task（就绪线）/ R3 core（空闲段着色），
+  确定性样式常量 + Agg 后端；缓存 `<kind>-<params_key>.png` + 同名
+  `.manifest.json`（SHA-256、尺寸、µs/px、图例、生成版本），字节预算超限
+  自动降采样、总量上限 LRU 逐出；`ProfileDB.render(...)` 与 CLI
+  `pfdb render` 均返回 `IMAGE` fact + `ImageRef`，同参数重复渲染 SHA-256
+  逐字节一致，空窗/无边任务/未知目标不崩。
+- ⬜ T7+ 见 DESIGN.md 第 11 节。
 
 ## 安装与使用
 
@@ -80,6 +87,24 @@ pfdb query why_late --run-id 1 --task-id 4294967298
 pfdb query overview --run-id 1 --format markdown
 ```
 
+### 渲染（R0–R3）
+
+```bash
+# 全图总览（全部核 × 全时间轴）
+pfdb render whole --run 1
+
+# 时间窗（附依赖箭头与窗口边界）
+pfdb render window --run 1 --t0 100 --t1 200
+
+# 单算子邻域（本任务高亮 + 生产者/消费者 + 就绪线）
+pfdb render task --run 1 --task-id 4294967298
+
+# 单核时间轴（空闲段着色）
+pfdb render core --run 1 --core 5
+
+# 图像与清单落在 <db>/.pfdb/render/（可用 --render-dir 覆盖）
+```
+
 Python API（CLI 与它走同一引擎，`facts` 输出逐字节一致）：
 
 ```python
@@ -88,6 +113,9 @@ from profile_db.api import ProfileDB, format_result
 db = ProfileDB()                    # 或 ProfileDB.memory() 纯内存工作集
 r = db.query("overview", run_id=1)  # -> Result(facts, images, truncated)
 print(format_result(r, "facts"))
+
+img = db.render("whole", 1)         # -> Result(IMAGE fact, ImageRef, ...)
+print(img.images[0].path)           # PNG 路径（供多模态模型读取）
 db.close()
 ```
 

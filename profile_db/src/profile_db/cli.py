@@ -10,10 +10,10 @@
 """``pfdb`` command-line interface.
 
 T0 exposes ``init`` and ``--version``; T1 adds ``ingest``; T5 adds the
-``list`` convenience and the registry-driven ``query`` subcommand. The
-query arguments are generated from each registered query's pydantic
-parameter model, so a new query appears in the CLI without touching this
-file.
+``list`` convenience and the registry-driven ``query`` subcommand; T6 adds
+``render`` (R0–R3 swimlane images). The query arguments are generated from
+each registered query's pydantic parameter model, so a new query appears
+in the CLI without touching this file.
 
 --path resolution order for ``init``: the explicit ``--path``, then the
 $PFDB_PATH environment variable, then ``<cwd>/.pfdb/profile.duckdb``.
@@ -81,6 +81,21 @@ def _parser() -> argparse.ArgumentParser:
         query_parser = query_sub.add_parser(spec.name, help=spec.owner_question)
         _add_query_params(query_parser, spec)
         _add_format_args(query_parser)
+
+    render_cmd = sub.add_parser("render", help="render a swimlane image (R0-R3)")
+    render_cmd.add_argument("kind", choices=("whole", "window", "task", "core"))
+    render_cmd.add_argument("--run", type=int, required=True, dest="run_id")
+    render_cmd.add_argument("--t0", type=float, dest="t0_us", help="window start (µs)")
+    render_cmd.add_argument("--t1", type=float, dest="t1_us", help="window end (µs)")
+    render_cmd.add_argument("--task-id", dest="task_id", help="task for R2")
+    render_cmd.add_argument("--core", type=int, dest="core_index", help="core index for R3")
+    render_cmd.add_argument(
+        "--render-dir",
+        default=None,
+        dest="render_dir",
+        help="cache directory (default: <db>/.pfdb/render)",
+    )
+    _add_format_args(render_cmd)
     return parser
 
 
@@ -252,6 +267,31 @@ def _run_list(args: argparse.Namespace) -> int:
         db.close()
 
 
+def _run_render(args: argparse.Namespace) -> int:
+    try:
+        db = ProfileDB(read_only=True)
+    except PfdbError as exc:
+        print(f"pfdb: error: {exc}", file=sys.stderr)
+        return 1
+    try:
+        result = db.render(
+            args.kind,
+            args.run_id,
+            render_dir=args.render_dir,
+            t0_us=args.t0_us,
+            t1_us=args.t1_us,
+            task_id=args.task_id,
+            core_index=args.core_index,
+        )
+        _emit(result, args)
+        return 0
+    except PfdbError as exc:
+        print(f"pfdb: error: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        db.close()
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "init":
@@ -272,6 +312,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_list(args)
     if args.command == "query":
         return _run_query(args)
+    if args.command == "render":
+        return _run_render(args)
     print(f"pfdb: error: unknown command {args.command!r}", file=sys.stderr)
     return 2
 

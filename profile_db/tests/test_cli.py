@@ -146,3 +146,49 @@ def test_help_lists_query_and_list(tmp_path: Path) -> None:
     help_out = _run("query", "overview", "--help")
     assert help_out.returncode == 0
     assert "--run-id" in help_out.stdout
+
+
+# ---------------------------------------------------------------------------
+# T6: render subcommand
+# ---------------------------------------------------------------------------
+
+
+def test_render_whole_writes_image(tmp_path: Path) -> None:
+    db = _populate(tmp_path)
+    render_dir = tmp_path / "render"
+    result = _run(
+        "render", "whole", "--run", "1", "--render-dir", str(render_dir),
+        env={"PFDB_PATH": str(db)},
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.startswith("IMAGE ")
+    assert 'kind="whole"' in result.stdout
+    assert list(render_dir.rglob("*.png")), "render cache must contain a PNG"
+
+
+def test_render_unavailable_task_is_structured(tmp_path: Path) -> None:
+    db = _populate(tmp_path)
+    result = _run(
+        "render", "task", "--run", "1", "--task-id", "999999",
+        env={"PFDB_PATH": str(db)},
+    )
+    assert result.returncode == 0
+    assert result.stdout.startswith("IMAGE ")
+    assert "reason=" in result.stdout and "unavailable" in result.stdout
+
+
+def test_render_invalid_window_is_error(tmp_path: Path) -> None:
+    db = _populate(tmp_path)
+    result = _run(
+        "render", "window", "--run", "1", "--t0", "50", "--t1", "10",
+        env={"PFDB_PATH": str(db)},
+    )
+    assert result.returncode == 1
+    assert "pfdb: error:" in result.stderr
+
+
+def test_render_missing_window_bounds_is_usage_error(tmp_path: Path) -> None:
+    db = _populate(tmp_path)
+    result = _run("render", "window", "--run", "1", env={"PFDB_PATH": str(db)})
+    assert result.returncode == 1
+    assert "requires t0_us and t1_us" in result.stderr

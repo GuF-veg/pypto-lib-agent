@@ -14,5 +14,6 @@ layers =
     profile_db.derived
     profile_db.db
     profile_db.facts
+    profile_db.render
     profile_db.schema
     profile_db.errors
