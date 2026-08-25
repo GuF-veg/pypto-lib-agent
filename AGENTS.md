@@ -47,6 +47,18 @@ plugins:
 - Keep code comments and documentation in English unless the user explicitly
   requests otherwise
 
+## Runtime Environment
+
+This project's runtime environment is the conda virtual environment `pypto`.
+All commands must run within it:
+
+```bash
+conda activate pypto
+```
+
+Every `python`, `pytest`, `ruff`, or other tool invocation in this repository
+must be executed inside this environment.
+
 ## Preferred Commands
 
 ```bash

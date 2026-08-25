@@ -142,6 +142,12 @@ def _execute_compiled_kwargs(runtime: dict[str, Any]) -> dict[str, Any]:
                 f"{sorted(dfx_flags)}"
             ) from exc
 
+        # The runtime renamed the L2 swimlane flag to ``enable_chip_swimlane``
+        # (``RunConfig`` keeps ``enable_l2_swimlane`` only as a deprecated
+        # alias). The harness keeps the original public spelling and translates
+        # it here so ``runtime_cfg={"enable_l2_swimlane": ...}`` keeps working.
+        if "enable_l2_swimlane" in dfx_flags:
+            dfx_flags["enable_chip_swimlane"] = dfx_flags.pop("enable_l2_swimlane")
         out["dfx"] = _DfxOpts(**dfx_flags)
     return out
 
