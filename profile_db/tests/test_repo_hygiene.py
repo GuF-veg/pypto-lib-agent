@@ -86,6 +86,7 @@ LAYERS: dict[str, int] = {
     "profile_db.ingest.swimlane_us": 4,
     "profile_db.ingest.deps": 4,
     "profile_db.ingest.writer": 4,
+    "profile_db.ingest.text_evidence": 4,
     "profile_db.db": 3,
     "profile_db.facts": 2,
     "profile_db.schema": 1,

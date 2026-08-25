@@ -29,6 +29,7 @@ from profile_db._version import __version__
 from profile_db.db import ProfileDB
 from profile_db.errors import PfdbError
 from profile_db.ingest import ingest_capture
+from profile_db.ingest.text_evidence import parse_bench_line
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -55,6 +56,16 @@ def _parser() -> argparse.ArgumentParser:
     ingest.add_argument("--notes", default=None)
     ingest.add_argument("--tags", nargs="*", default=None)
     ingest.add_argument("--copy", action="store_true", help="archive artifacts into .pfdb/store (default: link)")
+    ingest.add_argument(
+        "--bench-log",
+        default=None,
+        help="PYPTO_BENCH output file whose effective_us line registers on the run",
+    )
+    ingest.add_argument(
+        "--bench",
+        default=None,
+        help='bench summary string, e.g. "min=12.1 median=13.0 mean=13.2 max=15.0 rounds=100"',
+    )
     return parser
 
 
@@ -83,6 +94,16 @@ def _git_metadata(source: Path) -> tuple[str | None, bool | None]:
 def _run_ingest(args: argparse.Namespace) -> int:
     source = Path(args.source)
     git_commit, git_dirty = _git_metadata(source)
+    bench: dict = {}
+    if args.bench is not None:
+        bench = parse_bench_line(args.bench)
+    elif args.bench_log is not None:
+        bench_path = Path(args.bench_log)
+        try:
+            bench = parse_bench_line(bench_path.read_text(encoding="utf-8"))
+        except OSError as exc:
+            print(f"pfdb: error: cannot read bench log {bench_path}: {exc}", file=sys.stderr)
+            return 1
     try:
         db = ProfileDB()
     except PfdbError as exc:
@@ -101,6 +122,11 @@ def _run_ingest(args: argparse.Namespace) -> int:
             copy=args.copy,
             git_commit=git_commit,
             git_dirty=git_dirty,
+            bench_min_us=bench.get("min"),
+            bench_median_us=bench.get("median"),
+            bench_mean_us=bench.get("mean"),
+            bench_max_us=bench.get("max"),
+            bench_rounds=bench.get("rounds"),
         )
     except PfdbError as exc:
         print(f"pfdb: error: {exc}", file=sys.stderr)
@@ -114,7 +140,8 @@ def _run_ingest(args: argparse.Namespace) -> int:
     print(
         f"  tasks={report['tasks']} task_rows={report['task_rows']} "
         f"edges={report['edges']} artifacts={report['artifacts']} "
-        f"makespan={report['makespan_us']:.3f}us"
+        f"perf_hints={report['perf_hints']} memory={report['memory_entries']} "
+        f"pmu={report['pmu_counters']} makespan={report['makespan_us']:.3f}us"
     )
     return 0
 

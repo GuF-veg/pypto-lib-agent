@@ -25,6 +25,8 @@ from typing import Any, Mapping, Sequence
 
 import duckdb
 
+from profile_db.ingest.text_evidence import redact_paths
+
 RECORD_KINDS = (
     "chip_swimlane_records",
     "l2_swimlane_records",
@@ -80,7 +82,7 @@ def insert_run(conn: duckdb.DuckDBPyConnection, meta: Mapping[str, Any]) -> None
             json.dumps(meta["core_to_thread"]),
             meta.get("git_commit"),
             meta.get("git_dirty"),
-            json.dumps(meta.get("runtime_cfg") or {}),
+            json.dumps(redact_paths(meta.get("runtime_cfg") or {})),
             meta.get("bench_min_us"),
             meta.get("bench_median_us"),
             meta.get("bench_mean_us"),
@@ -102,6 +104,8 @@ def update_run(conn: duckdb.DuckDBPyConnection, run_id: int, meta: Mapping[str, 
             swimlane_level = ?, clock_freq_hz = ?, num_cores = ?,
             core_types = CAST(? AS JSON), core_to_thread = CAST(? AS JSON),
             git_commit = ?, git_dirty = ?, runtime_cfg = CAST(? AS JSON),
+            bench_min_us = ?, bench_median_us = ?, bench_mean_us = ?,
+            bench_max_us = ?, bench_rounds = ?,
             makespan_us = ?, raw_span_us = ?, notes = ?, tags = CAST(? AS VARCHAR[])
         WHERE run_id = ?
         """,
@@ -117,7 +121,12 @@ def update_run(conn: duckdb.DuckDBPyConnection, run_id: int, meta: Mapping[str, 
             json.dumps(meta["core_to_thread"]),
             meta.get("git_commit"),
             meta.get("git_dirty"),
-            json.dumps(meta.get("runtime_cfg") or {}),
+            json.dumps(redact_paths(meta.get("runtime_cfg") or {})),
+            meta.get("bench_min_us"),
+            meta.get("bench_median_us"),
+            meta.get("bench_mean_us"),
+            meta.get("bench_max_us"),
+            meta.get("bench_rounds"),
             meta.get("makespan_us"),
             meta.get("raw_span_us"),
             meta.get("notes"),
@@ -297,5 +306,75 @@ def insert_orchestrator_phases(
         conn,
         "INSERT INTO orch_phase (run_id, lane, submit_idx, task_id, t0_us, t1_us) "
         "VALUES (?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+
+
+def insert_perf_hints(
+    conn: duckdb.DuckDBPyConnection, run_id: int, hints: Sequence[Mapping[str, Any]]
+) -> None:
+    rows = [
+        (
+            run_id,
+            hint["seq"],
+            hint["text"],
+            hint["source_path"],
+            hint["origin"],
+        )
+        for hint in hints
+    ]
+    _executemany(
+        conn,
+        "INSERT INTO perf_hint (run_id, seq, text, source_path, origin) "
+        "VALUES (?, ?, ?, ?, ?)",
+        rows,
+    )
+
+
+def insert_memory_entries(
+    conn: duckdb.DuckDBPyConnection,
+    run_id: int,
+    first_id: int,
+    entries: Sequence[Mapping[str, Any]],
+) -> None:
+    rows = [
+        (
+            first_id + index,
+            run_id,
+            entry["kernel"],
+            entry["space"],
+            entry["usage"],
+            entry["limit_value"],
+        )
+        for index, entry in enumerate(entries)
+    ]
+    _executemany(
+        conn,
+        "INSERT INTO memory_entry (memory_id, run_id, kernel, space, usage, limit_value) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+
+
+def insert_pmu_counters(
+    conn: duckdb.DuckDBPyConnection,
+    run_id: int,
+    first_id: int,
+    counters: Sequence[Mapping[str, Any]],
+) -> None:
+    rows = [
+        (
+            first_id + index,
+            run_id,
+            counter["task_id"],
+            counter["counter"],
+            counter["value"],
+        )
+        for index, counter in enumerate(counters)
+    ]
+    _executemany(
+        conn,
+        "INSERT INTO pmu_counter (pmu_id, run_id, task_id, counter, value) "
+        "VALUES (?, ?, ?, ?, ?)",
         rows,
     )

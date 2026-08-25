@@ -34,7 +34,7 @@ from typing import Any, Sequence
 
 from profile_db.db import WriterGuard
 from profile_db.errors import IngestError
-from profile_db.ingest import deps, source as source_mod, swimlane, writer
+from profile_db.ingest import deps, source as source_mod, swimlane, text_evidence, writer
 
 _CHILD_TABLES = (
     "artifact",
@@ -43,6 +43,9 @@ _CHILD_TABLES = (
     "dep_edge",
     "scheduler_phase",
     "orch_phase",
+    "perf_hint",
+    "memory_entry",
+    "pmu_counter",
 )
 
 
@@ -120,8 +123,20 @@ def ingest_capture(
     runtime_cfg: dict[str, Any] | None = None,
     git_commit: str | None = None,
     git_dirty: bool | None = None,
+    bench_min_us: float | None = None,
+    bench_median_us: float | None = None,
+    bench_mean_us: float | None = None,
+    bench_max_us: float | None = None,
+    bench_rounds: int | None = None,
 ) -> dict[str, Any]:
     """Ingest one capture directory into ``db``; returns a summary dict.
+
+    Optional text-modality evidence is auto-discovered: ``report/
+    perf_hints.log`` and ``report/memory_after_AllocateMemoryAddr.txt``
+    beside the capture, plus ``dfx_outputs/pmu.csv`` inside it. Missing
+    evidence files simply leave their tables empty for the run (the
+    query layer reports those as unavailable). Benchmark numbers are
+    registered through the ``bench_*`` parameters.
 
     Raises ``IngestError`` for missing/malformed artifacts or an unusable
     environment; the database is left exactly as before the failed call.
@@ -159,6 +174,38 @@ def ingest_capture(
             _artifact("merged_swimlane", src.merged, source_mod.rel_path(src, src.merged), store_mode)
         )
 
+    # Optional text-modality evidence (T2): absence is legal.
+    report_dir = src.path.parent / "report"
+    perf_hints_path = report_dir / "perf_hints.log" if report_dir.is_dir() else None
+    memory_path = (
+        report_dir / "memory_after_AllocateMemoryAddr.txt" if report_dir.is_dir() else None
+    )
+    pmu_path = src.path / "pmu.csv"
+
+    def _read_optional(path: Path | None) -> str | None:
+        if path is None or not path.is_file():
+            return None
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise IngestError(f"{path}: cannot read: {exc}") from exc
+
+    perf_text = _read_optional(perf_hints_path)
+    memory_text = _read_optional(memory_path)
+    pmu_text = _read_optional(pmu_path)
+    perf_hints_rows = text_evidence.parse_perf_hints(perf_text or "")
+    memory_rows = text_evidence.parse_memory_report(memory_text or "")
+    pmu_rows = text_evidence.parse_pmu_csv(pmu_text) if pmu_text is not None else []
+    for kind, path in (
+        ("perf_hints", perf_hints_path),
+        ("memory", memory_path),
+        ("pmu", pmu_path),
+    ):
+        if isinstance(path, Path) and path.is_file():
+            artifacts.append(
+                _artifact(kind, path, source_mod.rel_path(src, path), store_mode)
+            )
+
     meta = {
         "program": program,
         "platform": platform,
@@ -172,6 +219,11 @@ def ingest_capture(
         "git_commit": git_commit,
         "git_dirty": git_dirty,
         "runtime_cfg": runtime_cfg,
+        "bench_min_us": bench_min_us,
+        "bench_median_us": bench_median_us,
+        "bench_mean_us": bench_mean_us,
+        "bench_max_us": bench_max_us,
+        "bench_rounds": bench_rounds,
         "makespan_us": swimlane_run.makespan_us,
         "raw_span_us": swimlane_run.raw_span_us,
         "notes": notes,
@@ -193,6 +245,7 @@ def ingest_capture(
             records_sha = artifacts[0]["sha256"]
             run_id = writer.find_run_by_records(conn, records_sha)
             if run_id is not None:
+                _carry_bench(conn, run_id, meta)
                 writer.delete_run_rows(conn, run_id, _CHILD_TABLES)
                 writer.update_run(conn, run_id, meta)
             else:
@@ -229,6 +282,19 @@ def ingest_capture(
                 swimlane_run.scheduler_phases,
             )
             writer.insert_orchestrator_phases(conn, run_id, swimlane_run.orchestrator_phases)
+            writer.insert_perf_hints(conn, run_id, perf_hints_rows)
+            writer.insert_memory_entries(
+                conn,
+                run_id,
+                writer.next_id(conn, "memory_entry", "memory_id"),
+                memory_rows,
+            )
+            writer.insert_pmu_counters(
+                conn,
+                run_id,
+                writer.next_id(conn, "pmu_counter", "pmu_id"),
+                pmu_rows,
+            )
             conn.execute("COMMIT")
         except Exception as exc:
             conn.execute("ROLLBACK")
@@ -246,9 +312,39 @@ def ingest_capture(
         "task_rows": len(swimlane_run.rows),
         "edges": len(graph.edges),
         "artifacts": len(artifacts),
+        "perf_hints": len(perf_hints_rows),
+        "memory_entries": len(memory_rows),
+        "pmu_counters": len(pmu_rows),
         "store_mode": store_mode,
         "makespan_us": swimlane_run.makespan_us,
     }
+
+
+def _carry_bench(conn, run_id: int, meta: dict[str, Any]) -> None:
+    """On re-ingest, merge benchmark numbers with what the run already has:
+    explicitly supplied values win, missing ones keep the previous
+    registration (bench belongs to the unprofiled measurement, which is
+    independent of the artifacts being replaced)."""
+    bench_keys = (
+        "bench_min_us",
+        "bench_median_us",
+        "bench_mean_us",
+        "bench_max_us",
+        "bench_rounds",
+    )
+    row = conn.execute(
+        "SELECT bench_min_us, bench_median_us, bench_mean_us, bench_max_us, bench_rounds "
+        "FROM run WHERE run_id = ?",
+        [run_id],
+    ).fetchone()
+    if row is None:
+        return
+    existing = dict(zip(bench_keys, row))
+    merged = {
+        key: (meta.get(key) if meta.get(key) is not None else existing.get(key))
+        for key in bench_keys
+    }
+    meta.update(merged)
 
 
 def _task_rows(graph: deps.DepGraph) -> list[dict[str, Any]]:

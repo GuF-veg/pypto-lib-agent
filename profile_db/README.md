@@ -18,7 +18,12 @@
   复用上游 `read_perf_data`，link 默认存档 + sha256，事务幂等；真实
   Qwen3Decode 捕获验收通过（266 任务 / 706 物理行 / 2546 边，与转换器直出
   零容差对拍）。
-- ⬜ T2+ 见 DESIGN.md 第 11 节。
+- ✅ T2 摄取：文本类证据——`report/perf_hints.log`（编译器文本原样）与
+  `report/memory_after_AllocateMemoryAddr.txt`（缓冲占用），
+  `dfx_outputs/pmu.csv` 动态列名长表化；缺省文件合法（表空、查询层报
+  unavailable）；`--bench` / `--bench-log` 注册基准数据（重摄取时保留合并）；
+  环境元数据（runtime_cfg）路径脱敏。
+- ⬜ T3+ 见 DESIGN.md 第 11 节。
 
 ## 安装与使用
 

@@ -614,10 +614,15 @@ tests ────▶ 可直接触达任何层，但金质题库只走 api/CLI/M
 
 - **做什么**：`perf_hints.log`（origin=compiler 原样）；memory report 解析；
   `pmu.csv` 动态列名长表化；基准数据注册（解析 `PYPTO_BENCH` 日志行或
-  `pfdb ingest --bench 'mean=... min=...'`）。
-- **验收**：[ ] 三类工件各 1 个 fixture 全量对拍解析结果；[ ] pmu 两套不同
-  列名 fixture 均正确入长表；[ ] 缺省工件时 ingest 成功且对应查询返回
-  `unavailable`；[ ] 环境元数据不含机器用户名（测试断言）。
+  `pfdb ingest --bench 'mean=... min=...'`）。（**T2 已完成**；run 环境元数据
+  （git commit/dirty）随 T1 落地，runtime_cfg 入库时做路径脱敏。）
+- **验收**：[ ]→[x] 三类工件各 1 个 fixture 全量对拍解析结果；[x] pmu 两套
+  不同列名 fixture 均正确入长表；[x] 缺省工件时 ingest 成功且对应查询返回
+  `unavailable`；[x] 环境元数据不含机器用户名（测试断言，覆盖
+  `/data1/home/<user>` 云主机布局）。
+- **实施备注**：真实捕获 `report/perf_hints.log` 62 行全部保真入库
+  （含编译器原始绝对路径，origin=compiler 标识）；bench 数字在重摄取时
+  按"显式提供者胜、缺失者继承"合并。
 
 ### T3 衍生层 ｜ 依赖：T1 ｜ 规模：M
 

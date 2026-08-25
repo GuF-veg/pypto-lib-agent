@@ -56,7 +56,10 @@ def test_real_capture_counts_and_artifacts(db_file: Path) -> None:
         assert report["tasks"] == 266
         assert report["task_rows"] == 706
         assert report["edges"] == 2546
-        assert report["artifacts"] == 4
+        assert report["artifacts"] == 5
+        assert report["perf_hints"] > 0
+        assert report["memory_entries"] == 0  # memory report absent in this capture
+        assert report["pmu_counters"] == 0  # no pmu.csv collected for this case
         assert report["store_mode"] == "link"
 
         conn = db.connection
@@ -64,14 +67,36 @@ def test_real_capture_counts_and_artifacts(db_file: Path) -> None:
         assert _count(conn, "task") == 266
         assert _count(conn, "task_row") == 706
         assert _count(conn, "dep_edge") == 2546
-        assert _count(conn, "artifact") == 4
+        assert _count(conn, "artifact") == 5
         assert _count(conn, "scheduler_phase") > 0
         assert _count(conn, "orch_phase") > 0
+        assert _count(conn, "perf_hint") == report["perf_hints"]
+        assert _count(conn, "memory_entry") == 0
+        assert _count(conn, "pmu_counter") == 0
 
         kinds = {r[0] for r in conn.execute("SELECT kind FROM artifact").fetchall()}
-        assert kinds == {"chip_swimlane_records", "deps", "name_map", "merged_swimlane"}
+        assert kinds == {
+            "chip_swimlane_records",
+            "deps",
+            "name_map",
+            "merged_swimlane",
+            "perf_hints",
+        }
         rels = {r[0] for r in conn.execute("SELECT rel_path FROM artifact").fetchall()}
         assert "dfx_outputs/chip_swimlane_records.json" in rels
+        assert "report/perf_hints.log" in rels
+
+        # compiler text preserved verbatim: first stored hint == first raw line
+        raw_first_line = (
+            (_CAPTURE.parent / "report" / "perf_hints.log")
+            .read_text(encoding="utf-8")
+            .splitlines()[0]
+        )
+        stored_first = conn.execute(
+            "SELECT text, origin FROM perf_hint ORDER BY seq LIMIT 1"
+        ).fetchone()
+        assert stored_first[0] == raw_first_line
+        assert stored_first[1] == "compiler"
 
         run = conn.execute(
             "SELECT program, swimlane_level, clock_freq_hz, num_cores, makespan_us "
@@ -153,6 +178,6 @@ def test_real_capture_reingest_is_idempotent(db_file: Path) -> None:
     try:
         assert _count(db.connection, "run") == 1
         assert _count(db.connection, "task_row") == 706
-        assert _count(db.connection, "artifact") == 4
+        assert _count(db.connection, "artifact") == 5
     finally:
         db.close()
