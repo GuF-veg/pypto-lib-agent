@@ -28,7 +28,13 @@
   四类确定性分类（证据标注）、`cpm_path` observed/static 双路径（与上游
   `critical_path` 逐条件同构，真实捕获对拍零差）、stall 四段分解与
   early-dispatch 四态证明；迁移 `0003` 补行级 dispatch/receive/finish。
-- ⬜ T4+ 见 DESIGN.md 第 11 节。
+- ✅ T4 分层查询引擎：注册表（每条查询强绑定 owner question + pydantic
+  参数单一同源）+ Z0–Z4 共 17 条查询（runs_list/overview/inventory、
+  density/sparse_regions、region/why_sparse/core、task/deps/subgraph、
+  why_late/why_long/rows/scheduler/early_dispatch/pmu）；事实 DSL v2 输出、
+  字节预算 `TRUNCATED` 显式收尾、unavailable 语义、多 rank 守门、无原始
+  JSON 泄漏检查器；金质题库 20 题快照（含 6.4 全会话）+ 真实捕获锚点。
+- ⬜ T5+ 见 DESIGN.md 第 11 节。
 
 ## 安装与使用
 

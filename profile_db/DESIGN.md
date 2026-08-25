@@ -659,14 +659,27 @@ tests ────▶ 可直接触达任何层，但金质题库只走 api/CLI/M
   DSL v2 输出 + 字节预算与 `TRUNCATED`；查询以注册表组织、每个查询绑定
   owner question（6.6），CLI/MCP 入口由注册表自动生成；**无原始 JSON 泄漏
   检查器**（输出中任何 JSON 片段必须来自 schema 表字段，测试兜底）。
+  （**T4 已完成**，见 README 状态表。）
 - **验收**：
-  - [ ] 金质题库 10–15 题（含 6.4 全会话）全部通过（snapshot 断言期望 facts）；
-  - [ ] 每条输出事实恒带证据状态（模式级校验）；
-  - [ ] 超预算输出以 `TRUNCATED` 收尾且不静默丢行；
-  - [ ] 不存在的 task/band 返回 `unavailable`，不发生推测；
-  - [ ] 多 rank 库：不带 `--rank` 的确定性查询拒绝回答并列出候选；
-  - [ ] 查询注册表自检：每条注册查询必须携带 owner question（6.6）并绑定
+  - [x] 金质题库 10–15 题（含 6.4 全会话）全部通过（snapshot 断言期望 facts）；
+  - [x] 每条输出事实恒带证据状态（模式级校验）；
+  - [x] 超预算输出以 `TRUNCATED` 收尾且不静默丢行；
+  - [x] 不存在的 task/band 返回 `unavailable`，不发生推测；
+  - [x] 多 rank 库：不带 `--rank` 的确定性查询拒绝回答并列出候选；
+  - [x] 查询注册表自检：每条注册查询必须携带 owner question（6.6）并绑定
         至少一条金质题，缺失即 CI 失败。
+- **实施备注**：`query/` 包 = 注册表（`registry.py`：QuerySpec 强约束
+  name+owner question+pydantic 参数模型，`execute` 统一解析/校验/渲染）+
+  Z0–Z4 共 17 条查询（handlers_z0..z4）。处理器只读 schema 表与 derived
+  纯函数（stall/early_dispatch 复用，绝无原始 JSON），事实 DSL v2 输出、
+  `us()` 显示舍入到纳秒、字节预算 `TRUNCATED remaining=.. limit=..` 显式收尾；
+  不存在的 run/task/band 一律回 `unavailable` 事实、不猜测。多 rank 守门落在
+  `runs_list`（存在非 `single` rank 且未指定 `rank` 时抛 `QueryError` 并列候选）。
+  无原始 JSON 泄漏检查器（`tests/golden_qa/json_leak.py`）断言每个 list/object
+  值要么等于某 schema JSON 单元、要么元素全为该 run 的真实 task id。金质题库
+  20 题离线快照（含 6.4 全会话逐步骤）+ 真实捕获 4 题锚点（skipif）；
+  全量 153 测试通过。真实捕获锚点：overview makespan 2828.5µs / static CPM
+  2405.98µs / 266 任务 / aiv 密度 20 显示桶（566 存储带）。
 
 ### T5 接口：Python API + CLI ｜ 依赖：T4 ｜ 规模：S
 

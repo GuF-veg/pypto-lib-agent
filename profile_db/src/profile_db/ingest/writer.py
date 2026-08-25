@@ -65,7 +65,7 @@ def insert_run(conn: duckdb.DuckDBPyConnection, meta: Mapping[str, Any]) -> None
             cpm_us, retained, notes, tags
         ) VALUES (
             ?, ?, ?, ?, CAST(? AS TIMESTAMP), ?, ?, ?, CAST(? AS JSON),
-            CAST(? AS JSON), 'single', ?, ?, CAST(? AS JSON), ?, ?, ?, ?, ?,
+            CAST(? AS JSON), ?, ?, ?, CAST(? AS JSON), ?, ?, ?, ?, ?,
             ?, ?, NULL, TRUE, ?, CAST(? AS VARCHAR[])
         )
         """,
@@ -80,6 +80,7 @@ def insert_run(conn: duckdb.DuckDBPyConnection, meta: Mapping[str, Any]) -> None
             meta["num_cores"],
             json.dumps(meta["core_types"]),
             json.dumps(meta["core_to_thread"]),
+            meta.get("rank_label") or "single",
             meta.get("git_commit"),
             meta.get("git_dirty"),
             json.dumps(redact_paths(meta.get("runtime_cfg") or {})),

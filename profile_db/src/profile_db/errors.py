@@ -32,3 +32,8 @@ class FactError(PfdbError):
 
 class IngestError(PfdbError):
     """A capture source is missing, malformed, or cannot be ingested."""
+
+
+class QueryError(PfdbError):
+    """A query cannot be answered: unknown name, invalid parameters, or a
+    multi-rank database that requires an explicit rank selection."""

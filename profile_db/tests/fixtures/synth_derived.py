@@ -105,26 +105,31 @@ def load(
     tasks: Sequence[Mapping[str, Any]] = (),
     rows: Sequence[tuple[str, int, str, float, float, float | None, float | None, float | None]] = (),
     edges: Sequence[Mapping[str, Any]] = (),
+    run_id: int = 1,
+    rank_label: str | None = None,
+    program: str = "synth",
+    bench_mean_us: float | None = None,
 ) -> int:
-    """Insert one run_id=1 capture and return it. ``rows`` entries are
+    """Insert one run and return its id. ``rows`` entries are
     (task_id, core, engine, start, end, dispatch, receive, finish)."""
     conn = db.connection
     meta = {
-        "program": "synth",
-        "platform": None,
-        "device_id": None,
+        "program": program,
+        "platform": "a2a3",
+        "device_id": 0,
         "captured_at": None,
         "swimlane_level": level,
         "clock_freq_hz": freq_hz,
         "num_cores": len(core_types),
         "core_types": list(core_types),
         "core_to_thread": list(range(len(core_types))),
+        "rank_label": rank_label,
         "git_commit": None,
         "git_dirty": None,
         "runtime_cfg": {},
         "bench_min_us": None,
         "bench_median_us": None,
-        "bench_mean_us": None,
+        "bench_mean_us": bench_mean_us,
         "bench_max_us": None,
         "bench_rounds": None,
         "makespan_us": 0.0,
@@ -132,8 +137,8 @@ def load(
         "notes": None,
         "tags": [],
     }
-    writer.insert_run(conn, {**meta, "run_id": 1})
-    writer.insert_tasks(conn, 1, tasks)
+    writer.insert_run(conn, {**meta, "run_id": run_id})
+    writer.insert_tasks(conn, run_id, tasks)
 
     # Row indexes must be unique per (task, core): assign per-core ordinals
     # in list order, mirroring the real records' third column.
@@ -158,9 +163,9 @@ def load(
                 "finish_us": finish,
             }
         )
-    writer.insert_task_rows(conn, 1, loaded)
-    writer.insert_edges(conn, 1, writer.next_id(conn, "dep_edge", "edge_id"), edges)
-    return 1
+    writer.insert_task_rows(conn, run_id, loaded)
+    writer.insert_edges(conn, run_id, writer.next_id(conn, "dep_edge", "edge_id"), edges)
+    return run_id
 
 
 def derive_loaded(
@@ -186,3 +191,46 @@ def derive_loaded(
         edges=edges,
     )
     return derive_run(db.connection, run_id)
+
+
+def materialize(
+    db,
+    *,
+    level: int = 4,
+    freq_hz: int = FREQ_HZ,
+    core_types: Sequence[str] = ("aic",),
+    tasks: Sequence[Mapping[str, Any]] = (),
+    rows: Sequence[tuple[str, int, str, float, float, float | None, float | None, float | None]] = (),
+    edges: Sequence[Mapping[str, Any]] = (),
+    run_id: int = 1,
+    rank_label: str | None = None,
+    program: str = "synth",
+    bench_mean_us: float | None = None,
+) -> int:
+    """Load a synthetic capture and persist its derived rows (the same
+    write path ingest uses), so query-layer tests read real tables."""
+    from profile_db.derived import derive_run
+    from profile_db.ingest import writer
+
+    loaded_id = load(
+        db,
+        level=level,
+        freq_hz=freq_hz,
+        core_types=core_types,
+        tasks=tasks,
+        rows=rows,
+        edges=edges,
+        run_id=run_id,
+        rank_label=rank_label,
+        program=program,
+        bench_mean_us=bench_mean_us,
+    )
+    result = derive_run(db.connection, loaded_id)
+    writer.insert_time_bands(db.connection, loaded_id, result.bands)
+    writer.insert_idle_gaps(
+        db.connection, loaded_id, writer.next_id(db.connection, "idle_gap", "gap_id"), result.gaps
+    )
+    writer.insert_cpm_paths(db.connection, loaded_id, result.paths)
+    writer.update_task_path_flags(db.connection, loaded_id, result.task_flags)
+    writer.update_run_cpm(db.connection, loaded_id, result.cpm_us)
+    return loaded_id

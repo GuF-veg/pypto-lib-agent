@@ -29,6 +29,7 @@ default; the comparison is strict, so a dispatch exactly at
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Mapping, Sequence
 
 from profile_db.derived.types import RowSlice, TaskTiming
@@ -42,16 +43,31 @@ UNAVAILABLE = "unavailable"
 TOL_TICKS = 2
 
 
-def classify(
+@dataclass(frozen=True)
+class EarlyProof:
+    """The early-dispatch outcome plus the numbers behind it."""
+
+    status: str
+    ready_us: float | None
+    tol_us: float | None
+    proven_blocks: int | None
+    total_blocks: int | None
+
+    @staticmethod
+    def unavailable() -> "EarlyProof":
+        return EarlyProof(UNAVAILABLE, None, None, None, None)
+
+
+def prove(
     succ_rows: Sequence[RowSlice],
     pred_edges: Sequence[tuple[str, str]],  # (edge source, pred task id), deduped
     tasks: Mapping[str, TaskTiming],
     freq_hz: int | None,
     level: int,
-) -> str:
-    """Prove early dispatch for one consumer; returns one of the four states."""
+) -> EarlyProof:
+    """Prove early dispatch for one consumer, returning status + evidence."""
     if not succ_rows or not has_fin_stream(level) or freq_hz is None:
-        return UNAVAILABLE
+        return EarlyProof.unavailable()
 
     producers: list[str] = []
     blockers: list[str] = []
@@ -64,7 +80,7 @@ def classify(
         elif source != "creator":
             producers.append(pred)
     if blockers or not producers:
-        return NONE
+        return EarlyProof(NONE, None, None, 0, len(succ_rows))
 
     fins = [
         tasks[p].max_finish_us
@@ -72,19 +88,28 @@ def classify(
         if p in tasks and tasks[p].max_finish_us is not None
     ]
     if not fins:
-        return UNAVAILABLE
+        return EarlyProof.unavailable()
     observed_ready = max(fins)
     tol_us = TOL_TICKS * 1_000_000.0 / float(freq_hz)
 
     proven = 0
     for row in succ_rows:
-        if (
-            row.dispatch_us is not None
-            and row.dispatch_us + tol_us < observed_ready
-        ):
+        if row.dispatch_us is not None and row.dispatch_us + tol_us < observed_ready:
             proven += 1
-    if proven == len(succ_rows):
-        return FULL
+    total = len(succ_rows)
+    if proven == total:
+        return EarlyProof(FULL, observed_ready, tol_us, proven, total)
     if proven > 0:
-        return PARTIAL
-    return NONE
+        return EarlyProof(PARTIAL, observed_ready, tol_us, proven, total)
+    return EarlyProof(NONE, observed_ready, tol_us, 0, total)
+
+
+def classify(
+    succ_rows: Sequence[RowSlice],
+    pred_edges: Sequence[tuple[str, str]],
+    tasks: Mapping[str, TaskTiming],
+    freq_hz: int | None,
+    level: int,
+) -> str:
+    """Backward-compatible status-only form (T3 tests use this)."""
+    return prove(succ_rows, pred_edges, tasks, freq_hz, level).status

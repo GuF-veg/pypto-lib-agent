@@ -80,6 +80,16 @@ LAYERS: dict[str, int] = {
     "profile_db.__main__": 6,
     "profile_db.__init__": 5,
     "profile_db.cli": 5,
+    "profile_db.query": 5,
+    "profile_db.query.registry": 5,
+    "profile_db.query.params": 5,
+    "profile_db.query.result": 5,
+    "profile_db.query.common": 5,
+    "profile_db.query.handlers_z0": 5,
+    "profile_db.query.handlers_z1": 5,
+    "profile_db.query.handlers_z2": 5,
+    "profile_db.query.handlers_z3": 5,
+    "profile_db.query.handlers_z4": 5,
     "profile_db.ingest": 4,
     "profile_db.ingest.source": 4,
     "profile_db.ingest.swimlane": 4,
@@ -103,8 +113,9 @@ LAYERS: dict[str, int] = {
 
 # Packages whose modules may import each other within their shared prefix
 # (ingest is one subsystem: the orchestrator imports its sibling modules;
-# derived likewise: the derivators share profile_db.derived.types).
-_SIBLING_PREFIXES = {"profile_db.ingest", "profile_db.derived"}
+# derived likewise: the derivators share profile_db.derived.types; query
+# likewise: the handlers share registry/params/common).
+_SIBLING_PREFIXES = {"profile_db.ingest", "profile_db.derived", "profile_db.query"}
 
 
 def _internal_imports(path: Path) -> list[tuple[int, str]]:

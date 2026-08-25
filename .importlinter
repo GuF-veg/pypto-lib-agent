@@ -8,6 +8,7 @@ type = layers
 layers =
     profile_db.__main__
     profile_db.cli
+    profile_db.query
     profile_db.ingest
     profile_db.derived
     profile_db.db
