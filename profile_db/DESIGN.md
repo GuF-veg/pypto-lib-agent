@@ -11,8 +11,8 @@
 > 2. `.pfdb/` 每仓库一份，纳入 git 忽略；
 > 3. MCP 服务不常驻，kernel agent 工作时按需启动，仅需稳定接口；
 > 4. schema 口径、band 粒度、稀疏阈值等细则由设计方决定，并用
->    `profile_db/scratch/calib_analyze.py` 对真实 Qwen3Decode 捕获做了标定
->    （标定结论见 6.3 条，原始数据见附录 B）。
+>    `tools/calibrate.py`（原 scratch 探针收编而来）对真实 Qwen3Decode
+>    捕获做了标定（标定结论见 6.3 条，原始数据见附录 B）。
 >
 > **v0.3 修订要点**：
 > 5. 查询接口定性为"**信封稳定、目录演进**"：输出机制（Result/DSL/证据/预算）
@@ -541,8 +541,8 @@ profile_db/
     ├── fixtures/             # 合成工件生成器 + 小型金质工件
     ├── golden_qa/            # 金质题库（10–15 题及其期望 facts）
     └── test_*.py             # 单元/集成/快照测试
-tools/
-└── calibrate.py              # 标定工具（由 scratch/calib_analyze.py 收编）
+tools/（仓库根目录，与 profile_db/ 平行）
+└── calibrate.py              # 标定工具（由原 scratch 探针收编）
 ```
 
 运行时数据（git 忽略）：`.pfdb/profile.duckdb`、`.pfdb/store/`（copy 模式）、
@@ -574,9 +574,9 @@ tests ────▶ 可直接触达任何层，但金质题库只走 api/CLI/M
 - **做什么**：建包 `profile_db/`；连接管理与写锁；`migrations/0001_init.sql`
   一次落全部 5.2 表（含衍生/知识层表）；事实 DSL v2 与证据状态枚举；
   合成工件生成器 fixtures（最小合法 records/deps/name_map，全离线测试用）；
-  收编 `scratch/calib_analyze.py` 为 `tools/calibrate.py`；CI 接线
+  将标定探针收编为 `tools/calibrate.py`；CI 接线
   （pytest + ruff + 头检查 + import 规则检查）；`.gitignore` 增加 `.pfdb/`；
-  README。
+  README。（**T0 已完成**，见 README 状态表。）
 - **不做什么**：不接任何真实工件解析。
 - **交付物**：可 pip install -e 的包（Python ≥3.10，pyproject 声明依赖）；
   `pfdb init` 可建库。

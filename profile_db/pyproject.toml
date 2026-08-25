@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "profile-db"
+version = "0.1.0"
+description = "Agent-oriented profiling & feedback database for PyPTO"
+requires-python = ">=3.10"
+dependencies = [
+    "duckdb>=1.1,<2",
+]
+
+[project.scripts]
+pfdb = "profile_db.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"profile_db.schema" = ["migrations/*.sql"]

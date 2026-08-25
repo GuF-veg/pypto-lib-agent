@@ -47,9 +47,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install pytest
           pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ./profile_db
+          pip install import-linter
 
       - name: Run golden unit tests
         run: pytest tests/golden -v
+
+      - name: Run profile_db unit tests
+        run: pytest profile_db/tests -v
+
+      - name: Lint profile_db import layering
+        run: lint-imports
 
   detect-changes:
     runs-on: ubuntu-latest

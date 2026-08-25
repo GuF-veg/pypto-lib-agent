@@ -23,7 +23,7 @@ import json
 import sys
 from pathlib import Path
 
-BASE = Path("/data1/home/gufeng/project/pypto-lib-agent/build_output")
+BASE = Path(__file__).resolve().parents[1] / "build_output"
 
 
 def find_capture() -> Path:
@@ -68,7 +68,9 @@ def main() -> None:
         engines.setdefault(eng, []).append(core)
 
     rows = rec["aicore_tasks"]  # [core, task_id, row, start_c, end_c, aux]
-    to_us = lambda c: c / freq * 1_000_000.0
+
+    def to_us(c: int) -> float:
+        return c / freq * 1_000_000.0
 
     span_us = (max(r[4] for r in rows) - min(r[3] for r in rows)) / freq * 1_000_000.0
     print(f"\nmeta: freq={freq}Hz cores={len(core_types)} engines={ {k: len(v) for k, v in engines.items()} }")
@@ -79,16 +81,11 @@ def main() -> None:
     if deps_path.exists():
         deps = json.loads(deps_path.read_text(encoding="utf-8"))
         edges = deps.get("edges", [])
-        artifact_edges = [e for e in edges if e.get("is_artifact_edge")] if edges and isinstance(edges[0], dict) else []
         print(f"deps: tasks={len(deps.get('tasks', []))} edges={len(edges)}"
               + (f" (keys={sorted(edges[0].keys())})" if edges else ""))
-        if artifact_edges:
-            print(f"  edges with is_artifact_edge flag present: {len(artifact_edges)}")
-        if edges:
-            print(f"  edge[0] sample keys: {sorted(edges[0].keys())}")
 
     # per-task busy durations (max end - min start, per logical task), per engine
-    by_task: dict[tuple[int, int], tuple[float, float]] = {}  # (task, engine) -> (min_s, max_e)
+    by_task: dict[tuple[int, str], tuple[float, float]] = {}  # (task, engine) -> (min_s, max_e)
     for core, task, _row, s_c, e_c, _aux in rows:
         eng = core_types[core]
         key = (task, eng)

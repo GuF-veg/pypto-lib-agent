@@ -168,11 +168,13 @@ adds observer cost, so compare tuned variants with an unprofiled benchmark
 
 ### Profile feedback analyzer
 
-The read-only `.claude/skills/profile-feedback/scripts/profile_feedback.py`
-query tool turns the artifacts above into compact facts:
+The read-only profile feedback analyzer turns the artifacts above into
+compact facts (agent integrations provide its concrete location; see
+[Agent Profile Feedback](agent-profile-feedback.md) for the stable
+records and semantics):
 
 ```bash
-python .claude/skills/profile-feedback/scripts/profile_feedback.py \
+python <profile-feedback-script> \
   build_output/Qwen3Decode_<ts>/dfx_outputs \
   [--rank <label>] [--format facts|markdown] [--max-bytes N] \
   <query> [options]
@@ -210,14 +212,15 @@ The analyzer requires a **level-4** records file next to `deps.json` and a
 ### Critical-path report
 
 The canonical analyzer writes machine and human reports beside the
-capture:
+capture; the operator-facing summary comes from the critical-path
+report script (agent integrations provide its concrete location):
 
 ```bash
 python -m simpler_setup.tools.critical_path \
   build_output/Qwen3Decode_<ts>/dfx_outputs --stdout
 # writes critical_path_report.md, CPM_static.json, CPM_observed.json
 
-python .claude/skills/critical-path/scripts/report.py \
+python <critical-path-report-script> \
   build_output/Qwen3Decode_<ts>/dfx_outputs \
   --operator Qwen3Decode \
   -o <out>/critical_path_summary.md
@@ -299,15 +302,16 @@ instruction scheduling, or misplaced barriers.
 
 When the swimlane and PMU agree that one kernel is the problem, the
 `msprof op simulator` workflow profiles that single generated kernel at
-cycle granularity:
+cycle granularity via the in-core profiling script (agent integrations
+provide its concrete location):
 
 ```bash
 # Reuse the existing captured build (no recompile, no source change).
-python .claude/skills/incore-profiling/incore_profile.py \
+python <incore-profile-script> \
   --build-dir build_output/Qwen3Decode_<ts> \
   --target a2a3 --list-funcs
 
-python .claude/skills/incore-profiling/incore_profile.py \
+python <incore-profile-script> \
   --build-dir build_output/Qwen3Decode_<ts> \
   --target a2a3 --func <function>
 ```
