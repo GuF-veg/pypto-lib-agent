@@ -495,8 +495,8 @@ jobs:
     # models/deepseek_v4_pro drivers with the Flash config (--variant flash),
     # EP8/TP2, one prefill plus 32 greedy decode steps, driven by
     # synthetic_token_loop.py exactly as docs/models/deepseek_v4_pro.md
-    # ("End-to-end token generation") documents, including its two EP8
-    # workaround flags (--prefill-tokens 16 --prefill-no-retire). It is the only
+    # ("End-to-end token generation") documents. The prefill has a fixed
+    # 128-row capacity while active rows follow the encoded prompt length. It is the only
     # nightly that exercises the full prompt -> tokens -> text path on real
     # weights; model-tests-a5 covers the operators one by one on synthetic data.
     runs-on: [self-hosted, linux, arm64, npu-a5]
@@ -558,6 +558,23 @@ jobs:
           build-namespace: a5-e2e
           pip-cache-name: pip-a5
           toolchain: bundle
+          # TEMPORARY toolchain quarantine — drop when the pto-isa fix lands.
+          #
+          # pypto HEAD's pin chain (runtime gitlink 93adc386 -> pto-isa
+          # cd4a3d3f) carries the pto-isa A5 regression from 92eb7f88: the
+          # legacy TPUSH/TPOP overloads read get_subblockid() on
+          # TILE_NO_SPLIT cross-core pipes, which deadlocks C2V/V2C on A5.
+          # On that toolchain every EP8 run of this job dies at the first
+          # prefill (S1:running-stalled / 507018) before sampling one token —
+          # nightlies 2026-08-21 and -24, with and without the MoE protocol
+          # fix. 7292b8da is the newest pypto whose chain (simpler 3165cc89
+          # -> pto-isa 83d01313) predates the regression; the token loop and
+          # hc_pre carry small both-ABI shims so current pypto-lib still
+          # compiles on it. The fix is upstream as GitCode CANN/pto-isa
+          # MR !1525 ("fix/a5-no-split-subblock-dispatch"); once it reaches
+          # the GitHub mirror and simpler/pypto bump their pins past it,
+          # remove this input so the job follows HEAD again.
+          pypto-ref: 7292b8daa27b396e3d34c17add080e8db3086620
 
       - name: Resolve the Flash checkpoint and its converted weight cache
         id: weights
@@ -656,7 +673,7 @@ jobs:
           task-submit --device auto --device-num 8 --ignore-whitelist --timeout 5400 --max-time 2400 \
             --run "cd $GITHUB_WORKSPACE/checkout && source activate.sh && PYTHONPATH=$GITHUB_WORKSPACE/checkout \
               python models/deepseek_v4_pro/synthetic_token_loop.py --variant flash --ep 8 --tp 2 \
-                -d \$TASK_DEVICE --prefill-tokens 16 --prefill-no-retire \
+                -d \$TASK_DEVICE \
                 --weights '$WEIGHTS' --tokenizer '$CKPT/tokenizer.json' \
                 --prompt '$E2E_PROMPT' --decode-steps $E2E_DECODE_STEPS" 2>&1 | tee e2e.log
           rc=${PIPESTATUS[0]}
