@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 from profile_db.db import ProfileDB as _ProfileDB
 from profile_db.errors import QueryError, RenderError
@@ -54,11 +54,16 @@ class ProfileDB(_ProfileDB):
     ``query``, and ``render``. ``ProfileDB.memory()`` keeps the in-memory
     working-set mode with identical schema, derived rows, and behavior."""
 
-    def ingest(self, source, **meta) -> dict[str, Any]:
-        """Ingest one capture directory; returns the summary dict."""
+    def ingest(self, source, *, prune_after: bool = True, prune_keep: int = 3, **meta) -> dict[str, Any]:
+        """Ingest one capture directory; returns the summary dict. By
+        default the working set is pruned afterward (latest ``prune_keep``
+        runs survive); pass ``prune_after=False`` to disable."""
         from profile_db.ingest import ingest_capture
 
-        return ingest_capture(self, source, **meta)
+        report = ingest_capture(self, source, **meta)
+        if prune_after and self.path is not None:
+            self.prune(keep=prune_keep)
+        return report
 
     def query(
         self, name: str, *, budget_bytes: int = DEFAULT_BUDGET_BYTES, **params: Any
@@ -115,6 +120,129 @@ class ProfileDB(_ProfileDB):
         )
         return _result_from_render(rendered)
 
+    # -- lifecycle & short-term memory (DESIGN.md 8) ------------------------
+
+    def prune(self, keep: int = 3) -> dict[str, Any]:
+        """Delete every run outside the working set (latest ``keep`` +
+        baseline- and active-trial-referenced runs). Returns a report."""
+        from profile_db.lifecycle import prune_runs
+
+        return prune_runs(self.connection, self.path, keep)
+
+    def note(self, run_id: int, text: str) -> None:
+        """Set the free-text note on a run."""
+        if self.connection.execute("SELECT 1 FROM run WHERE run_id = ?", [run_id]).fetchone() is None:
+            raise QueryError(f"run {run_id} does not exist")
+        self.connection.execute("UPDATE run SET notes = ? WHERE run_id = ?", [text, run_id])
+
+    def compare(self, run_a: int, run_b: int) -> Result:
+        """Neutral before/after comparison (compatibility-gated). Raises
+        ``LifecycleError`` when the runs are not comparable."""
+        from profile_db.lifecycle import compare_runs
+
+        return _compare_result(compare_runs(self.connection, run_a, run_b))
+
+    def register_trial(
+        self,
+        goal: str,
+        hypothesis: str,
+        changed_files: Sequence[str] = (),
+        parent_trial_id: int | None = None,
+    ) -> int:
+        from profile_db.lifecycle import register_trial as _register_trial
+
+        return _register_trial(
+            self.connection,
+            goal=goal,
+            hypothesis=hypothesis,
+            changed_files=changed_files,
+            parent_trial_id=parent_trial_id,
+        )
+
+    def bind_trial(self, trial_id: int, run_id: int) -> None:
+        from profile_db.lifecycle import bind_trial as _bind_trial
+
+        _bind_trial(self.connection, trial_id, run_id)
+
+    def set_verdict(self, trial_id: int, verdict: str, evidence_refs: Sequence[Any] = ()) -> None:
+        from profile_db.lifecycle import set_verdict as _set_verdict
+
+        _set_verdict(self.connection, trial_id, verdict, evidence_refs)
+
+    def list_trials(self, *, active_only: bool = False) -> Result:
+        from profile_db.lifecycle import list_trials as _list_trials
+
+        facts = tuple(
+            Fact(
+                "TRIAL",
+                {
+                    k: v
+                    for k, v in {
+                        "trial_id": t["trial_id"],
+                        "parent_trial_id": t["parent_trial_id"],
+                        "run_id": t["run_id"],
+                        "goal": t["goal"],
+                        "hypothesis": t["hypothesis"],
+                        "changed_files": t["changed_files"],
+                        "status": t["status"],
+                        "verdict": t["verdict"],
+                        "evidence_refs": t["evidence_refs"],
+                    }.items()
+                    if v is not None
+                },
+                Evidence.MEASURED,
+            )
+            for t in _list_trials(self.connection, active_only=active_only)
+        )
+        return Result(facts=facts, images=(), truncated=False)
+
+    def baseline_add(
+        self,
+        name: str,
+        run_id: int,
+        bench_mean_us: float | None = None,
+        criteria: Mapping[str, Any] | None = None,
+    ) -> int:
+        from profile_db.lifecycle import add_baseline
+
+        return add_baseline(
+            self.connection,
+            name=name,
+            run_id=run_id,
+            bench_mean_us=bench_mean_us,
+            criteria=criteria,
+        )
+
+    def baseline_list(self) -> Result:
+        from profile_db.lifecycle import list_baselines
+
+        facts = tuple(
+            Fact(
+                "BASELINE",
+                {
+                    k: v
+                    for k, v in {
+                        "baseline_id": b["baseline_id"],
+                        "name": b["name"],
+                        "program": b["program"],
+                        "platform": b["platform"],
+                        "run_id": b["run_id"],
+                        "bench_mean_us": b["bench_mean_us"],
+                        "criteria": b["criteria"],
+                    }.items()
+                    if v is not None
+                },
+                Evidence.MEASURED,
+            )
+            for b in list_baselines(self.connection)
+        )
+        return Result(facts=facts, images=(), truncated=False)
+
+    def baseline_diff(self, run_id: int, baseline_name: str | None = None) -> Result:
+        from profile_db.lifecycle import diff_baseline
+
+        return _compare_result(diff_baseline(self.connection, run_id, baseline_name))
+
 
 def format_result(result: Result, fmt: str, budget_bytes: int = DEFAULT_BUDGET_BYTES) -> str:
     """Render a Result in one of ``facts`` (DSL, byte-identical to the
@@ -167,6 +295,48 @@ def _result_from_render(rendered) -> Result:
     fact = Fact("IMAGE", {k: v for k, v in fields.items() if v is not None}, Evidence.MEASURED)
     image = ImageRef(kind=rendered.kind, path=str(rendered.image_path))
     return Result(facts=(fact,), images=(image,), truncated=False)
+
+
+def _num(value: Any) -> Any:
+    """Display-round a float to nanosecond precision; ints and non-numbers
+    pass through (mirrors the query layer's ``us`` for the DSL output)."""
+    if value is None or isinstance(value, bool):
+        return value
+    try:
+        return round(float(value), 3)
+    except (TypeError, ValueError):
+        return value
+
+
+def _compare_result(comparison: Mapping[str, Any]) -> Result:
+    """Turn a lifecycle comparison dict into COMPARE/DELTA facts."""
+    header_fields = {
+        "run_a": comparison["run_a"],
+        "run_b": comparison["run_b"],
+        "program": comparison.get("program"),
+        "compatible": comparison.get("compatible", True),
+    }
+    for key in ("baseline", "baseline_run_id"):
+        if key in comparison:
+            header_fields[key] = comparison[key]
+    facts: list[Fact] = [
+        Fact("COMPARE", {k: v for k, v in header_fields.items() if v is not None}, Evidence.MEASURED)
+    ]
+    for delta in comparison["deltas"]:
+        fields: dict[str, Any] = {
+            "run_a": comparison["run_a"],
+            "run_b": comparison["run_b"],
+            "metric": delta["metric"],
+            "before": _num(delta["before"]),
+            "after": _num(delta["after"]),
+            "delta": _num(delta["delta"]),
+        }
+        if delta["ratio"] is not None:
+            fields["ratio"] = _num(delta["ratio"])
+        if "baseline" in comparison:
+            fields["baseline"] = comparison["baseline"]
+        facts.append(Fact("DELTA", fields, Evidence.MEASURED))
+    return Result(facts=tuple(facts), images=(), truncated=False)
 
 
 def _markdown(facts: Sequence[Fact]) -> str:

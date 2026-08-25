@@ -50,7 +50,13 @@
   + `pfdb.render` + `pfdb.version`），`inputSchema` 与 CLI 参数单一同源
   （pydantic）；查询返回预算受限 facts 文本、渲染返回 IMAGE fact +
   `ImageContent`（PNG base64）；`examples/mock_agent.py` 演示 6.4 全会话。
-- ⬜ T8+ 见 DESIGN.md 第 11 节。
+- ✅ T8 生命周期与短期记忆：`lifecycle/` 子包——工作集判定（最新 K +
+  baseline/active trial 引用保护）与 `pfdb prune`（link 模式不删文件、
+  copy 模式连带删 `.pfdb/store` 与渲染缓存，事务 + 写锁）；ingest 后默认
+  自动 prune（`--no-prune` 关闭）；trial 注册/绑定/结论/血缘回溯、
+  baseline 管理与 `baseline diff`、`compare` 兼容性门禁（program/level/
+  时钟/拓扑不一致即拒绝）；`pfdb compare|prune|baseline|trial` 子命令。
+- ⬜ T9+ 见 DESIGN.md 第 11 节。
 
 ## 安装与使用
 
@@ -138,6 +144,28 @@ PFDB_PATH=.pfdb/profile.duckdb python profile_db/examples/mock_agent.py
 工具集由查询注册表自动生成（`pfdb.list_runs` / `pfdb.overview` /
 `pfdb.density` / … + `pfdb.render` + `pfdb.version`），tool schema 版本经
 `pfdb.version` 暴露。
+
+### 生命周期与短期记忆
+
+```bash
+# 工作集清理（最新 3 run + baseline/active trial 引用保留；ingest 后默认自动执行）
+pfdb prune --keep 3
+pfdb ingest <dir> --no-prune            # 本次 ingest 跳过自动 prune
+
+# 中性 before/after 对比（program/level/时钟/拓扑不一致会被拒绝）
+pfdb compare 1 2
+
+# 命名基线（受 prune 保护）与相对基线变化
+pfdb baseline add 1 --name best-0123 --bench-mean 12.3
+pfdb baseline list
+pfdb baseline diff 5 --baseline best-0123
+
+# 调优实验：注册 → ingest 绑定 → 结论（血缘可回溯）
+pfdb trial register --goal "reduce tail" --hypothesis "early dispatch"
+pfdb trial bind 1 7                       # trial 1 <- run 7
+pfdb trial verdict 1 --verdict win --evidence run_id=7
+pfdb trial list --active
+```
 
 ## 测试与检查
 

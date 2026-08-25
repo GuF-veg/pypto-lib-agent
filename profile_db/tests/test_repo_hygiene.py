@@ -99,6 +99,13 @@ LAYERS: dict[str, int] = {
     "profile_db.ingest.deps": 4,
     "profile_db.ingest.writer": 4,
     "profile_db.ingest.text_evidence": 4,
+    "profile_db.lifecycle": 4,
+    "profile_db.lifecycle.working_set": 4,
+    "profile_db.lifecycle.prune": 4,
+    "profile_db.lifecycle.trial": 4,
+    "profile_db.lifecycle.baseline": 4,
+    "profile_db.lifecycle.compare": 4,
+    "profile_db.lifecycle.ids": 4,
     "profile_db.derived": 3,
     "profile_db.derived.types": 3,
     "profile_db.derived.time_band": 3,
@@ -128,6 +135,7 @@ _SIBLING_PREFIXES = {
     "profile_db.derived",
     "profile_db.query",
     "profile_db.render",
+    "profile_db.lifecycle",
 }
 
 

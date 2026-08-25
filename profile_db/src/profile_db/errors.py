@@ -42,3 +42,8 @@ class QueryError(PfdbError):
 class RenderError(PfdbError):
     """A render request cannot be satisfied: unknown kind, invalid window
     or parameters, or a target (run/task/core) that does not exist."""
+
+
+class LifecycleError(PfdbError):
+    """A lifecycle operation cannot proceed: incompatible comparison,
+    unknown trial/baseline, or an invalid verdict/state transition."""

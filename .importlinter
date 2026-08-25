@@ -12,6 +12,7 @@ layers =
     profile_db.api
     profile_db.query
     profile_db.ingest
+    profile_db.lifecycle
     profile_db.derived
     profile_db.db
     profile_db.facts

@@ -32,7 +32,6 @@ from typing import Sequence
 from profile_db._version import __version__
 from profile_db.api import ProfileDB, format_result
 from profile_db.errors import PfdbError
-from profile_db.ingest import ingest_capture
 from profile_db.ingest.text_evidence import parse_bench_line
 from profile_db.query import get_query, list_queries
 
@@ -61,6 +60,11 @@ def _parser() -> argparse.ArgumentParser:
     ingest.add_argument("--notes", default=None)
     ingest.add_argument("--tags", nargs="*", default=None)
     ingest.add_argument("--copy", action="store_true", help="archive artifacts into .pfdb/store (default: link)")
+    ingest.add_argument(
+        "--no-prune",
+        action="store_true",
+        help="skip the automatic working-set prune after ingest",
+    )
     ingest.add_argument(
         "--bench-log",
         default=None,
@@ -105,6 +109,45 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help="database path (default: $PFDB_PATH or <cwd>/.pfdb/profile.duckdb)",
     )
+
+    prune_cmd = sub.add_parser("prune", help="delete runs outside the working set")
+    prune_cmd.add_argument("--keep", type=int, default=3, help="latest runs to retain (default 3)")
+
+    compare_cmd = sub.add_parser("compare", help="neutral before/after comparison")
+    compare_cmd.add_argument("run_a", type=int)
+    compare_cmd.add_argument("run_b", type=int)
+    _add_format_args(compare_cmd)
+
+    baseline_cmd = sub.add_parser("baseline", help="named baselines (protected from prune)")
+    baseline_sub = baseline_cmd.add_subparsers(dest="baseline_cmd", required=True)
+    baseline_add = baseline_sub.add_parser("add", help="register a named baseline")
+    baseline_add.add_argument("run_id", type=int, metavar="run")
+    baseline_add.add_argument("--name", required=True)
+    baseline_add.add_argument("--bench-mean", type=float, dest="bench_mean_us", default=None)
+    baseline_list = baseline_sub.add_parser("list", help="list baselines")
+    _add_format_args(baseline_list)
+    baseline_diff = baseline_sub.add_parser("diff", help="compare a run against a baseline")
+    baseline_diff.add_argument("run_id", type=int, metavar="run")
+    baseline_diff.add_argument("--baseline", dest="baseline_name", default=None)
+    _add_format_args(baseline_diff)
+
+    trial_cmd = sub.add_parser("trial", help="short-term tuning experiments")
+    trial_sub = trial_cmd.add_subparsers(dest="trial_cmd", required=True)
+    trial_reg = trial_sub.add_parser("register", help="open a trial (running, pending)")
+    trial_reg.add_argument("--goal", required=True)
+    trial_reg.add_argument("--hypothesis", required=True)
+    trial_reg.add_argument("--changed-files", nargs="*", default=None)
+    trial_reg.add_argument("--parent", type=int, dest="parent_trial_id", default=None)
+    trial_bind = trial_sub.add_parser("bind", help="attach an ingested run to a trial")
+    trial_bind.add_argument("trial_id", type=int)
+    trial_bind.add_argument("run_id", type=int)
+    trial_verdict = trial_sub.add_parser("verdict", help="close a trial with its verdict")
+    trial_verdict.add_argument("trial_id", type=int)
+    trial_verdict.add_argument("--verdict", choices=("win", "neutral", "regression"), required=True)
+    trial_verdict.add_argument("--evidence", nargs="*", default=None)
+    trial_list = trial_sub.add_parser("list", help="list trials")
+    trial_list.add_argument("--active", action="store_true", dest="active_only")
+    _add_format_args(trial_list)
     return parser
 
 
@@ -189,9 +232,9 @@ def _run_ingest(args: argparse.Namespace) -> int:
         print(f"pfdb: error: {exc}", file=sys.stderr)
         return 1
     try:
-        report = ingest_capture(
-            db,
+        report = db.ingest(
             source,
+            prune_after=not args.no_prune,
             program=args.program,
             platform=args.platform,
             device_id=args.device,
@@ -310,6 +353,121 @@ def _run_serve(args: argparse.Namespace) -> int:
     return run_stdio(args.path)
 
 
+def _run_prune(args: argparse.Namespace) -> int:
+    try:
+        db = ProfileDB()
+    except PfdbError as exc:
+        print(f"pfdb: error: {exc}", file=sys.stderr)
+        return 1
+    try:
+        report = db.prune(keep=args.keep)
+        print(f"pruned {len(report['pruned'])} run(s) {report['pruned']}; kept {report['kept']}")
+        return 0
+    except PfdbError as exc:
+        print(f"pfdb: error: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        db.close()
+
+
+def _run_compare(args: argparse.Namespace) -> int:
+    try:
+        db = ProfileDB(read_only=True)
+    except PfdbError as exc:
+        print(f"pfdb: error: {exc}", file=sys.stderr)
+        return 1
+    try:
+        _emit(db.compare(args.run_a, args.run_b), args)
+        return 0
+    except PfdbError as exc:
+        print(f"pfdb: error: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        db.close()
+
+
+def _run_baseline(args: argparse.Namespace) -> int:
+    if args.baseline_cmd == "add":
+        try:
+            db = ProfileDB()
+        except PfdbError as exc:
+            print(f"pfdb: error: {exc}", file=sys.stderr)
+            return 1
+        try:
+            baseline_id = db.baseline_add(
+                args.name, args.run_id, bench_mean_us=args.bench_mean_us
+            )
+            print(f"baseline {baseline_id} added (name={args.name} run={args.run_id})")
+            return 0
+        except PfdbError as exc:
+            print(f"pfdb: error: {exc}", file=sys.stderr)
+            return 1
+        finally:
+            db.close()
+
+    try:
+        db = ProfileDB(read_only=True)
+    except PfdbError as exc:
+        print(f"pfdb: error: {exc}", file=sys.stderr)
+        return 1
+    try:
+        if args.baseline_cmd == "list":
+            result = db.baseline_list()
+        else:  # diff
+            result = db.baseline_diff(args.run_id, args.baseline_name)
+        _emit(result, args)
+        return 0
+    except PfdbError as exc:
+        print(f"pfdb: error: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        db.close()
+
+
+def _run_trial(args: argparse.Namespace) -> int:
+    if args.trial_cmd in ("register", "bind", "verdict"):
+        try:
+            db = ProfileDB()
+        except PfdbError as exc:
+            print(f"pfdb: error: {exc}", file=sys.stderr)
+            return 1
+        try:
+            if args.trial_cmd == "register":
+                trial_id = db.register_trial(
+                    args.goal,
+                    args.hypothesis,
+                    changed_files=args.changed_files or (),
+                    parent_trial_id=args.parent_trial_id,
+                )
+                print(f"trial {trial_id} registered")
+            elif args.trial_cmd == "bind":
+                db.bind_trial(args.trial_id, args.run_id)
+                print(f"trial {args.trial_id} bound to run {args.run_id}")
+            else:  # verdict
+                db.set_verdict(args.trial_id, args.verdict, evidence_refs=args.evidence or ())
+                print(f"trial {args.trial_id} verdict={args.verdict}")
+            return 0
+        except PfdbError as exc:
+            print(f"pfdb: error: {exc}", file=sys.stderr)
+            return 1
+        finally:
+            db.close()
+
+    try:
+        db = ProfileDB(read_only=True)
+    except PfdbError as exc:
+        print(f"pfdb: error: {exc}", file=sys.stderr)
+        return 1
+    try:
+        _emit(db.list_trials(active_only=args.active_only), args)
+        return 0
+    except PfdbError as exc:
+        print(f"pfdb: error: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        db.close()
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "init":
@@ -334,6 +492,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_render(args)
     if args.command == "serve":
         return _run_serve(args)
+    if args.command == "prune":
+        return _run_prune(args)
+    if args.command == "compare":
+        return _run_compare(args)
+    if args.command == "baseline":
+        return _run_baseline(args)
+    if args.command == "trial":
+        return _run_trial(args)
     print(f"pfdb: error: unknown command {args.command!r}", file=sys.stderr)
     return 2
 

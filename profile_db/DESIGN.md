@@ -767,10 +767,34 @@ tests ────▶ 可直接触达任何层，但金质题库只走 api/CLI/M
 - **做什么**：工作集判定（K=3 + baseline/active trial 引用保护）；`pfdb prune`
   与 ingest 后自动 prune（默认开、`--no-prune` 关闭）；trial 注册/结论/
   血缘回溯；baseline 管理与 `baseline diff`；compare 兼容性门禁。
-- **验收**：[ ] 构造 5-run 场景，auto-prune 后仅剩最新 3 run + 被 baseline
-  引用的旧 run，行数/文件删除精确断言；[ ] link 模式 prune 不触碰任何文件、
-  copy 模式连带删除；[ ] 模拟 3-run 调优循环端到端走通；[ ] 不兼容对比被拒
-  并说明原因；[ ] 重建测试：删库 → 重 ingest → 查询结果一致（sha256 保障）。
+  （**T8 已完成**，见 README 状态表。）
+- **验收**：
+  - [x] 构造 5-run 场景，auto-prune 后仅剩最新 3 run + 被 baseline 引用的
+        旧 run，行数/文件删除精确断言（保留 {1,3,4,5}、pruned {2}，run 2
+        的 task 行清空、baseline 行保留）；
+  - [x] link 模式 prune 不触碰任何文件、copy 模式连带删除（link 源工件
+        逐字节不变、无 store；copy 的 `.pfdb/store/<run>` 目录被删）；
+  - [x] 模拟 3-run 调优循环端到端走通（register → ingest → bind → verdict，
+        血缘 `parent_trial_id` 链 + verdict 顺序断言）；
+  - [x] 不兼容对比被拒并说明原因（`LifecycleError`，报 program/level/clock/
+        core_types 具体差异）；
+  - [x] 重建测试：删库 → 重 ingest → 查询结果一致（两个独立库 overview
+        输出逐字节相等）。
+- **实施备注**：`lifecycle/` 子包（分层 4）＝ `working_set.py`
+  （`retained_run_ids`：最新 K + baseline 引用 + active trial 引用）＋
+  `prune.py`（`prune_runs`：写锁 + 事务内按 `run.retained` 标记删除非保留
+  run 的全部子表行，事务提交后连带删 copy 模式 `.pfdb/store/<run>` 与渲染
+ 缓存 `.pfdb/render/<run>`；trial/baseline 行永久保留）＋ `trial.py`
+  （register/bind/set_verdict/list，血缘 `parent_trial_id`）＋ `baseline.py`
+  （add/list/diff，diff 复用 compare 门禁）＋ `compare.py`（兼容性门禁：
+  program/level/clock/num_cores/core_types 全等才可比，否则 `LifecycleError`
+  列差异；中性 delta/ratio）＋ `ids.py`（`next_id` 叶子模块）。API 增
+  `prune/note/compare/register_trial/bind_trial/set_verdict/list_trials/
+  baseline_add/baseline_list/baseline_diff`；`ProfileDB.ingest` 默认
+  `prune_after=True`（`self.path` 非空才 prune，内存库跳过）。CLI 增
+  `pfdb prune --keep`、`pfdb compare <a> <b>`、`pfdb baseline add|list|diff`、
+  `pfdb trial register|bind|verdict|list`、`ingest --no-prune`。11 条
+  lifecycle 测试 + 3 条 CLI 测试全绿。
 
 ### T9 扩展模态（可延后） ｜ 依赖：T1/T2 ｜ 规模：L
 

@@ -192,3 +192,46 @@ def test_render_missing_window_bounds_is_usage_error(tmp_path: Path) -> None:
     result = _run("render", "window", "--run", "1", env={"PFDB_PATH": str(db)})
     assert result.returncode == 1
     assert "requires t0_us and t1_us" in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# T8: prune / compare / baseline / trial
+# ---------------------------------------------------------------------------
+
+
+def test_prune_cli(tmp_path: Path) -> None:
+    db = _populate(tmp_path)
+    result = _run("prune", "--keep", "0", env={"PFDB_PATH": str(db)})
+    assert result.returncode == 0, result.stderr
+    assert "pruned 1 run(s) [1]; kept []" in result.stdout
+
+
+def test_trial_cli_roundtrip(tmp_path: Path) -> None:
+    db = _populate(tmp_path)
+    reg = _run("trial", "register", "--goal", "g", "--hypothesis", "h",
+               env={"PFDB_PATH": str(db)})
+    assert reg.returncode == 0, reg.stderr
+    assert "trial 1 registered" in reg.stdout
+
+    bind = _run("trial", "bind", "1", "1", env={"PFDB_PATH": str(db)})
+    assert bind.returncode == 0, bind.stderr
+    assert "trial 1 bound to run 1" in bind.stdout
+
+    verdict = _run("trial", "verdict", "1", "--verdict", "win", env={"PFDB_PATH": str(db)})
+    assert verdict.returncode == 0, verdict.stderr
+    assert "trial 1 verdict=win" in verdict.stdout
+
+    listing = _run("trial", "list", env={"PFDB_PATH": str(db)})
+    assert listing.returncode == 0, listing.stderr
+    assert listing.stdout.startswith("TRIAL ")
+    assert 'verdict="win"' in listing.stdout
+
+
+def test_baseline_add_and_list_cli(tmp_path: Path) -> None:
+    db = _populate(tmp_path)
+    add = _run("baseline", "add", "1", "--name", "base", env={"PFDB_PATH": str(db)})
+    assert add.returncode == 0, add.stderr
+    assert "baseline 1 added" in add.stdout
+    listing = _run("baseline", "list", env={"PFDB_PATH": str(db)})
+    assert listing.returncode == 0, listing.stderr
+    assert 'name="base"' in listing.stdout and "run_id=1" in listing.stdout
