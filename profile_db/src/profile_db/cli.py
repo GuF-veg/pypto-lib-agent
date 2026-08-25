@@ -11,9 +11,10 @@
 
 T0 exposes ``init`` and ``--version``; T1 adds ``ingest``; T5 adds the
 ``list`` convenience and the registry-driven ``query`` subcommand; T6 adds
-``render`` (R0–R3 swimlane images). The query arguments are generated from
-each registered query's pydantic parameter model, so a new query appears
-in the CLI without touching this file.
+``render`` (R0–R3 swimlane images); T7 adds ``serve --mcp`` (the agent's
+stdio MCP channel). The query arguments are generated from each
+registered query's pydantic parameter model, so a new query appears in
+the CLI without touching this file.
 
 --path resolution order for ``init``: the explicit ``--path``, then the
 $PFDB_PATH environment variable, then ``<cwd>/.pfdb/profile.duckdb``.
@@ -96,6 +97,14 @@ def _parser() -> argparse.ArgumentParser:
         help="cache directory (default: <db>/.pfdb/render)",
     )
     _add_format_args(render_cmd)
+
+    serve_cmd = sub.add_parser("serve", help="start the MCP stdio server (session-scoped)")
+    serve_cmd.add_argument("--mcp", action="store_true", help="serve over MCP stdio")
+    serve_cmd.add_argument(
+        "--path",
+        default=None,
+        help="database path (default: $PFDB_PATH or <cwd>/.pfdb/profile.duckdb)",
+    )
     return parser
 
 
@@ -292,6 +301,15 @@ def _run_render(args: argparse.Namespace) -> int:
         db.close()
 
 
+def _run_serve(args: argparse.Namespace) -> int:
+    if not args.mcp:
+        print("pfdb: error: serve requires --mcp", file=sys.stderr)
+        return 2
+    from profile_db.mcp_server import run_stdio
+
+    return run_stdio(args.path)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "init":
@@ -314,6 +332,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_query(args)
     if args.command == "render":
         return _run_render(args)
+    if args.command == "serve":
+        return _run_serve(args)
     print(f"pfdb: error: unknown command {args.command!r}", file=sys.stderr)
     return 2
 

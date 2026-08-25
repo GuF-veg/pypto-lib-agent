@@ -77,8 +77,9 @@ def test_design_doc_exists_and_references_calibrate_tool() -> None:
 # ---------------------------------------------------------------------------
 
 LAYERS: dict[str, int] = {
-    "profile_db.__main__": 7,
-    "profile_db.cli": 6,
+    "profile_db.__main__": 8,
+    "profile_db.cli": 7,
+    "profile_db.mcp_server": 6,
     "profile_db.api": 5,
     "profile_db.__init__": 5,
     "profile_db.query": 4,

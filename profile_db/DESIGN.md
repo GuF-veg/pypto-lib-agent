@@ -737,10 +737,30 @@ tests ────▶ 可直接触达任何层，但金质题库只走 api/CLI/M
 
 - **做什么**：`pfdb serve --mcp`（stdio，按需启动、会话级生命周期）；tools 与
   API 参数同源；Result envelope；图像以 MCP 图像内容返回；附 mock-agent
-  脚本演示完整泳道阅读会话；tool schema 版本化。
-- **验收**：[ ] mock 脚本仅用 MCP 工具完成"整体→稀疏→原因→算子→依赖→
-  为什么晚"全会话，每步输出在预算内；[ ] 非法参数被 MCP 层拒绝并返回
-  可用错误信息；[ ] 服务可重复启停（无状态残留，第二次启动结果一致）。
+  脚本演示完整泳道阅读会话；tool schema 版本化。（**T7 已完成**，见 README
+  状态表。）
+- **验收**：
+  - [x] mock 脚本仅用 MCP 工具完成"整体→稀疏→原因→算子→依赖→为什么晚"
+        全会话，每步输出在预算内（`pfdb.list_runs → overview → density →
+        why_sparse → region → task → deps → why_late` 八步全走通，输出为
+        预算受限的 facts 文本）；
+  - [x] 非法参数被 MCP 层拒绝并返回可用错误信息（结构错误由 SDK 的
+        jsonschema 校验按 pydantic schema 拒绝并报 `isError`；未知工具/语义
+        错误回 `pfdb: error: ...` 文本）；
+  - [x] 服务可重复启停（无状态残留，第二次启动工具列表与查询输出逐字节
+        一致）。
+- **实施备注**：`mcp_server.py`（分层 6，介于 api 与 cli 之间）＝
+  `build_tools()`（查询注册表每查询一工具，`runs_list` → `pfdb.list_runs`，
+  其余 `pfdb.<name>`，`inputSchema` 直接取 `spec.params.model_json_schema()`
+  单一同源；另加 `pfdb.render`（`RenderToolParams` pydantic 模型出 schema）
+  与 `pfdb.version`）+ `build_server(db)`（低层 `Server`，`list_tools`/
+  `call_tool` 派发）+ `run_stdio()`（`stdio_server` + `anyio.run`）。
+  查询工具返回预算受限 facts 文本；`pfdb.render` 返回 IMAGE fact 文本 +
+  `ImageContent`（PNG base64 data URL）。服务只读连接、随会话生命周期，
+  tool schema 版本 `TOOL_SCHEMA_VERSION="1"` 经 `pfdb.version` 暴露。CLI 增
+  `pfdb serve --mcp [--path]`；示例 `examples/mock_agent.py` 用 MCP 客户端
+  走完 6.4 全会话。依赖新增 `mcp>=1.0,<2`。5 条测试（注册表驱动工具、
+  渲染出图、非法参数拒绝、无状态重启、mock 会话）全绿。
 
 ### T8 生命周期与短期记忆 ｜ 依赖：T1（可与 T4–T7 并行） ｜ 规模：M
 

@@ -45,7 +45,12 @@
   自动降采样、总量上限 LRU 逐出；`ProfileDB.render(...)` 与 CLI
   `pfdb render` 均返回 `IMAGE` fact + `ImageRef`，同参数重复渲染 SHA-256
   逐字节一致，空窗/无边任务/未知目标不崩。
-- ⬜ T7+ 见 DESIGN.md 第 11 节。
+- ✅ T7 MCP 服务：`pfdb serve --mcp`（stdio、会话级生命周期、不常驻）——
+  工具集由查询注册表自动生成（`pfdb.list_runs / overview / density / ...`
+  + `pfdb.render` + `pfdb.version`），`inputSchema` 与 CLI 参数单一同源
+  （pydantic）；查询返回预算受限 facts 文本、渲染返回 IMAGE fact +
+  `ImageContent`（PNG base64）；`examples/mock_agent.py` 演示 6.4 全会话。
+- ⬜ T8+ 见 DESIGN.md 第 11 节。
 
 ## 安装与使用
 
@@ -118,6 +123,21 @@ img = db.render("whole", 1)         # -> Result(IMAGE fact, ImageRef, ...)
 print(img.images[0].path)           # PNG 路径（供多模态模型读取）
 db.close()
 ```
+
+### MCP 服务（agent 主通道）
+
+```bash
+# 以子进程启动（stdio，随 agent 会话同生命周期，结束即退出）
+pfdb serve --mcp            # 读取 $PFDB_PATH 或 <cwd>/.pfdb/profile.duckdb
+pfdb serve --mcp --path /path/to/profile.duckdb
+
+# 完整泳道阅读会话演示（仅用 MCP 工具）
+PFDB_PATH=.pfdb/profile.duckdb python profile_db/examples/mock_agent.py
+```
+
+工具集由查询注册表自动生成（`pfdb.list_runs` / `pfdb.overview` /
+`pfdb.density` / … + `pfdb.render` + `pfdb.version`），tool schema 版本经
+`pfdb.version` 暴露。
 
 ## 测试与检查
 
