@@ -63,9 +63,10 @@
   `instr_metrics.json` 指标并入 `incore_entry`；原始大文件（args.bin、
   trace.clean.json、visualize_data.bin）永不进表也不进 store。
 - ✅ T10 文档与定型：`docs/debug-and-tune/profile-db.md` 用户手册（与代码
-  行为一致，示例可执行）+ 发布检查清单；技能决策定为「并存不替代」
-  （profile-feedback 技能 = 无状态单次直读；pfdb = 迭代调优查询优先
-  工作台），记录于 DESIGN 附录 A 与文档交叉说明。T0–T10 全部完成。
+  行为一致，示例可执行）+ 发布检查清单；`profile-feedback` 技能重写为
+  pfdb 数据库的**使用说明书**（教 agent 用这套工具、只给轻导航建议、不写
+  死调优菜谱），旧 `scripts/profile_feedback.py` 删除；并补齐 3 条承诺过的
+  查询（`critical_path`/`perf_hints`/`memory`）。T0–T10 全部完成。
 
 ## 安装与使用
 
@@ -102,6 +103,11 @@ pfdb query why_sparse --run-id 1 --band 9 --engine aiv
 pfdb query task --run-id 1 --task-id 4294967298
 pfdb query deps --run-id 1 --task-id 4294967298 --direction in
 pfdb query why_late --run-id 1 --task-id 4294967298
+
+# 关键路径、编译器提示、缓冲占用
+pfdb query critical_path --run-id 1 --kind observed
+pfdb query perf_hints --run-id 1
+pfdb query memory --run-id 1
 
 # 输出格式：facts（默认 DSL）/ json / markdown；字节预算 --budget
 pfdb query overview --run-id 1 --format markdown

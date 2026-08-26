@@ -364,7 +364,8 @@ build_output/<case>/report/memory_after_AllocateMemoryAddr.txt
 below the 512 B L2 cache line (each hint carries the exact source
 location), and the memory report lists per-kernel buffer occupancy
 (`Vec` / `Mat` / `Left` / `Right` / `Acc`) against hardware limits. The
-`profile_feedback.py queries perf-hints` / `memory` also read both.
+`pfdb query perf_hints` / `pfdb query memory` queries (via the
+profile-feedback skill) also read both.
 
 ### 4.5 Remaining runtime DFX flags
 
@@ -404,7 +405,7 @@ at a time:
 |----------|---------|----------|
 | Is my change faster end-to-end? | `PYPTO_BENCH=1 python models/qwen3_32b/decode.py -p a2a3` | `effective_us` min/median/mean/max |
 | Which task / gap / dependency dominates the schedule? | `... --enable-l2-swimlane` (bare flag = level 4 here) | Swimlane records, merged Perfetto trace, `critical-path` reports |
-| Why does this task wait? | `profile_feedback.py critical-path --kind observed`, `scheduler --raw`, `early-dispatch <id>` | Per-task stall decomposition, phase counts, proven early dispatch |
+| Why does this task wait? | `pfdb query critical_path --kind observed`, `pfdb query scheduler`, `pfdb query early_dispatch` | Per-task stall decomposition, phase counts, proven early dispatch |
 | Which pipe inside kernel K is the limit? | `--enable-pmu 2` (via `runtime_cfg` for this entry) | `pmu.csv` busy-cycle ratios |
 | Exactly which instructions serialize kernel K? | `incore_profile.py --build-dir ... --func K`, then `clean_sim_trace` | Cleaned in-core pipe trace, `instr_metrics.json` |
 | Is my tiling using the L0/L1 buffers? | (compile already ran) | `report/memory_after_AllocateMemoryAddr.txt`, `report/perf_hints.log` |

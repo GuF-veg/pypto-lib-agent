@@ -149,6 +149,33 @@ def build(db: ProfileDB) -> ProfileDB:
         "UPDATE pmu_counter SET total_cycles = 1000 WHERE run_id = ? AND task_id = '3'",
         [run1],
     )
+    writer.insert_perf_hints(
+        conn,
+        run1,
+        [
+            {
+                "seq": 0,
+                "text": "Vector pipe underutilized; consider fusing two vector ops",
+                "source_path": "/data/build/rmsnorm.cpp:42",
+                "origin": "compiler",
+            },
+            {
+                "seq": 1,
+                "text": "Mat tile 16x16x16 leaves Acc/L0C under 60% occupancy",
+                "source_path": "/data/build/q_proj.cpp:7",
+                "origin": "compiler",
+            },
+        ],
+    )
+    writer.insert_memory_entries(
+        conn,
+        run1,
+        writer.next_id(conn, "memory_entry", "memory_id"),
+        [
+            {"kernel": "rmsnorm", "space": "Vec", "usage": 512.0, "limit_value": 65536.0},
+            {"kernel": "q_proj", "space": "Mat", "usage": 2097152.0, "limit_value": 4194304.0},
+        ],
+    )
 
     materialize(
         db,

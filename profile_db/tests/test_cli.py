@@ -138,6 +138,20 @@ def test_query_invalid_param_is_structured(tmp_path: Path) -> None:
     assert "pfdb: error: invalid parameters for 'density'" in result.stderr
 
 
+def test_query_critical_path_perf_hints_memory(tmp_path: Path) -> None:
+    db = _populate(tmp_path)
+    cp = _run("query", "critical_path", "--run-id", "1", "--kind", "observed",
+              env={"PFDB_PATH": str(db)})
+    assert cp.returncode == 0, cp.stderr
+    assert cp.stdout.startswith("PATH ") or "unavailable" in cp.stdout
+
+    hints = _run("query", "perf_hints", "--run-id", "1", env={"PFDB_PATH": str(db)})
+    assert hints.returncode == 0, hints.stderr
+
+    mem = _run("query", "memory", "--run-id", "1", env={"PFDB_PATH": str(db)})
+    assert mem.returncode == 0, mem.stderr
+
+
 def test_help_lists_query_and_list(tmp_path: Path) -> None:
     result = _run("--help")
     assert result.returncode == 0

@@ -109,3 +109,15 @@ class EarlyDispatchParams(TaskIdParams):
 
 class PmuParams(TaskIdParams):
     pass
+
+
+class CriticalPathParams(RunIdParams):
+    kind: str = Field(default="observed", pattern="^(observed|static)$")
+
+
+class PerfHintsParams(RunIdParams):
+    pass
+
+
+class MemoryParams(RunIdParams):
+    pass

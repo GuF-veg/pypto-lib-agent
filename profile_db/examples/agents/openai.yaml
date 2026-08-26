@@ -1,4 +1,4 @@
 interface:
-  display_name: "PFDB Query"
-  short_description: "Query the profile feedback database via the pfdb CLI"
-  default_prompt: "Use $pfdb-query to answer profiling questions from the local .pfdb working set. Prefer `pfdb query overview --run-id <id>`, `density`, `why_sparse`, `task`, `deps`, and `why_late` to read the swimlane the way a human does: overall density, then sparse regions, then the operator and its dependency latency. Quote only returned facts; never fabricate numbers."
+  display_name: "Profile Feedback Database (pfdb)"
+  short_description: "Query the pfdb profile-feedback database via the CLI"
+  default_prompt: "Use $pfdb-query to answer profiling questions from the local .pfdb working set. Ingest the capture first (pfdb ingest), then navigate the zoom levels: overview -> density -> critical_path -> why_sparse -> task -> deps -> why_late, and consult memory / perf_hints / pmu before touching an operator. Quote only returned facts; never fabricate numbers or emit a tuning verdict."

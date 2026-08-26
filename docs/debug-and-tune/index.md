@@ -17,7 +17,7 @@ then move from the broadest evidence to the narrowest:
 | Diagnose numerical drift and choose comparison thresholds | [Precision Tuning](precision-tuning.md) |
 | Measure end-to-end time and inspect the task schedule | [Performance Tuning](performance-tuning.md) |
 | Map a profiling command to the artifacts and evidence it produces | [Profiling Commands and Their Evidence](profiling-options.md) |
-| Query compact L2, compiler, PMU, and in-core evidence from existing artifacts | [Agent Profile Feedback](agent-profile-feedback.md) |
+| Read the evidence-tagged facts the pfdb database returns and their meaning | [Agent Profile Feedback](agent-profile-feedback.md) |
 | Ingest artifacts into a query-first database, render swimlanes, and drive an MCP agent | [Profile Database (pfdb)](profile-db.md) |
 | Choose matmul row, N, and K tiles | [Cube Tile Tuning](cube-tile-tuning.md) |
 | Inspect one generated kernel in the operator simulator | [In-Core Simulator Profiling](incore-simulator-profiling.md) |

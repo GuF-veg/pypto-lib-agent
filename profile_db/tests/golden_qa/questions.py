@@ -205,6 +205,30 @@ ORCH lane=0 run_id=1 submit_idx=0 t0_us=23.0 t1_us=25.0 task_id="3" evidence=mea
 PMU counter="vec_ratio" ratio=0.0008 run_id=1 task_id="3" total_cycles=1000.0 value=0.8 evidence=measured""",
     ),
     GoldenQuestion(
+        "critical_path_observed",
+        "critical_path",
+        {"run_id": 1, "kind": "observed"},
+        """PATH busy_us=10.0 compute_us=10.0 early_dispatch_proven="none" gap_kind="front-gap" kind="observed" run_id=1 seq=0 stall_us=0.0 task_id="1" wall_us=10.0 evidence=measured
+PATH busy_us=10.0 compute_us=10.0 early_dispatch_proven="none" gap_kind="data-wait" gap_us=2.0 kind="observed" run_id=1 seq=1 stall_us=2.0 task_id="2" wall_us=12.0 evidence=measured
+PATH busy_us=20.0 compute_us=20.0 early_dispatch_proven="none" gap_kind="data-wait" gap_us=7.0 kind="observed" run_id=1 seq=2 stall_us=8.0 task_id="3" wall_us=26.0 evidence=measured
+PATH busy_us=6.0 compute_us=6.0 early_dispatch_proven="full" gap_kind="core-wait" gap_us=-4.0 kind="observed" run_id=1 seq=3 stall_us=52.0 task_id="7" wall_us=9.0 evidence=measured
+PATH busy_us=10.0 compute_us=10.0 early_dispatch_proven="none" gap_kind="data-wait" gap_us=1.0 kind="observed" run_id=1 seq=4 stall_us=2.0 task_id="8" wall_us=18.0 evidence=measured""",
+    ),
+    GoldenQuestion(
+        "perf_hints",
+        "perf_hints",
+        {"run_id": 1},
+        """PERF_HINT origin="compiler" run_id=1 seq=0 source_path="/data/build/rmsnorm.cpp:42" text="Vector pipe underutilized; consider fusing two vector ops" evidence=measured
+PERF_HINT origin="compiler" run_id=1 seq=1 source_path="/data/build/q_proj.cpp:7" text="Mat tile 16x16x16 leaves Acc/L0C under 60% occupancy" evidence=measured""",
+    ),
+    GoldenQuestion(
+        "memory",
+        "memory",
+        {"run_id": 1},
+        """MEMORY kernel="q_proj" limit_value=4194304.0 run_id=1 space="Mat" usage=2097152.0 evidence=measured
+MEMORY kernel="rmsnorm" limit_value=65536.0 run_id=1 space="Vec" usage=512.0 evidence=measured""",
+    ),
+    GoldenQuestion(
         "missing_task",
         "task",
         {"run_id": 1, "task_id": "999"},

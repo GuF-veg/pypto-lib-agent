@@ -23,7 +23,10 @@ from profile_db.facts import Evidence, Fact
 from profile_db.query import common
 from profile_db.query.registry import register
 from profile_db.query.params import (
+    CriticalPathParams,
     EarlyDispatchParams,
+    MemoryParams,
+    PerfHintsParams,
     PmuParams,
     RowsParams,
     SchedulerParams,
@@ -390,3 +393,90 @@ def pmu(conn, params: PmuParams) -> list[Fact]:
             fields["ratio"] = value / total
         facts.append(Fact("PMU", fields, Evidence.MEASURED))
     return facts
+
+
+@register(
+    "critical_path",
+    "定位:真正决定时长的链是哪条(observed/static)、stall 在哪几个任务炸开?",
+    CriticalPathParams,
+)
+def critical_path(conn, params: CriticalPathParams) -> list[Fact]:
+    run_id = params.run_id
+    if common.one(conn, "SELECT 1 FROM run WHERE run_id = ?", [run_id]) is None:
+        return common.run_missing("PATH", run_id)
+    rows = common.q(
+        conn,
+        "SELECT seq, task_id, wall_us, busy_us, compute_us, stall_us, gap_us, "
+        "gap_kind, early_dispatch_proven FROM cpm_path "
+        "WHERE run_id = ? AND kind = ? ORDER BY seq",
+        [run_id, params.kind],
+    )
+    if not rows:
+        return [
+            Fact("PATH", common.fields(run_id=run_id, kind=params.kind), Evidence.UNAVAILABLE)
+        ]
+    return [
+        Fact(
+            "PATH",
+            common.fields(
+                run_id=run_id,
+                kind=params.kind,
+                seq=seq,
+                task_id=task_id,
+                wall_us=common.us(wall),
+                busy_us=common.us(busy),
+                compute_us=common.us(compute),
+                stall_us=common.us(stall),
+                gap_us=common.us(gap),
+                gap_kind=gap_kind,
+                early_dispatch_proven=early_status,
+            ),
+            Evidence.MEASURED,
+        )
+        for seq, task_id, wall, busy, compute, stall, gap, gap_kind, early_status in rows
+    ]
+
+
+@register("perf_hints", "施动前约束:编译器给了什么 tile/排布 hint?", PerfHintsParams)
+def perf_hints(conn, params: PerfHintsParams) -> list[Fact]:
+    run_id = params.run_id
+    if common.one(conn, "SELECT 1 FROM run WHERE run_id = ?", [run_id]) is None:
+        return common.run_missing("PERF_HINT", run_id)
+    rows = common.q(
+        conn,
+        "SELECT seq, text, source_path, origin FROM perf_hint WHERE run_id = ? ORDER BY seq",
+        [run_id],
+    )
+    if not rows:
+        return [Fact("PERF_HINT", common.fields(run_id=run_id), Evidence.UNAVAILABLE)]
+    return [
+        Fact(
+            "PERF_HINT",
+            common.fields(run_id=run_id, seq=seq, text=text, source_path=source_path, origin=origin),
+            Evidence.MEASURED,
+        )
+        for seq, text, source_path, origin in rows
+    ]
+
+
+@register("memory", "施动前约束:各缓冲空间离硬件上限多远?", MemoryParams)
+def memory(conn, params: MemoryParams) -> list[Fact]:
+    run_id = params.run_id
+    if common.one(conn, "SELECT 1 FROM run WHERE run_id = ?", [run_id]) is None:
+        return common.run_missing("MEMORY", run_id)
+    rows = common.q(
+        conn,
+        "SELECT kernel, space, usage, limit_value FROM memory_entry "
+        "WHERE run_id = ? ORDER BY kernel, space",
+        [run_id],
+    )
+    if not rows:
+        return [Fact("MEMORY", common.fields(run_id=run_id), Evidence.UNAVAILABLE)]
+    return [
+        Fact(
+            "MEMORY",
+            common.fields(run_id=run_id, kernel=kernel, space=space, usage=usage, limit_value=limit_value),
+            Evidence.MEASURED,
+        )
+        for kernel, space, usage, limit_value in rows
+    ]

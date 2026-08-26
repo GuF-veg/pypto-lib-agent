@@ -1,4 +1,4 @@
 interface:
-  display_name: "Profile Feedback"
-  short_description: "Query objective facts from existing PyPTO profiles"
-  default_prompt: "Use $profile-feedback to inspect the existing profile artifacts and return objective evidence only."
+  display_name: "Profile Feedback Database (pfdb)"
+  short_description: "Read objective, evidence-tagged facts from the pfdb database"
+  default_prompt: "Use $profile-feedback to ingest the capture and query the pfdb working set (overview, density, critical path, task/dependency timing, early-dispatch, compiler hints, memory, PMU), render swimlanes, and compare runs. Return the returned facts verbatim; never fabricate numbers or emit a tuning verdict."

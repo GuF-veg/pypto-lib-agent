@@ -5,114 +5,37 @@ events are a wasteful and ambiguous input for an LLM. Profile feedback for an
 agent should instead expose compact measurements, dependency evidence, and
 deterministically derived relations while preserving uncertainty.
 
-PyPTO-Lib implements this as two layers:
+PyPTO-Lib implements this as the query-first **profile feedback database**
+(`pfdb`) plus the `profile-feedback` skill that drives it:
 
 ```text
-existing profile artifacts
-        ↓
-profile feedback analyzer — read-only parsers and evidence queries
-        ↓
-profile-feedback skill — instructions for selecting a query
-        ↓
-caller — decides whether and how to optimize
+existing profile artifacts (build_output/)
+        ↓ pfdb ingest (link by default, never re-runs a collection)
+DuckDB working set (.pfdb/)  +  derived layer (density / gaps / CPM / stall / early-dispatch)
+        ↓ pfdb query / render / serve --mcp
+agent / caller — decides whether and how to optimize
 ```
 
-Neither layer collects a profile, changes source code, identifies an
-optimization, or invokes another tuning workflow.
+The database returns evidence, never a diagnosis or an instruction. The
+`profile-feedback` skill is its instruction manual: it maps each tool to the
+question it answers and explains how to read the output. The full command
+reference is [Profile Database (pfdb)](profile-db.md); this page documents the
+output contract the agent must honor.
 
-> **Coexistence with pfdb.** This document describes the stateless
-> `profile-feedback` analyzer (one-shot reads, no database). For an iterative
-> tuning loop with a retained working set, render images, and MCP tools, use
-> the [Profile Database (pfdb)](profile-db.md) instead. The two tools share the
-> evidence-state and byte-budget ideas but use different fact vocabularies;
-> they coexist rather than replacing each other.
+## Facts are the unit
 
-The examples below use `python <profile-feedback-script>` as the analyzer
-entry point. Agent integrations provide its concrete location; this guide
-defines the stable arguments, records, and evidence semantics.
+Every query returns a machine-oriented fact stream: one line per fact.
 
-## Quick start
-
-Inspect the artifact set before assuming which evidence is present:
-
-```bash
-python <profile-feedback-script> build_output/<case> inventory
+```text
+REC k=v … evidence=<state>
 ```
 
-Request the machine-oriented fact stream (the default), or a neutral Markdown
-wrapper for human review:
-
-```bash
-python <profile-feedback-script> \
-  build_output/Qwen3Decode_<timestamp>/dfx_outputs \
-  --format facts summary
-
-python <profile-feedback-script> \
-  build_output/Qwen3Decode_<timestamp>/dfx_outputs \
-  --format markdown critical-path --kind observed
-```
-
-Every response has a UTF-8 byte budget controlled by `--max-bytes`. If the
-budget is exhausted, the last fact is `TRUNCATED`; issue a narrower query or
-raise the budget rather than assuming omitted evidence is absent.
-
-## Evidence queries
-
-| Query | Existing evidence returned |
-|---|---|
-| `inventory`, `metadata`, `summary` | Artifact presence, clock, topology, makespan, CPM, graph size, resource utilization |
-| `tasks`, `task`, `families` | Logical tasks, physical timing aggregates, arguments, tensors, and family totals |
-| `deps`, `subgraph` | Dependency edges and their source/arg/tensor/shape/stride metadata |
-| `critical-path` | Canonical Observed or Static CPM path and FIN/dispatch/start waits |
-| `overlap`, `window`, `core` | Time-interval intersections and physical core occupancy |
-| `scheduler` | Scheduler/orchestrator phases, task counts, pop hit/miss, and queue depth |
-| `early-dispatch` | Producer flags and per-row timestamp proof of full/partial/none/unavailable status |
-| `perf-hints` | Compiler hint lines preserved verbatim with `origin=compiler` |
-| `memory` | Legacy memory report or allocated pass-dump high-water/limit measurements |
-| `pmu` | Dynamic PMU counter columns, raw rows, task aggregates, and counter/total-cycle ratios |
-| `incore` | Manifest status, instruction metrics, cleaned trace lane totals, and instruction CSV inventory |
-| `compare` | Neutral before/after values, deltas, and ratios for compatible captures |
-
-Examples:
-
-```bash
-# Find all exact task IDs for one repeated family.
-python <profile-feedback-script> <profile-root> tasks \
-  --family down_proj_residual
-
-# Inspect one exact task and all tensor-edge metadata around it.
-python <profile-feedback-script> <profile-root> task 8589934937
-python <profile-feedback-script> <profile-root> deps 8589934937
-
-# Inspect scheduler counts or retain every recorded phase.
-python <profile-feedback-script> <profile-root> scheduler
-python <profile-feedback-script> <profile-root> scheduler --raw
-
-# Read optional artifacts without requiring an L2 capture.
-python <profile-feedback-script> <build-root> perf-hints
-python <profile-feedback-script> <build-root> memory
-python <profile-feedback-script> <build-root> pmu --task-id 0x200000a00
-python <profile-feedback-script> <build-root> incore
-```
-
-For multi-rank captures, `summary`, `metadata`, and `inventory` can enumerate
-all ranks. Queries that identify one graph require `--rank <label>`; the tool
-does not silently choose a fast or slow rank. Likewise, a repeated name or
-family is never resolved to a preferred occurrence. List candidates with
-`tasks`, then use the exact task ID.
-
-## Fact semantics
-
-The stable line-oriented DSL uses record types such as `PROFILE`, `ARTIFACT`,
-`METRIC`, `RESOURCE`, `CORE`, `FAMILY`, `TASK`, `TASK_ROW`, `ARG`, `DEP`,
-`TENSOR_EDGE`, `PATH`, `STALL`, `OVERLAP`, `OCCUPANCY`, `SCHED`, `ORCH_PHASE`,
-`EARLY`, `PERF_HINT`, `MEMORY`, `PMU`, `INCORE`, `EVIDENCE`, and `TRUNCATED`.
-
-Structured and free-text values are JSON encoded. This preserves whitespace,
-Unicode, shapes, strides, counter maps, and compiler text without inventing a
-second escaping convention. Artifact paths are reported relative to the
-supplied artifact root; feedback does not expose machine-specific absolute
-paths.
+Keys are sorted, values are JSON-encoded (shapes, strides, counter maps, and
+compiler text stay intact), and every fact carries exactly one evidence state.
+Record types include `RUN`, `METRIC`, `RESOURCE`, `ARTIFACT`, `BAND`, `SPARSE`,
+`REGION`, `CORE`, `TASK`, `DEP`, `SUBGRAPH`, `NODE`, `ROW`, `GAP`, `STALL`,
+`PATH`, `LONG`, `SCHED`, `ORCH`, `EARLY`, `PMU`, `PERF_HINT`, `MEMORY`,
+`IMAGE`, `COMPARE`, `DELTA`, `BASELINE`, and `TRIAL`.
 
 Evidence states mean:
 
@@ -123,49 +46,49 @@ Evidence states mean:
   available observations;
 - `unavailable`: the artifact or required field is absent.
 
-An optional query succeeds with `EVIDENCE artifact=<name>
-status=unavailable` when its source is missing. The analyzer never starts a
-collection or estimates the missing value.
+A missing run/task/band yields an `unavailable` fact, never an estimate. Every
+response has a UTF-8 byte budget (`--budget`, default 4096); when it is
+exhausted the stream ends with an explicit `TRUNCATED remaining=… limit=…`
+line — issue a narrower query or raise the budget rather than assuming omitted
+evidence is absent. Artifact paths are relative to the ingested source, never
+machine-specific absolute paths (except compiler `PERF_HINT` source locations,
+which are preserved verbatim as compiler-origin evidence).
 
-## Real Qwen3 example
+## Navigate by coordinates, not by re-scanning
 
-The level-4 Qwen3-32B decode capture used during development yields:
+The zoom levels mirror how a human reads a swimlane — overall → sparse → a
+sparse band's cause → an operator → its dependencies → why it started late.
+Every fact carries the coordinates for the next step (`run_id` / `task_id` /
+`band` / `core`), so the agent asks progressively narrower questions instead of
+re-scanning a capture:
 
-```text
-PROFILE rank=single program=Qwen3Decode level=l2.4
-METRIC rank=single makespan_us=1868.560 cpm_us=1476.100 cpm_share=0.790
-METRIC rank=single critical_compute_us=1780.360 critical_stall_us=88.200 compute_share=0.953
-GRAPH rank=single logical_tasks=266 timed_tasks=266 edges=1898 artifact_edges=2546 physical_rows=706
-RESOURCE rank=single engine=aic cores=24 busy_core_us=33328.740 avg_concurrency=17.837 peak_concurrency=24 utilization=0.743
-RESOURCE rank=single engine=aiv cores=48 busy_core_us=20767.860 avg_concurrency=11.114 peak_concurrency=32 utilization=0.232
+```bash
+pfdb query overview --run-id 1          # top-line metrics and topology
+pfdb query density --run-id 1 --engine aiv --bands 20
+pfdb query why_sparse --run-id 1 --band 9 --engine aiv
+pfdb query critical_path --run-id 1 --kind observed
+pfdb query task --run-id 1 --task-id 4294967298
+pfdb query deps --run-id 1 --task-id 4294967298 --direction in
+pfdb query why_late --run-id 1 --task-id 4294967298
 ```
 
-The two projection tasks overlap without a direct dependency:
-
-```text
-OVERLAP 4294967298 || 4294967299 left_name=q_proj right_name=kv_proj overlap_us=120.960 shorter_share=1.000 dependency=false engines=aic|aic
-```
-
-This fact proves simultaneous execution, not contention or an optimization
-opportunity. Those judgments belong to the caller.
+This order is a *suggestion*, not a recipe. Follow the question, not the order.
 
 ## Interpretation limits
 
 - Level-4 collection adds observer cost. Use an unprofiled repeated benchmark
   as the production performance number.
 - Profile artifacts do not prove numerical correctness.
-- `OVERLAP`, `OCCUPANCY`, and concurrent scheduler phases do not by themselves
-  prove a named resource blocker.
+- Temporal overlap and occupancy do not by themselves prove a named resource
+  blocker; report them as correlation unless the capacity evidence is complete.
 - `deps.json::early_dispatch` is a producer policy flag. Actual consumer early
   dispatch is established from direct-producer eligibility and dispatch/FIN
   timestamps with the runtime's two-clock-tick tolerance.
-- PMU column names depend on architecture and event group. The parser reports
+- PMU column names depend on architecture and event group. The query reports
   the columns present instead of assuming a fixed roster.
-- `manifest_export.csv` is authoritative for in-core collection status;
-  only artifacts below an exported row's `export_dir` are inspected.
-  `instr_metrics.json` is optional because some traces contain no API_INSTR
-  block, and each missing metrics, cleaned trace, or instruction CSV artifact
-  is reported as `unavailable` rather than inferred.
 - `compare` validates level, clock, topology, and program identity. The caller
   must also keep inputs, runtime configuration, toolchain, placement, and
   collection method comparable.
+- The database is read-only with respect to the artifacts: `ingest` reads
+  `build_output` and never starts a collection, and the `profile-feedback`
+  skill never edits source, artifacts, or configuration.

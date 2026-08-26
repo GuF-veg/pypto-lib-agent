@@ -883,14 +883,12 @@ T9（T1/T2 后随时启动）    T10（最后）
 
 - 仅吸收两个概念：**证据状态**（measured/proven/unproven/unavailable）与
   **字节预算 + TRUNCATED 显式标记**。
-- 不迁移代码、不要求 CLI/输出兼容；该脚本继续独立存在，试点期过后由
-  T10 决定去留。
-- **T10 已定案：并存（不替代）**。profile-feedback 技能保持无状态、
-  免建库的单次直读定位（适合快速一次性检视）；pfdb 是面向迭代调优循环的
-  查询优先工作台（ingest 一次、反复查询、工作集/prune、渲染、MCP）。
-  二者共享证据状态与字节预算两个思想，但事实词表不同，按工作流二选一、
-  不混用输出（详见 `docs/debug-and-tune/profile-db.md` 与
-  `agent-profile-feedback.md` 的交叉说明）。
+- 不迁移代码、不要求 CLI/输出兼容。旧的无状态 `scripts/profile_feedback.py`
+  （约 1926 行一次性直读脚本）**已删除**：本系统落地后，profile-feedback
+  技能被重写为 pfdb 数据库的**使用说明书**（`.claude/skills/profile-feedback`），
+  只教 agent 如何 ingest/查询/渲染/生命周期，不再自带分析脚本；调优方法论
+  只给轻导航建议、不写死菜谱（详见 `docs/debug-and-tune/profile-db.md` 与
+  `agent-profile-feedback.md`）。
 
 ## 附录 B：标定数据（`tools/calibrate.py` 对 Qwen3Decode 真实捕获实测）
 

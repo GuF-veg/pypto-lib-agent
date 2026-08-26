@@ -23,21 +23,11 @@ derived evidence; the tuning decision stays with the caller.
 
 ## Relationship to the profile-feedback skill
 
-The repository keeps both tools; they answer the same *questions* from the same
-artifacts, but with different operating models:
-
-- **`profile-feedback` skill** — a stateless, read-only analyzer. No database,
-  no ingest step, one-shot inspection of a directory of artifacts. Use it when
-  you want a single answer without setting up a working set.
-- **`pfdb`** — a query-first database. Ingest once, query repeatedly across a
-  retained working set, render images, and drive it from an MCP agent. Use it
-  for an iterative tuning loop where history, baselines, trials, and pruning
-  matter.
-
-They share the two core ideas (evidence states and the byte budget) but use
-different fact vocabularies; pick one per workflow rather than mixing their
-outputs. The decision is to **coexist**: the skill remains for one-shot reads,
-and `pfdb` is the workbench for loops.
+The `profile-feedback` skill is this database's **instruction manual**: it maps
+each command below to the question it answers and explains how to read the
+returned facts. This page is the complete reference; the skill is the
+agent-facing quick map. Both share one contract: the database returns
+evidence-tagged facts and never a tuning verdict.
 
 ## Install
 
