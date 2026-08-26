@@ -76,6 +76,10 @@ def _parser() -> argparse.ArgumentParser:
         help='bench summary string, e.g. "min=12.1 median=13.0 mean=13.2 max=15.0 rounds=100"',
     )
 
+    incore_cmd = sub.add_parser("ingest-incore", help="attach an in-core collection to a run")
+    incore_cmd.add_argument("source", help="in-core collection root (contains manifest_export.csv)")
+    incore_cmd.add_argument("--run", type=int, required=True, dest="run_id")
+
     list_cmd = sub.add_parser("list", help="list runs (runs_list query)")
     list_cmd.add_argument("--rank", default=None, help="restrict to one rank label")
     _add_format_args(list_cmd)
@@ -266,6 +270,26 @@ def _run_ingest(args: argparse.Namespace) -> int:
         f"pmu={report['pmu_counters']} makespan={report['makespan_us']:.3f}us"
     )
     return 0
+
+
+def _run_ingest_incore(args: argparse.Namespace) -> int:
+    try:
+        db = ProfileDB()
+    except PfdbError as exc:
+        print(f"pfdb: error: {exc}", file=sys.stderr)
+        return 1
+    try:
+        report = db.ingest_incore(args.source, run_id=args.run_id)
+        print(
+            f"in-core attached to run {report['run_id']}: "
+            f"{report['incore_entries']} entries ({report['exported']} exported)"
+        )
+        return 0
+    except PfdbError as exc:
+        print(f"pfdb: error: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        db.close()
 
 
 def _query_params(spec, args: argparse.Namespace) -> dict:
@@ -484,6 +508,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command == "ingest":
         return _run_ingest(args)
+    if args.command == "ingest-incore":
+        return _run_ingest_incore(args)
     if args.command == "list":
         return _run_list(args)
     if args.command == "query":

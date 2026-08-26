@@ -42,6 +42,8 @@ _RUN_TABLES = (
     "cpm_path",
     "bench_sample",
     "incore_entry",
+    "args_dump_entry",
+    "scope_stats_entry",
 )
 
 

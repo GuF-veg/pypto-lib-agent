@@ -35,7 +35,7 @@ from typing import Any, Sequence
 from profile_db.db import WriterGuard
 from profile_db.derived import derive_run
 from profile_db.errors import IngestError
-from profile_db.ingest import deps, source as source_mod, swimlane, text_evidence, writer
+from profile_db.ingest import args_dump, deps, incore, scope_stats, source as source_mod, swimlane, text_evidence, writer
 
 _CHILD_TABLES = (
     "artifact",
@@ -50,6 +50,8 @@ _CHILD_TABLES = (
     "time_band",
     "idle_gap",
     "cpm_path",
+    "args_dump_entry",
+    "scope_stats_entry",
 )
 
 
@@ -178,13 +180,16 @@ def ingest_capture(
             _artifact("merged_swimlane", src.merged, source_mod.rel_path(src, src.merged), store_mode)
         )
 
-    # Optional text-modality evidence (T2): absence is legal.
+    # Optional text-modality evidence (T2) and extended modalities (T9):
+    # absence is legal.
     report_dir = src.path.parent / "report"
     perf_hints_path = report_dir / "perf_hints.log" if report_dir.is_dir() else None
     memory_path = (
         report_dir / "memory_after_AllocateMemoryAddr.txt" if report_dir.is_dir() else None
     )
     pmu_path = src.path / "pmu.csv"
+    args_dump_path = src.path / "args_dump" / "args_dump.json"
+    scope_stats_path = src.path / "scope_stats" / "scope_stats.jsonl"
 
     def _read_optional(path: Path | None) -> str | None:
         if path is None or not path.is_file():
@@ -197,13 +202,19 @@ def ingest_capture(
     perf_text = _read_optional(perf_hints_path)
     memory_text = _read_optional(memory_path)
     pmu_text = _read_optional(pmu_path)
+    args_dump_text = _read_optional(args_dump_path)
+    scope_stats_text = _read_optional(scope_stats_path)
     perf_hints_rows = text_evidence.parse_perf_hints(perf_text or "")
     memory_rows = text_evidence.parse_memory_report(memory_text or "")
     pmu_rows = text_evidence.parse_pmu_csv(pmu_text) if pmu_text is not None else []
+    args_dump_rows = args_dump.parse_args_dump(args_dump_text) if args_dump_text is not None else []
+    scope_stats_rows = scope_stats.parse_scope_stats(scope_stats_text) if scope_stats_text is not None else []
     for kind, path in (
         ("perf_hints", perf_hints_path),
         ("memory", memory_path),
         ("pmu", pmu_path),
+        ("args_dump", args_dump_path),
+        ("scope_stats", scope_stats_path),
     ):
         if isinstance(path, Path) and path.is_file():
             artifacts.append(
@@ -299,6 +310,8 @@ def ingest_capture(
                 writer.next_id(conn, "pmu_counter", "pmu_id"),
                 pmu_rows,
             )
+            writer.insert_args_dump_entries(conn, run_id, args_dump_rows)
+            writer.insert_scope_stats_entries(conn, run_id, scope_stats_rows)
             derivation = derive_run(conn, run_id)
             writer.insert_time_bands(conn, run_id, derivation.bands)
             writer.insert_idle_gaps(
@@ -330,6 +343,8 @@ def ingest_capture(
         "perf_hints": len(perf_hints_rows),
         "memory_entries": len(memory_rows),
         "pmu_counters": len(pmu_rows),
+        "args_dump": len(args_dump_rows),
+        "scope_stats": len(scope_stats_rows),
         "store_mode": store_mode,
         "makespan_us": swimlane_run.makespan_us,
         "time_bands": len(derivation.bands),
@@ -406,3 +421,60 @@ def _task_row_rows(swimlane_run: swimlane.Swimlane) -> list[dict[str, Any]]:
         }
         for row in swimlane_run.rows
     ]
+
+
+def ingest_incore(
+    db,
+    source: Path | str,
+    *,
+    run_id: int,
+) -> dict[str, Any]:
+    """Ingest an in-core collection root (``manifest_export.csv``) into the
+    ``incore_entry`` table, attached to an existing run. Raw traces are
+    never read, copied, or registered — only the manifest's status/paths
+    summary and the optional ``instr_metrics.json`` are kept. Idempotent:
+    re-ingesting replaces the run's incore rows in one transaction."""
+    root = Path(source)
+    manifest_path = root / "manifest_export.csv"
+    if not manifest_path.is_file():
+        raise IngestError(f"in-core collection is missing manifest_export.csv: {root}")
+    if db.connection.execute("SELECT 1 FROM run WHERE run_id = ?", [run_id]).fetchone() is None:
+        raise IngestError(f"run {run_id} does not exist; ingest the capture first")
+
+    manifest_text = manifest_path.read_text(encoding="utf-8")
+    rows = incore.parse_manifest(manifest_text)
+    instr_path = root / "instr_metrics.json"
+    instr_text = instr_path.read_text(encoding="utf-8") if instr_path.is_file() else None
+    incore.merge_instr_metrics(rows, instr_text)
+
+    artifacts: list[dict[str, Any]] = [
+        _artifact("incore_manifest", manifest_path, manifest_path.name, "link")
+    ]
+    if instr_path.is_file():
+        artifacts.append(_artifact("instr_metrics", instr_path, instr_path.name, "link"))
+
+    conn = db.connection
+    with WriterGuard(db.path or ":memory:"):
+        conn.execute("BEGIN TRANSACTION")
+        try:
+            conn.execute("DELETE FROM incore_entry WHERE run_id = ?", [run_id])
+            writer.insert_incore_entries(conn, run_id, rows)
+            writer.insert_artifacts(
+                conn,
+                run_id,
+                writer.next_id(conn, "artifact", "artifact_id"),
+                artifacts,
+            )
+            conn.execute("COMMIT")
+        except Exception as exc:
+            conn.execute("ROLLBACK")
+            if isinstance(exc, IngestError):
+                raise
+            raise IngestError(f"in-core ingest transaction failed: {exc}") from exc
+
+    return {
+        "run_id": run_id,
+        "incore_entries": len(rows),
+        "exported": sum(1 for row in rows if row.get("status") == "exported"),
+        "artifacts": len(artifacts),
+    }

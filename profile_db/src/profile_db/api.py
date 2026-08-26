@@ -65,6 +65,13 @@ class ProfileDB(_ProfileDB):
             self.prune(keep=prune_keep)
         return report
 
+    def ingest_incore(self, source, *, run_id: int) -> dict[str, Any]:
+        """Attach an in-core collection (``manifest_export.csv``) to an
+        existing run; raw traces are never copied. Returns the summary."""
+        from profile_db.ingest import ingest_incore
+
+        return ingest_incore(self, source, run_id=run_id)
+
     def query(
         self, name: str, *, budget_bytes: int = DEFAULT_BUDGET_BYTES, **params: Any
     ) -> Result:

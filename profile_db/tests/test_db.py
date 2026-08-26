@@ -36,6 +36,8 @@ EXPECTED_TABLES = {
     "memory_entry",
     "bench_sample",
     "incore_entry",
+    "args_dump_entry",
+    "scope_stats_entry",
     "trial",
     "baseline",
 }
@@ -52,7 +54,7 @@ def test_open_creates_and_migrates(db_file: Path) -> None:
     db = ProfileDB(db_file)
     try:
         assert db_file.exists()
-        assert db.schema_version() == 3
+        assert db.schema_version() == 4
         assert _tables(db) == EXPECTED_TABLES
     finally:
         db.close()
@@ -63,7 +65,7 @@ def test_reopen_idempotent(db_file: Path) -> None:
     first.close()
     second = ProfileDB(db_file)
     try:
-        assert second.schema_version() == 3
+        assert second.schema_version() == 4
         assert _tables(second) == EXPECTED_TABLES
     finally:
         second.close()
@@ -91,7 +93,7 @@ def test_memory_mode_has_same_schema() -> None:
     db = ProfileDB.memory()
     try:
         assert db.path is None
-        assert db.schema_version() == 3
+        assert db.schema_version() == 4
         assert _tables(db) == EXPECTED_TABLES
     finally:
         db.close()
@@ -101,7 +103,7 @@ def test_read_only_sees_existing_schema(db_file: Path) -> None:
     ProfileDB(db_file).close()
     db = ProfileDB(db_file, read_only=True)
     try:
-        assert db.schema_version() == 3
+        assert db.schema_version() == 4
         # writes must be impossible on the read-only connection
         with pytest.raises(Exception):
             db.connection.execute("CREATE TABLE forbidden (x INTEGER)")

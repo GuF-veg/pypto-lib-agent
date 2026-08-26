@@ -56,7 +56,13 @@
   自动 prune（`--no-prune` 关闭）；trial 注册/绑定/结论/血缘回溯、
   baseline 管理与 `baseline diff`、`compare` 兼容性门禁（program/level/
   时钟/拓扑不一致即拒绝）；`pfdb compare|prune|baseline|trial` 子命令。
-- ⬜ T9+ 见 DESIGN.md 第 11 节。
+- ✅ T9 扩展模态：迁移 `0004` 增 `args_dump_entry`/`scope_stats_entry`；
+  `ingest` 自动发现 `dfx_outputs/args_dump/args_dump.json` 与
+  `scope_stats/scope_stats.jsonl`（仅元数据入库）；`pfdb ingest-incore
+  <dir> --run <id>` 把 in-core `manifest_export.csv` 状态与
+  `instr_metrics.json` 指标并入 `incore_entry`；原始大文件（args.bin、
+  trace.clean.json、visualize_data.bin）永不进表也不进 store。
+- ⬜ T10 见 DESIGN.md 第 11 节。
 
 ## 安装与使用
 

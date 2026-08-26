@@ -497,3 +497,77 @@ def update_task_path_flags(
 
 def update_run_cpm(conn: duckdb.DuckDBPyConnection, run_id: int, cpm_us: float | None) -> None:
     conn.execute("UPDATE run SET cpm_us = ? WHERE run_id = ?", [cpm_us, run_id])
+
+
+# ---------------------------------------------------------------------------
+# Extended-modality tables (T9): metadata-only inserts.
+# ---------------------------------------------------------------------------
+
+
+def insert_args_dump_entries(
+    conn: duckdb.DuckDBPyConnection, run_id: int, entries: Sequence[Mapping[str, Any]]
+) -> None:
+    rows = [
+        (
+            run_id,
+            entry["seq"],
+            entry["task_id"],
+            entry["stage"],
+            entry["role"],
+            entry["arg_index"],
+            entry["kind"],
+            entry["dtype"],
+            json.dumps(entry["shape"]),
+            entry["bin_size"],
+        )
+        for entry in entries
+    ]
+    _executemany(
+        conn,
+        "INSERT INTO args_dump_entry (run_id, seq, task_id, stage, role, arg_index, "
+        "kind, dtype, shape, bin_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS JSON), ?)",
+        rows,
+    )
+
+
+def insert_scope_stats_entries(
+    conn: duckdb.DuckDBPyConnection, run_id: int, entries: Sequence[Mapping[str, Any]]
+) -> None:
+    rows = [
+        (
+            run_id,
+            entry["seq"],
+            entry["site"],
+            entry["ring"],
+            entry["phase"],
+            json.dumps(entry["payload"]),
+        )
+        for entry in entries
+    ]
+    _executemany(
+        conn,
+        "INSERT INTO scope_stats_entry (run_id, seq, site, ring, phase, payload) "
+        "VALUES (?, ?, ?, ?, ?, CAST(? AS JSON))",
+        rows,
+    )
+
+
+def insert_incore_entries(
+    conn: duckdb.DuckDBPyConnection, run_id: int, entries: Sequence[Mapping[str, Any]]
+) -> None:
+    rows = [
+        (
+            run_id,
+            entry["kernel"],
+            entry["status"],
+            entry["export_dir"],
+            json.dumps(entry["metrics"]),
+        )
+        for entry in entries
+    ]
+    _executemany(
+        conn,
+        "INSERT INTO incore_entry (run_id, kernel, status, export_dir, metrics) "
+        "VALUES (?, ?, ?, ?, CAST(? AS JSON))",
+        rows,
+    )

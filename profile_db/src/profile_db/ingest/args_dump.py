@@ -1,0 +1,51 @@
+# Copyright (c) PyPTO Contributors.
+# This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+# CANN Open Software License Agreement Version 2.0 (the "License").
+# Please refer to the License for details. You may not use this file except in compliance with the License.
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+# See LICENSE in the root of the software repository for the full text of the License.
+# -----------------------------------------------------------------------------------------------------------
+
+"""args_dump metadata parser (DESIGN.md T9).
+
+Reads ``args_dump/args_dump.json`` — a manifest of per-task tensor/scalar
+captures — and returns one metadata row per captured argument. The raw
+``args.bin`` payload is never read, copied, or registered: only its
+``bin_size`` (byte count) is recorded so the agent knows whether a tensor
+has data.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+
+def parse_args_dump(text: str) -> list[dict[str, Any]]:
+    """Parse ``args_dump.json`` text into metadata rows (seq-ordered)."""
+    doc = json.loads(text)
+    if not isinstance(doc, dict):
+        return []
+    args = doc.get("args", doc.get("tensors", []))
+    if not isinstance(args, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for index, arg in enumerate(args):
+        if not isinstance(arg, dict):
+            continue
+        shape = arg.get("shape")
+        rows.append(
+            {
+                "seq": index,
+                "task_id": str(arg.get("task_id")) if arg.get("task_id") is not None else None,
+                "stage": arg.get("stage"),
+                "role": arg.get("role"),
+                "arg_index": arg.get("arg_index"),
+                "kind": arg.get("kind", "tensor"),
+                "dtype": arg.get("dtype"),
+                "shape": shape if isinstance(shape, list) else [],
+                "bin_size": int(arg.get("bin_size") or 0),
+            }
+        )
+    return rows

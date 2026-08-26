@@ -799,9 +799,27 @@ tests ────▶ 可直接触达任何层，但金质题库只走 api/CLI/M
 ### T9 扩展模态（可延后） ｜ 依赖：T1/T2 ｜ 规模：L
 
 - **做什么**：in-core（manifest 状态、instr 指标入表、原始 trace 永不复制）、
-  args_dump 元数据、scope_stats 元数据。
-- **验收**：每类 1 个 fixture 对拍；原始大文件确认不进关系表也不进 store
-  （体积断言）。
+  args_dump 元数据、scope_stats 元数据。（**T9 已完成**，见 README 状态表。）
+- **验收**：
+  - [x] 每类 1 个 fixture 对拍（args_dump 3 条元数据、scope_stats 元行 +
+        4 记录、in-core manifest 2 条目 + instr_metrics 合并，全量字段断言）；
+  - [x] 原始大文件确认不进关系表也不进 store（体积断言：args.bin /
+        trace.clean.json / visualize_data.bin 无 artifact 行、link 模式
+        零 store 拷贝）。
+- **实施备注**：迁移 `0004` 增 `args_dump_entry`（task_id/stage/role/
+  arg_index/kind/dtype/shape/bin_size）与 `scope_stats_entry`（site/ring/
+  phase/payload，seq=0 为元行）两表；`incore_entry` 自 v1 已预留。
+  `ingest/` 增三个纯解析器：`args_dump.py`（args_dump.json 元数据，payload
+  args.bin 永不读/拷/登记）、`scope_stats.py`（scope_stats.jsonl 元行 +
+  记录）、`incore.py`（manifest_export.csv 每 func 一条 + 可选
+  instr_metrics.json 并入 metrics）。`ingest_capture` 自动发现
+  `dfx_outputs/args_dump/args_dump.json` 与 `dfx_outputs/scope_stats/
+  scope_stats.jsonl`（与 pmu 同模式），仅登记小元数据文件、绝不登记
+  args.bin。新增 `ingest_incore(db, source, run_id)`（独立入口，
+  幂等：事务内 delete+insert incore 行；登记 manifest/instr_metrics 为
+  link 工件，原始 trace/visualize_data.bin 永不登记）。API 增
+  `ProfileDB.ingest_incore`；CLI 增 `pfdb ingest-incore <dir> --run <id>`；
+  prune 的 `_RUN_TABLES` 补三张新表。5 条模态测试全绿。
 
 ### T10 文档、技能与定型 ｜ 依赖：任意（最后做） ｜ 规模：S
 
