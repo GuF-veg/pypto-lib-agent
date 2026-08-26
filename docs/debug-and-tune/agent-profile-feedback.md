@@ -20,6 +20,13 @@ caller — decides whether and how to optimize
 Neither layer collects a profile, changes source code, identifies an
 optimization, or invokes another tuning workflow.
 
+> **Coexistence with pfdb.** This document describes the stateless
+> `profile-feedback` analyzer (one-shot reads, no database). For an iterative
+> tuning loop with a retained working set, render images, and MCP tools, use
+> the [Profile Database (pfdb)](profile-db.md) instead. The two tools share the
+> evidence-state and byte-budget ideas but use different fact vocabularies;
+> they coexist rather than replacing each other.
+
 The examples below use `python <profile-feedback-script>` as the analyzer
 entry point. Agent integrations provide its concrete location; this guide
 defines the stable arguments, records, and evidence semantics.

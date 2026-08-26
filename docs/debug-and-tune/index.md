@@ -18,6 +18,7 @@ then move from the broadest evidence to the narrowest:
 | Measure end-to-end time and inspect the task schedule | [Performance Tuning](performance-tuning.md) |
 | Map a profiling command to the artifacts and evidence it produces | [Profiling Commands and Their Evidence](profiling-options.md) |
 | Query compact L2, compiler, PMU, and in-core evidence from existing artifacts | [Agent Profile Feedback](agent-profile-feedback.md) |
+| Ingest artifacts into a query-first database, render swimlanes, and drive an MCP agent | [Profile Database (pfdb)](profile-db.md) |
 | Choose matmul row, N, and K tiles | [Cube Tile Tuning](cube-tile-tuning.md) |
 | Inspect one generated kernel in the operator simulator | [In-Core Simulator Profiling](incore-simulator-profiling.md) |
 | Partition phases inside a multi-core CCE extern kernel on real hardware | [CCE In-Core Profiling](cce-incore-profiling.md) |

@@ -825,7 +825,20 @@ tests ────▶ 可直接触达任何层，但金质题库只走 api/CLI/M
 
 - **做什么**：`docs/debug-and-tune/` 用户手册（与代码行为一致）；决定现有
   profile-feedback skill 与 DB 的并存/替代关系并落地；发布检查清单。
-- **验收**：[ ] 文档示例全部可执行；[ ] 仓库 lint 全绿；[ ] 技能决策有记录。
+  （**T10 已完成**，见 README 状态表。）
+- **验收**：
+  - [x] 文档示例全部可执行（`docs/debug-and-tune/profile-db.md` 的每条
+        CLI 命令对合成 fixture 实跑验证，与代码行为一致）；
+  - [x] 仓库 lint 全绿（pre-commit 4/4 + ruff + import-linter 契约保持）；
+  - [x] 技能决策有记录（**并存不替代**，见附录 A 与 profile-db.md /
+        agent-profile-feedback.md 交叉说明）。
+- **实施备注**：新增 `docs/debug-and-tune/profile-db.md` 用户手册（英文，
+  与代码一致：init/ingest/ingest-incore/query 五级缩放/render/MCP/
+  lifecycle/扩展模态/facts 证据语义/发布检查清单），并在
+  `docs/debug-and-tune/index.md` 加入口、在 `agent-profile-feedback.md`
+  加并存交叉说明。技能决策定为「并存」：profile-feedback 技能保持无状态
+  单次直读，pfdb 是迭代调优的查询优先工作台；二者共享证据状态 + 字节预算
+  思想、事实词表不同。发布检查清单落在手册末尾。
 
 ### 里程碑依赖图
 
@@ -872,6 +885,12 @@ T9（T1/T2 后随时启动）    T10（最后）
   **字节预算 + TRUNCATED 显式标记**。
 - 不迁移代码、不要求 CLI/输出兼容；该脚本继续独立存在，试点期过后由
   T10 决定去留。
+- **T10 已定案：并存（不替代）**。profile-feedback 技能保持无状态、
+  免建库的单次直读定位（适合快速一次性检视）；pfdb 是面向迭代调优循环的
+  查询优先工作台（ingest 一次、反复查询、工作集/prune、渲染、MCP）。
+  二者共享证据状态与字节预算两个思想，但事实词表不同，按工作流二选一、
+  不混用输出（详见 `docs/debug-and-tune/profile-db.md` 与
+  `agent-profile-feedback.md` 的交叉说明）。
 
 ## 附录 B：标定数据（`tools/calibrate.py` 对 Qwen3Decode 真实捕获实测）
 

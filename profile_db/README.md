@@ -62,7 +62,10 @@
   <dir> --run <id>` 把 in-core `manifest_export.csv` 状态与
   `instr_metrics.json` 指标并入 `incore_entry`；原始大文件（args.bin、
   trace.clean.json、visualize_data.bin）永不进表也不进 store。
-- ⬜ T10 见 DESIGN.md 第 11 节。
+- ✅ T10 文档与定型：`docs/debug-and-tune/profile-db.md` 用户手册（与代码
+  行为一致，示例可执行）+ 发布检查清单；技能决策定为「并存不替代」
+  （profile-feedback 技能 = 无状态单次直读；pfdb = 迭代调优查询优先
+  工作台），记录于 DESIGN 附录 A 与文档交叉说明。T0–T10 全部完成。
 
 ## 安装与使用
 
