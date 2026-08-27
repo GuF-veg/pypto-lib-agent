@@ -17,10 +17,19 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Public documentation and teaching examples are English-only.
-DEFAULT_INCLUDED_PREFIXES = ["README.md", "docs/", "examples/"]
+# Public documentation, teaching examples, and all profile_db source are English-only.
+# profile_db/DESIGN.md and profile_db/README.md are the only Chinese documents
+# (explicit user requirement); they are simply not listed below.
+DEFAULT_INCLUDED_PREFIXES = [
+    "README.md",
+    "docs/",
+    "examples/",
+    "profile_db/src/",
+    "profile_db/tests/",
+    "profile_db/examples/",
+]
 
-# Excluded sub-directories within included paths
+# Excluded sub-directories and files within included paths
 DEFAULT_EXCLUDED_PATTERNS = ["examples/docs"]
 
 

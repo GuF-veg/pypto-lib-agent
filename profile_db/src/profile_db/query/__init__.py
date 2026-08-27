@@ -25,6 +25,7 @@ from profile_db.query import (  # noqa: F401  (import side-effect: registration)
     handlers_z2,
     handlers_z3,
     handlers_z4,
+    handlers_modalities,
 )
 from profile_db.query.registry import (
     QuerySpec,

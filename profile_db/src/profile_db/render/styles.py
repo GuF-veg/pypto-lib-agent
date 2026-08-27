@@ -73,6 +73,13 @@ SIBLING_ALPHA = 0.4
 ARROW_WIDTH = 0.6
 ANNOTATION_FONT_SIZE = 9
 
+# Dependency arrows drawn by R1. A wide window on a real capture has
+# thousands of eligible edges; past a couple of hundred the overlay is an
+# unreadable hairball and dominates rasterization time. Excess edges are
+# dropped in edge_id order and the count is recorded in the manifest note,
+# so the omission is always visible (never a silent cap).
+MAX_DEPENDENCY_ARROWS = 200
+
 
 def color_for_engine(engine: str, ordered_engines: list[str]) -> str:
     """Stable color for an engine: fixed map first, then palette by rank."""

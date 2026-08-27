@@ -40,7 +40,12 @@ def _load_bands(conn, run_id: int, engine: str | None) -> dict[str, list[tuple]]
     return by_engine
 
 
-@register("density", "全貌:时间去哪了?哪个引擎闲、哪些时间带利用率塌陷?", DensityParams)
+@register(
+    "density",
+    "Survey: where did the time go — which engine sits idle and which time "
+    "bands collapse in occupancy?",
+    DensityParams,
+)
 def density(conn, params: DensityParams) -> list[Fact]:
     if common.one(conn, "SELECT 1 FROM run WHERE run_id = ?", [params.run_id]) is None:
         return common.run_missing("BAND", params.run_id)
@@ -80,7 +85,12 @@ def density(conn, params: DensityParams) -> list[Fact]:
     return facts
 
 
-@register("sparse_regions", "定位:哪些时间带利用率塌陷、各自卡在什么原因?", SparseRegionsParams)
+@register(
+    "sparse_regions",
+    "Locate: which time bands collapse in occupancy, and what is each one "
+    "blocked on?",
+    SparseRegionsParams,
+)
 def sparse_regions(conn, params: SparseRegionsParams) -> list[Fact]:
     run_id = params.run_id
     if common.one(conn, "SELECT 1 FROM run WHERE run_id = ?", [run_id]) is None:
@@ -102,7 +112,10 @@ def sparse_regions(conn, params: SparseRegionsParams) -> list[Fact]:
         evidence = Evidence.PROVEN if kind != "unknown" else Evidence.UNPROVEN
         fields = common.fields(
             run_id=run_id,
-            band_idx=band_idx,
+            # Storage band index (5 µs granularity), NOT a density display
+            # bucket: feed why_sparse the t0_us/t1_us window below, never
+            # this number as its ``band``.
+            stored_band_idx=band_idx,
             t0_us=common.us(t0),
             t1_us=common.us(t1),
             engine=engine,

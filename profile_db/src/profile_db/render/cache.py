@@ -116,10 +116,15 @@ class RenderCache:
                 except OSError:
                     pass
             return None
-        now = os.stat(png).st_mtime_ns if png.exists() else None
-        if now is not None:
-            os.utime(png, ns=(now, now))
-            os.utime(manifest_path, ns=(now, now))
+        # Stamp the current time, not the file's own mtime — restamping a
+        # file with its existing value is a no-op, which would turn the
+        # eviction order back into insertion order (FIFO) and let a cold
+        # entry outlive a repeatedly requested one.
+        for path in (png, manifest_path):
+            try:
+                os.utime(path, None)
+            except OSError:
+                pass
         return data, manifest
 
     def put(
@@ -146,19 +151,41 @@ class RenderCache:
         the byte budget. PNG and its manifest are removed together. The
         freshly written pair is never a victim: an entry larger than the
         whole budget survives rather than leaving ``put`` with a dangling
-        path."""
+        path.
+
+        The directory is scanned once and the running total is decremented
+        as files go; re-scanning per victim would make a bulk eviction
+        quadratic in the number of cached files.
+        """
         protected = set(protect or ())
-        while _total_bytes(self.root) > self.max_bytes:
-            candidates = [p for p in _all_cache_files(self.root) if p not in protected]
-            if not candidates:
+        try:
+            entries = [(p, p.stat()) for p in _all_cache_files(self.root)]
+        except OSError:
+            return
+        total = sum(stat.st_size for _p, stat in entries)
+        if total <= self.max_bytes:
+            return
+        candidates = sorted(
+            ((p, stat) for p, stat in entries if p not in protected),
+            key=lambda item: item[1].st_mtime_ns,
+        )
+        sizes = {p: stat.st_size for p, stat in entries}
+        removed: set[Path] = set()
+        for victim, _stat in candidates:
+            if total <= self.max_bytes:
                 return
-            victim = min(candidates, key=lambda p: p.stat().st_mtime_ns)
+            if victim in removed:
+                continue
             stem = victim.name.removesuffix(_PNG_SUFFIX).removesuffix(_MANIFEST_SUFFIX)
             sibling = victim.parent / f"{stem}{_MANIFEST_SUFFIX}"
             if sibling == victim:
                 sibling = victim.parent / f"{stem}{_PNG_SUFFIX}"
             for path in (victim, sibling):
+                if path in removed or path in protected:
+                    continue
                 try:
                     path.unlink()
                 except OSError:
-                    pass
+                    continue
+                removed.add(path)
+                total -= sizes.get(path, 0)

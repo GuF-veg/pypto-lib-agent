@@ -39,6 +39,7 @@ from profile_db.render.styles import (
     FIGURE_HEIGHT_IN,
     FIGURE_WIDTH_IN,
     GAP_FILL,
+    MAX_DEPENDENCY_ARROWS,
     READY_LINE,
     SIBLING_ALPHA,
     TASK_HIGHLIGHT,
@@ -226,16 +227,29 @@ def _draw_bar(ax, core: int, start_us: float, end_us: float, color: str, alpha: 
     )
 
 
-def _representative(rows: Sequence[dict[str, Any]], task_id: str, *, first: bool) -> tuple[float, int] | None:
-    """A task's anchor for an arrow: its earliest start (first=True) or
-    latest end (first=False) plus the core that row sits on."""
-    candidates = [r for r in rows if r["task_id"] == task_id]
-    if not candidates:
-        return None
-    anchor = min(candidates, key=lambda r: r["start_us"]) if first else max(
-        candidates, key=lambda r: r["end_us"]
-    )
-    return (anchor["start_us"] if first else anchor["end_us"], anchor["core_index"])
+def _anchor_index(
+    rows: Sequence[dict[str, Any]],
+) -> dict[str, tuple[tuple[float, int], tuple[float, int]]]:
+    """task_id -> ((earliest start, its core), (latest end, its core)).
+
+    Built once per render. Scanning ``rows`` per edge instead would make
+    the R1 arrow pass O(edges x rows) — 2546 x 706 on a real capture.
+    """
+    index: dict[str, tuple[tuple[float, int], tuple[float, int]]] = {}
+    for row in rows:
+        task = row["task_id"]
+        first = (row["start_us"], row["core_index"])
+        last = (row["end_us"], row["core_index"])
+        current = index.get(task)
+        if current is None:
+            index[task] = (first, last)
+            continue
+        best_first, best_last = current
+        index[task] = (
+            first if first[0] < best_first[0] else best_first,
+            last if last[0] > best_last[0] else best_last,
+        )
+    return index
 
 
 # ---------------------------------------------------------------------------
@@ -292,21 +306,34 @@ def _r1(
             engine = _core_engine(meta, r["core_index"])
             _draw_bar(ax, r["core_index"], start, end, colors.get(engine, "#555555"), BAR_ALPHA)
         # Dependency arrows: producer end -> consumer start, only when both
-        # anchors fall inside the window.
+        # anchors fall inside the window. Capped and reported, because a
+        # wide window holds thousands of eligible edges.
+        anchors = _anchor_index(rows)
+        eligible = 0
+        drawn = 0
         for pred, succ in edges:
-            src = _representative(rows, pred, first=False)
-            dst = _representative(rows, succ, first=True)
+            src = anchors.get(pred)
+            dst = anchors.get(succ)
             if src is None or dst is None:
                 continue
-            src_time, src_core = src
-            dst_time, dst_core = dst
+            src_time, src_core = src[1]
+            dst_time, dst_core = dst[0]
             if not (t0_us <= src_time <= t1_us and t0_us <= dst_time <= t1_us):
                 continue
+            eligible += 1
+            if drawn >= MAX_DEPENDENCY_ARROWS:
+                continue
+            drawn += 1
             ax.annotate(
                 "",
                 xy=(dst_time, dst_core),
                 xytext=(src_time, src_core),
                 arrowprops=dict(arrowstyle="->", color=DEPENDENCY_ARROW, lw=ARROW_WIDTH),
+            )
+        if eligible > drawn:
+            note = (
+                f"{drawn} of {eligible} dependency arrows drawn "
+                f"(cap {MAX_DEPENDENCY_ARROWS}); narrow the window to see the rest"
             )
     ax.axvline(t0_us, color=WINDOW_LINE, linestyle="--", linewidth=0.8)
     ax.axvline(t1_us, color=WINDOW_LINE, linestyle="--", linewidth=0.8)

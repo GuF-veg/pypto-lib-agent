@@ -59,6 +59,12 @@ def _parser() -> argparse.ArgumentParser:
     ingest.add_argument("--captured-at", default=None, help="capture timestamp override")
     ingest.add_argument("--notes", default=None)
     ingest.add_argument("--tags", nargs="*", default=None)
+    ingest.add_argument(
+        "--rank",
+        default=None,
+        dest="rank_label",
+        help="rank label for a multi-rank capture set (default: single)",
+    )
     ingest.add_argument("--copy", action="store_true", help="archive artifacts into .pfdb/store (default: link)")
     ingest.add_argument(
         "--no-prune",
@@ -113,9 +119,18 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help="database path (default: $PFDB_PATH or <cwd>/.pfdb/profile.duckdb)",
     )
+    serve_cmd.add_argument(
+        "--writable",
+        action="store_true",
+        help="allow the trial/baseline/note tools to write (holds the writer lock)",
+    )
 
     prune_cmd = sub.add_parser("prune", help="delete runs outside the working set")
     prune_cmd.add_argument("--keep", type=int, default=3, help="latest runs to retain (default 3)")
+
+    note_cmd = sub.add_parser("note", help="attach a free-text note to a run")
+    note_cmd.add_argument("run_id", type=int, metavar="run")
+    note_cmd.add_argument("text", help="the note text")
 
     compare_cmd = sub.add_parser("compare", help="neutral before/after comparison")
     compare_cmd.add_argument("run_a", type=int)
@@ -245,6 +260,7 @@ def _run_ingest(args: argparse.Namespace) -> int:
             captured_at=args.captured_at,
             notes=args.notes,
             tags=args.tags,
+            rank_label=args.rank_label,
             copy=args.copy,
             git_commit=git_commit,
             git_dirty=git_dirty,
@@ -263,11 +279,13 @@ def _run_ingest(args: argparse.Namespace) -> int:
         f"ingested run {report['run_id']} (program={report['program']} "
         f"level={report['level']} mode={report['store_mode']})"
     )
+    makespan = report["makespan_us"]
+    makespan_text = f"{makespan:.3f}us" if makespan is not None else "unavailable"
     print(
         f"  tasks={report['tasks']} task_rows={report['task_rows']} "
         f"edges={report['edges']} artifacts={report['artifacts']} "
         f"perf_hints={report['perf_hints']} memory={report['memory_entries']} "
-        f"pmu={report['pmu_counters']} makespan={report['makespan_us']:.3f}us"
+        f"pmu={report['pmu_counters']} makespan={makespan_text}"
     )
     return 0
 
@@ -374,7 +392,7 @@ def _run_serve(args: argparse.Namespace) -> int:
         return 2
     from profile_db.mcp_server import run_stdio
 
-    return run_stdio(args.path)
+    return run_stdio(args.path, writable=args.writable)
 
 
 def _run_prune(args: argparse.Namespace) -> int:
@@ -386,6 +404,23 @@ def _run_prune(args: argparse.Namespace) -> int:
     try:
         report = db.prune(keep=args.keep)
         print(f"pruned {len(report['pruned'])} run(s) {report['pruned']}; kept {report['kept']}")
+        return 0
+    except PfdbError as exc:
+        print(f"pfdb: error: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        db.close()
+
+
+def _run_note(args: argparse.Namespace) -> int:
+    try:
+        db = ProfileDB()
+    except PfdbError as exc:
+        print(f"pfdb: error: {exc}", file=sys.stderr)
+        return 1
+    try:
+        db.note(args.run_id, args.text)
+        print(f"note set on run {args.run_id}")
         return 0
     except PfdbError as exc:
         print(f"pfdb: error: {exc}", file=sys.stderr)
@@ -520,6 +555,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_serve(args)
     if args.command == "prune":
         return _run_prune(args)
+    if args.command == "note":
+        return _run_note(args)
     if args.command == "compare":
         return _run_compare(args)
     if args.command == "baseline":

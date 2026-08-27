@@ -10,7 +10,7 @@
 """Neutral before/after comparison with a compatibility gate (DESIGN.md
 6.5/8.2). Two runs are comparable only when their program, swimlane
 level, clock, core count, and core topology all match (the capture-side
-compatibility口径); anything else is refused with a reason. Deltas are
+compatibility gate); anything else is refused with a reason. Deltas are
 plain arithmetic over stored measurements — this module never judges
 whether a change is a win or a regression."""
 

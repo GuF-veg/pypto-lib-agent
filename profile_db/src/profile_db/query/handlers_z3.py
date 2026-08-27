@@ -26,7 +26,12 @@ _DEP_COLS = (
 )
 
 
-@register("task", "定位/施动前约束:这个算子的身份、时序与路径归属是什么?", TaskParams)
+@register(
+    "task",
+    "Locate/constraints: what is this operator's identity, timing, and "
+    "critical-path membership?",
+    TaskParams,
+)
 def task_detail(conn, params: TaskParams) -> list[Fact]:
     fact = common.task_fact(conn, params.run_id, params.task_id)
     if fact is None:
@@ -40,7 +45,12 @@ def task_detail(conn, params: TaskParams) -> list[Fact]:
     return [fact]
 
 
-@register("deps", "施动前约束:候选算子的直接依赖是谁、边上的张量形状/stride/dtype?", DepsParams)
+@register(
+    "deps",
+    "Constraints: who are this operator's direct dependencies, and what tensor "
+    "shape/stride/dtype rides each edge?",
+    DepsParams,
+)
 def deps(conn, params: DepsParams) -> list[Fact]:
     run_id = params.run_id
     if common.task_fact(conn, run_id, params.task_id) is None:
@@ -56,18 +66,14 @@ def deps(conn, params: DepsParams) -> list[Fact]:
     if params.direction == "out":
         # outgoing: edges whose pred is this task (its consumers)
         sql += " AND pred = ?"
+        args.append(params.task_id)
     elif params.direction == "in":
         # incoming: edges whose succ is this task (its producers)
         sql += " AND succ = ?"
+        args.append(params.task_id)
     else:
         sql += " AND (succ = ? OR pred = ?)"
-        args.append(params.task_id)
-        args.append(params.task_id)
-        return [
-            common.dep_fact(run_id, row)
-            for row in common.q(conn, sql + " ORDER BY edge_id", args)
-        ]
-    args.append(params.task_id)
+        args.extend([params.task_id, params.task_id])
     rows = common.q(conn, sql + " ORDER BY edge_id", args)
     if not rows:
         return [
@@ -80,7 +86,12 @@ def deps(conn, params: DepsParams) -> list[Fact]:
     return [common.dep_fact(run_id, row) for row in rows]
 
 
-@register("subgraph", "施动前约束:这个算子的进出邻域有多深、多宽?", SubgraphParams)
+@register(
+    "subgraph",
+    "Constraints: how deep and how wide is this operator's in/out "
+    "neighborhood?",
+    SubgraphParams,
+)
 def subgraph(conn, params: SubgraphParams) -> list[Fact]:
     run_id = params.run_id
     if common.task_fact(conn, run_id, params.task_id) is None:
@@ -102,6 +113,7 @@ def subgraph(conn, params: SubgraphParams) -> list[Fact]:
     node_depth: dict[str, int] = {params.task_id: 0}
     frontier = [params.task_id]
     depth = 0
+    capped = False
     while frontier and depth < params.depth:
         nxt: list[str] = []
         for node in frontier:
@@ -109,20 +121,26 @@ def subgraph(conn, params: SubgraphParams) -> list[Fact]:
                 if child in node_depth:
                     continue
                 if len(node_depth) >= params.max_nodes:
-                    break
+                    capped = True
+                    continue
                 node_depth[child] = depth + 1
                 nxt.append(child)
         frontier = nxt
         depth += 1
     # include direct producers for context (depth -1), capped the same way
     for pred in preds.get(params.task_id, ()):
-        if pred not in node_depth and len(node_depth) < params.max_nodes:
-            node_depth[pred] = -1
+        if pred in node_depth:
+            continue
+        if len(node_depth) >= params.max_nodes:
+            capped = True
+            continue
+        node_depth[pred] = -1
 
-    capped = any(
-        child not in node_depth for node in succ for child in succ[node]
-    ) and len(node_depth) >= params.max_nodes
-
+    nodes = sorted(node_depth, key=common.num_key)
+    # A ``pred`` may be a host-side creator pseudo node with no task row
+    # (deps.json keeps those verbatim); report it as an external node
+    # instead of assuming every neighbor is a task.
+    identities = common.task_identities(conn, run_id, nodes)
     facts: list[Fact] = [
         Fact(
             "SUBGRAPH",
@@ -131,37 +149,54 @@ def subgraph(conn, params: SubgraphParams) -> list[Fact]:
                 task_id=params.task_id,
                 depth=params.depth,
                 nodes=len(node_depth),
+                external_nodes=sum(1 for node in nodes if node not in identities) or None,
                 capped=capped,
             ),
             Evidence.MEASURED,
         )
     ]
-    for node in sorted(node_depth, key=common.num_key):
-        row = common.task_row(conn, run_id, node)
+    for node in nodes:
+        identity = identities.get(node)
+        if identity is None:
+            facts.append(
+                Fact(
+                    "NODE",
+                    common.fields(
+                        run_id=run_id,
+                        task_id=node,
+                        kind="external",
+                        depth=node_depth[node],
+                    ),
+                    Evidence.UNAVAILABLE,
+                )
+            )
+            continue
+        name, family, engine = identity
         facts.append(
             Fact(
                 "NODE",
                 common.fields(
                     run_id=run_id,
                     task_id=node,
-                    name=row[1],
-                    family=row[2],
-                    engine=row[3],
+                    name=name,
+                    family=family,
+                    engine=engine,
                     depth=node_depth[node],
                 ),
                 Evidence.MEASURED,
             )
         )
+    in_subgraph = set(node_depth)
+    marks = ", ".join("?" for _ in nodes)
     edge_rows = common.q(
         conn,
         f"SELECT {_DEP_COLS} FROM dep_edge WHERE run_id = ? "
-        "AND pred IN (SELECT task_id FROM task WHERE run_id = ?) ORDER BY edge_id",
-        [run_id, run_id],
+        f"AND pred IN ({marks}) ORDER BY edge_id",
+        [run_id, *nodes],
     )
-    in_subgraph = set(node_depth)
     facts.extend(
         common.dep_fact(run_id, row)
         for row in edge_rows
-        if row[0] in in_subgraph and row[1] in in_subgraph
+        if row[1] in in_subgraph
     )
     return facts

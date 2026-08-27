@@ -104,6 +104,7 @@ def update_run(conn: duckdb.DuckDBPyConnection, run_id: int, meta: Mapping[str, 
             program = ?, platform = ?, device_id = ?, captured_at = CAST(? AS TIMESTAMP),
             swimlane_level = ?, clock_freq_hz = ?, num_cores = ?,
             core_types = CAST(? AS JSON), core_to_thread = CAST(? AS JSON),
+            rank_label = ?,
             git_commit = ?, git_dirty = ?, runtime_cfg = CAST(? AS JSON),
             bench_min_us = ?, bench_median_us = ?, bench_mean_us = ?,
             bench_max_us = ?, bench_rounds = ?,
@@ -120,6 +121,7 @@ def update_run(conn: duckdb.DuckDBPyConnection, run_id: int, meta: Mapping[str, 
             meta["num_cores"],
             json.dumps(meta["core_types"]),
             json.dumps(meta["core_to_thread"]),
+            meta.get("rank_label") or "single",
             meta.get("git_commit"),
             meta.get("git_dirty"),
             json.dumps(redact_paths(meta.get("runtime_cfg") or {})),
@@ -374,13 +376,14 @@ def insert_pmu_counters(
             counter["task_id"],
             counter["counter"],
             counter["value"],
+            counter.get("total_cycles"),
         )
         for index, counter in enumerate(counters)
     ]
     _executemany(
         conn,
-        "INSERT INTO pmu_counter (pmu_id, run_id, task_id, counter, value) "
-        "VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO pmu_counter (pmu_id, run_id, task_id, counter, value, total_cycles) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
         rows,
     )
 

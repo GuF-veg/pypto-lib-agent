@@ -83,32 +83,40 @@ def build_gaps(
         if edge.pred not in chain:
             chain.append(edge.pred)
 
-    def ready_us(task_id: str) -> float | None:
-        fins = [
-            tasks[p].max_finish_us
-            for p in preds.get(task_id, ())
-            if p in tasks and tasks[p].max_finish_us is not None
-        ]
-        return max(fins) if fins else None
+    # ready(task) and the producer-FIN fold below do not depend on the gap
+    # being classified, so they are computed once. Recomputing them inside
+    # classify() would make the pass O(gaps x tasks x preds) — the only
+    # unbounded term in this derivator.
+    ready_by_task: dict[str, float] = {}
+    producer_fin_by_task: dict[str, dict[str, float]] = {}
+    for task_id in tasks:
+        fins: dict[str, float] = {}
+        for p in preds.get(task_id, ()):
+            producer = tasks.get(p)
+            if producer is not None and producer.max_finish_us is not None:
+                fins[p] = producer.max_finish_us
+        if fins:
+            producer_fin_by_task[task_id] = fins
+            ready_by_task[task_id] = max(fins.values())
 
     # Resolve the two derivation-rule universes once per (engine, gap).
-    by_engine: dict[str, dict[str, TaskTiming]] = {}
+    by_engine: dict[str, list[TaskTiming]] = {}
     for task in tasks.values():
         if task.engine is not None:
-            by_engine.setdefault(task.engine, {})[task.task_id] = task
+            by_engine.setdefault(task.engine, []).append(task)
 
     def classify(
         engine: str, t0_us: float, t1_us: float
     ) -> tuple[str, tuple | None, str]:
-        engine_tasks = by_engine.get(engine, {})
+        engine_tasks = by_engine.get(engine, ())
         if level >= 2:
             candidates = sorted(
                 (
                     task.task_id
-                    for task in engine_tasks.values()
+                    for task in engine_tasks
                     if task.min_start_us is not None
                     and task.min_start_us > t0_us
-                    and (ready := ready_us(task.task_id)) is not None
+                    and (ready := ready_by_task.get(task.task_id)) is not None
                     and ready <= t0_us
                 ),
                 key=num_key,
@@ -116,20 +124,17 @@ def build_gaps(
             if candidates:
                 return DISPATCH_WAIT, tuple(candidates), Evidence.PROVEN.value
 
-            active = [
-                task
-                for task in engine_tasks.values()
-                if task.min_start_us is not None
-                and task.max_finish_us is not None
-                and task.min_start_us < t1_us
-                and task.max_finish_us > t0_us
-            ]
             finishes: dict[str, float] = {}
-            for task in active:
-                for p in preds.get(task.task_id, ()):
-                    producer = tasks.get(p)
-                    if producer is not None and producer.max_finish_us is not None:
-                        finishes[p] = max(finishes.get(p, -1.0), producer.max_finish_us)
+            for task in engine_tasks:
+                if (
+                    task.min_start_us is None
+                    or task.max_finish_us is None
+                    or task.min_start_us >= t1_us
+                    or task.max_finish_us <= t0_us
+                ):
+                    continue
+                for p, fin in producer_fin_by_task.get(task.task_id, {}).items():
+                    finishes[p] = max(finishes.get(p, -1.0), fin)
             if finishes:
                 latest = max(finishes.values())
                 lagging = tuple(

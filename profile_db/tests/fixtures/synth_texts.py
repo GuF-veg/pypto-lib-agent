@@ -62,12 +62,12 @@ PMU_TEXT_A = (
 )
 
 PMU_EXPECTED_A = [
-    {"task_id": "0x200000a00", "counter": "pmu_total_cycles", "value": 1000.0},
-    {"task_id": "0x200000a00", "counter": "vec_busy_cycles", "value": 900.0},
-    {"task_id": "0x200000a00", "counter": "cube_busy_cycles", "value": 100.0},
-    {"task_id": "0x200000b00", "counter": "pmu_total_cycles", "value": 2000.0},
-    {"task_id": "0x200000b00", "counter": "vec_busy_cycles", "value": 200.0},
-    {"task_id": "0x200000b00", "counter": "cube_busy_cycles", "value": 1600.0},
+    {"task_id": "0x200000a00", "counter": "pmu_total_cycles", "value": 1000.0, "total_cycles": 1000.0},
+    {"task_id": "0x200000a00", "counter": "vec_busy_cycles", "value": 900.0, "total_cycles": 1000.0},
+    {"task_id": "0x200000a00", "counter": "cube_busy_cycles", "value": 100.0, "total_cycles": 1000.0},
+    {"task_id": "0x200000b00", "counter": "pmu_total_cycles", "value": 2000.0, "total_cycles": 2000.0},
+    {"task_id": "0x200000b00", "counter": "vec_busy_cycles", "value": 200.0, "total_cycles": 2000.0},
+    {"task_id": "0x200000b00", "counter": "cube_busy_cycles", "value": 1600.0, "total_cycles": 2000.0},
 ]
 
 # A different counter roster plus a sparse cell: column-name dependence
@@ -79,10 +79,10 @@ PMU_TEXT_B = (
 )
 
 PMU_EXPECTED_B = [
-    {"task_id": "4294967297", "counter": "pmu_total_cycles", "value": 5000.0},
-    {"task_id": "4294967297", "counter": "mte2_busy_cycles", "value": 100.0},
-    {"task_id": "4294967298", "counter": "pmu_total_cycles", "value": 6000.0},
-    {"task_id": "4294967298", "counter": "fixpipe_cycles", "value": 700.0},
+    {"task_id": "4294967297", "counter": "pmu_total_cycles", "value": 5000.0, "total_cycles": 5000.0},
+    {"task_id": "4294967297", "counter": "mte2_busy_cycles", "value": 100.0, "total_cycles": 5000.0},
+    {"task_id": "4294967298", "counter": "pmu_total_cycles", "value": 6000.0, "total_cycles": 6000.0},
+    {"task_id": "4294967298", "counter": "fixpipe_cycles", "value": 700.0, "total_cycles": 6000.0},
 ]
 
 BENCH_TEXT = "[RUN]   effective_us (100 rounds) min=12.10 median=13.00 mean=13.20 max=15.00"

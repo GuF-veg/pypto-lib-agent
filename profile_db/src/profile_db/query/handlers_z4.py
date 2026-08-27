@@ -43,11 +43,19 @@ _ED_EVIDENCE = {
 
 
 def _upstream_depth(conn, run_id: int, task_id: str) -> int:
+    """Longest producer chain above ``task_id`` (0 when it has none).
+
+    ``UNION`` (not ``UNION ALL``) is load-bearing: the recursion walks a
+    DAG, so ``UNION ALL`` enumerates every distinct *path* rather than
+    every node. On a 266-task / 2546-edge capture that is ~11M
+    materialized rows for one call; deduplicating on (task_id, depth)
+    brings the same answer back in ~490.
+    """
     row = common.one(
         conn,
         "WITH RECURSIVE up(task_id, depth) AS ("
         "  SELECT ?, 0 "
-        "  UNION ALL "
+        "  UNION "
         "  SELECT e.pred, up.depth + 1 FROM dep_edge e "
         "  JOIN up ON e.run_id = ? AND e.succ = up.task_id "
         "  JOIN task p ON p.run_id = e.run_id AND p.task_id = e.pred"
@@ -121,7 +129,12 @@ def _pred_ids(conn, run_id: int, task_id: str) -> list[str]:
     return deduped
 
 
-@register("why_late", "归因:这个任务为什么不能更早启动,FIN→dispatch→receive→start 各段各花多少?", WhyLateParams)
+@register(
+    "why_late",
+    "Attribute: why could this task not start earlier — how long was each "
+    "FIN -> dispatch -> receive -> start segment?",
+    WhyLateParams,
+)
 def why_late(conn, params: WhyLateParams) -> list[Fact]:
     run_id = params.run_id
     task = common.task_row(conn, run_id, params.task_id)
@@ -168,7 +181,12 @@ def why_late(conn, params: WhyLateParams) -> list[Fact]:
     ]
 
 
-@register("why_long", "归因:这个任务为什么跑得久,相比同 family 它在什么位置?", WhyLongParams)
+@register(
+    "why_long",
+    "Attribute: why does this task run long, and where does it rank against "
+    "its own family?",
+    WhyLongParams,
+)
 def why_long(conn, params: WhyLongParams) -> list[Fact]:
     run_id = params.run_id
     task = common.task_row(conn, run_id, params.task_id)
@@ -217,7 +235,11 @@ def why_long(conn, params: WhyLongParams) -> list[Fact]:
     return [Fact("LONG", fields, Evidence.MEASURED)]
 
 
-@register("rows", "定位:这个算子的物理行级时序长什么样?", RowsParams)
+@register(
+    "rows",
+    "Locate: what does this operator's physical row-level timing look like?",
+    RowsParams,
+)
 def rows(conn, params: RowsParams) -> list[Fact]:
     run_id = params.run_id
     if common.task_row(conn, run_id, params.task_id) is None:
@@ -255,7 +277,12 @@ def rows(conn, params: RowsParams) -> list[Fact]:
     ]
 
 
-@register("scheduler", "归因:调度/编排相位在这个任务前后做了什么?", SchedulerParams)
+@register(
+    "scheduler",
+    "Attribute: what did the scheduler/orchestrator phases do around this "
+    "task?",
+    SchedulerParams,
+)
 def scheduler(conn, params: SchedulerParams) -> list[Fact]:
     run_id = params.run_id
     task = common.task_row(conn, run_id, params.task_id)
@@ -318,7 +345,12 @@ def scheduler(conn, params: SchedulerParams) -> list[Fact]:
     return facts
 
 
-@register("early_dispatch", "归因:early dispatch 的资格用上了吗、证明到哪一步?", EarlyDispatchParams)
+@register(
+    "early_dispatch",
+    "Attribute: was the early-dispatch eligibility actually used, and how far "
+    "does the proof reach?",
+    EarlyDispatchParams,
+)
 def early(conn, params: EarlyDispatchParams) -> list[Fact]:
     run_id = params.run_id
     if common.task_row(conn, run_id, params.task_id) is None:
@@ -366,7 +398,12 @@ def early(conn, params: EarlyDispatchParams) -> list[Fact]:
     ]
 
 
-@register("pmu", "施动前约束:哪根管子接近满载、总周期多少?", PmuParams)
+@register(
+    "pmu",
+    "Constraints: which pipe is close to saturation, and what is the total "
+    "cycle count?",
+    PmuParams,
+)
 def pmu(conn, params: PmuParams) -> list[Fact]:
     run_id = params.run_id
     if common.task_row(conn, run_id, params.task_id) is None:
@@ -390,14 +427,31 @@ def pmu(conn, params: PmuParams) -> list[Fact]:
             total_cycles=total,
         )
         if total:
-            fields["ratio"] = value / total
+            fields["ratio"] = round(value / total, 6)
         facts.append(Fact("PMU", fields, Evidence.MEASURED))
+    # Without a total-cycles column there is no denominator, so the
+    # occupancy ratio this query exists to report is genuinely absent —
+    # say so instead of quietly omitting the field.
+    if not any(row[2] for row in rows):
+        facts.append(
+            Fact(
+                "EVIDENCE",
+                common.fields(
+                    run_id=run_id,
+                    task_id=params.task_id,
+                    metric="ratio",
+                    reason="pmu.csv carries no total-cycles column",
+                ),
+                Evidence.UNAVAILABLE,
+            )
+        )
     return facts
 
 
 @register(
     "critical_path",
-    "定位:真正决定时长的链是哪条(observed/static)、stall 在哪几个任务炸开?",
+    "Locate: which chain actually decides the duration (observed/static), and "
+    "at which tasks does stall blow up?",
     CriticalPathParams,
 )
 def critical_path(conn, params: CriticalPathParams) -> list[Fact]:
@@ -437,7 +491,11 @@ def critical_path(conn, params: CriticalPathParams) -> list[Fact]:
     ]
 
 
-@register("perf_hints", "施动前约束:编译器给了什么 tile/排布 hint?", PerfHintsParams)
+@register(
+    "perf_hints",
+    "Constraints: what tile/placement hints did the compiler emit?",
+    PerfHintsParams,
+)
 def perf_hints(conn, params: PerfHintsParams) -> list[Fact]:
     run_id = params.run_id
     if common.one(conn, "SELECT 1 FROM run WHERE run_id = ?", [run_id]) is None:
@@ -459,7 +517,11 @@ def perf_hints(conn, params: PerfHintsParams) -> list[Fact]:
     ]
 
 
-@register("memory", "施动前约束:各缓冲空间离硬件上限多远?", MemoryParams)
+@register(
+    "memory",
+    "Constraints: how far is each buffer space from its hardware limit?",
+    MemoryParams,
+)
 def memory(conn, params: MemoryParams) -> list[Fact]:
     run_id = params.run_id
     if common.one(conn, "SELECT 1 FROM run WHERE run_id = ?", [run_id]) is None:

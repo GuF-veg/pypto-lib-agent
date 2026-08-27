@@ -55,7 +55,25 @@ class SparseRegionsParams(RunIdParams):
 
 
 class WhySparseParams(RunIdParams):
-    band: int = Field(ge=0, description="display bucket index from density")
+    # Two ways to address the window, exactly one required (the handler
+    # raises QueryError otherwise). Both coordinates are exact integers —
+    # never round-trip a display-rounded µs bound, which would drag in the
+    # neighbouring band.
+    #  - band + bands: the display bucket axis of ``density``. ``bands``
+    #    MUST equal the value passed to ``density``, or the bucket index
+    #    denotes a different window.
+    #  - stored_band: the 5 µs storage band index, which is what
+    #    ``sparse_regions`` reports as ``stored_band_idx``. It is NOT
+    #    interchangeable with ``band``.
+    band: int | None = Field(
+        default=None, ge=0, description="display bucket index from density"
+    )
+    bands: int = Field(
+        default=20, ge=1, le=1000, description="display bucket count density used"
+    )
+    stored_band: int | None = Field(
+        default=None, ge=0, description="storage band index from sparse_regions"
+    )
     engine: str | None = None
 
 
@@ -120,4 +138,21 @@ class PerfHintsParams(RunIdParams):
 
 
 class MemoryParams(RunIdParams):
+    pass
+
+
+class IncoreParams(RunIdParams):
+    kernel: str | None = Field(default=None, description="restrict to one kernel")
+
+
+class ArgsDumpParams(RunIdParams):
+    task_id: str | None = Field(default=None, description="restrict to one task")
+    stage: str | None = Field(default=None, description="restrict to one stage")
+
+
+class ScopeStatsParams(RunIdParams):
+    site: str | None = Field(default=None, description="restrict to one site")
+
+
+class BenchParams(RunIdParams):
     pass

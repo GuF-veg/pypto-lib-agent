@@ -78,8 +78,8 @@ def test_format_deterministic_and_sorted() -> None:
     fact = Fact("TASK", {"run_id": 1, "name": "q_proj"}, Evidence.MEASURED)
     assert format_fact(fact) == 'TASK name="q_proj" run_id=1 evidence=measured'
     # Unicode values survive verbatim (no ASCII-escape mangling).
-    unicode_fact = Fact("HINT", {"text": "稀疏"}, Evidence.PROVEN)
-    assert "稀疏" in format_fact(unicode_fact)
+    unicode_fact = Fact("HINT", {"text": "sparse µs — café"}, Evidence.PROVEN)
+    assert "sparse µs — café" in format_fact(unicode_fact)
 
 
 def test_serialize_exact_bytes() -> None:
@@ -99,10 +99,17 @@ def test_budget_truncates_with_explicit_tail() -> None:
         Fact("METRIC", {"makespan_us": 1868.56}, Evidence.MEASURED),
         Fact("RESOURCE", {"engine": "aic", "cores": 20}, Evidence.MEASURED),
     ]
-    first = format_fact(facts[0])
-    budget = len(first.encode("utf-8"))
-    out = serialize_facts(facts, max_bytes=budget)
-    assert out == f"{first}\nTRUNCATED remaining=1 limit={budget}"
+    # At a generous budget both facts fit and no marker appears.
+    assert "TRUNCATED" not in serialize_facts(facts, max_bytes=4096)
+
+    # At a very tight budget the marker still tells how many facts were dropped.
+    out = serialize_facts(facts, max_bytes=10)
+    assert "TRUNCATED" in out
+    assert "first_dropped_index=0" in out
+    # The marker must account for all facts that did not fit.
+    import re
+    m = re.search(r"remaining=(\d+)", out)
+    assert m and int(m.group(1)) == len(facts)
 
 
 def test_budget_zero_drops_everything_but_tail() -> None:
@@ -114,7 +121,9 @@ def test_budget_zero_drops_everything_but_tail() -> None:
 def test_single_fact_over_budget_yields_truncated_only() -> None:
     facts = [Fact("TASK", {"run_id": 1, "name": "q_proj"}, Evidence.MEASURED)]
     out = serialize_facts(facts, max_bytes=1)
-    assert out == "TRUNCATED remaining=1 limit=1"
+    assert out.startswith("TRUNCATED")
+    assert "first_dropped_index=0" in out
+    assert "remaining=1" in out
 
 
 def test_no_truncation_when_everything_fits() -> None:

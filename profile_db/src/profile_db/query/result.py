@@ -10,9 +10,10 @@
 """Result envelope for a query (DESIGN.md 9).
 
 ``QueryOutput`` pairs the handler's facts with their budget-limited DSL
-text. The byte budget is applied by ``facts.serialize_facts``, which ends
-the stream with an explicit ``TRUNCATED remaining=.. limit=..`` line when
-anything is dropped — omission is always signalled, never silent.
+text. The byte budget is applied by ``facts.truncate_facts``, which cuts a
+prefix and reports how many facts were dropped, so ``truncated`` is a
+counted fact rather than a substring guess and the stream always ends with
+an explicit ``TRUNCATED`` line.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Sequence
 
-from profile_db.facts import Fact, serialize_facts
+from profile_db.facts import Fact, serialize_facts, truncate_facts
 
 DEFAULT_BUDGET_BYTES = 4096
 
@@ -40,6 +41,9 @@ def render(facts: Sequence[Fact], budget_bytes: int = DEFAULT_BUDGET_BYTES) -> Q
         from profile_db.errors import QueryError
 
         raise QueryError(f"budget_bytes must be at least 1, got {budget_bytes}")
-    text = serialize_facts(facts, budget_bytes)
-    truncated = "\nTRUNCATED " in text
-    return QueryOutput(facts=tuple(facts), text=text, truncated=truncated)
+    _kept, dropped = truncate_facts(facts, budget_bytes)
+    return QueryOutput(
+        facts=tuple(facts),
+        text=serialize_facts(facts, budget_bytes),
+        truncated=dropped > 0,
+    )

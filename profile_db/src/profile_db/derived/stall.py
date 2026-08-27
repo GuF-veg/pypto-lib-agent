@@ -14,7 +14,7 @@ For a consumer task the four timeline points bound its dispatch latency:
     ready ──fin_detect──▶ dispatch ──dispatch_wait──▶ receive
           ──start_wait──▶ start
 
-- ``ready``     = max(FIN) over the direct timed producers (5.3 口径);
+- ``ready``     = max(FIN) over the direct timed producers (5.3 definition);
                  producers without stored timestamps are ignored, and a
                  task with no timed producer stays ``None`` — never guessed;
 - ``fin_detect`` = ``dispatch - ready`` (may be negative: evidence of

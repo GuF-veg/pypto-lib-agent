@@ -28,7 +28,7 @@ from typing import Callable, Mapping, Sequence
 
 from pydantic import BaseModel, ValidationError
 
-from profile_db.errors import QueryError
+from profile_db.errors import PfdbError, QueryError
 from profile_db.facts import Fact
 from profile_db.query.params import (
     CoreParams,
@@ -131,12 +131,23 @@ def execute(
     *,
     budget_bytes: int = 4096,
 ):
-    """Run one query and render its facts under the byte budget."""
+    """Run one query and render its facts under the byte budget.
+
+    Any non-``PfdbError`` escaping a handler is a bug in that handler, but
+    it must still reach the caller as a structured error: CLI and MCP both
+    catch ``PfdbError`` only, so a bare exception would surface as a
+    traceback on the agent's channel.
+    """
     from profile_db.query.result import render
 
     spec = get_query(name)
     model = _coerce(spec, params)
-    facts = spec.handler(conn, model)
+    try:
+        facts = spec.handler(conn, model)
+    except PfdbError:
+        raise
+    except Exception as exc:
+        raise QueryError(f"query {name!r} failed: {type(exc).__name__}: {exc}") from exc
     return render(facts, budget_bytes)
 
 

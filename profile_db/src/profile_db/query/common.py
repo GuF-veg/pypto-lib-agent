@@ -18,7 +18,7 @@ are byte-for-byte deterministic.
 from __future__ import annotations
 
 import json
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 from profile_db.errors import QueryError
 from profile_db.facts import Evidence, Fact
@@ -100,6 +100,28 @@ def task_row(conn, run_id: int, task_id: str) -> tuple | None:
     )
 
 
+def task_identities(
+    conn, run_id: int, task_ids: Sequence[str]
+) -> dict[str, tuple[str | None, str | None, str | None]]:
+    """task_id -> (name, family, engine) for the given ids, in one read.
+
+    Ids absent from the result are not tasks of this run: ``dep_edge.pred``
+    may name a host-side creator pseudo node (``source="creator"``), which
+    the ingest layer preserves verbatim and which has no ``task`` row.
+    Callers must treat a missing key as external, never as a task.
+    """
+    if not task_ids:
+        return {}
+    marks = ", ".join("?" for _ in task_ids)
+    rows = q(
+        conn,
+        f"SELECT task_id, name, family, engine FROM task "
+        f"WHERE run_id = ? AND task_id IN ({marks})",
+        [run_id, *task_ids],
+    )
+    return {str(r[0]): (r[1], r[2], r[3]) for r in rows}
+
+
 def engine_cores(conn, run_id: int) -> dict[str, int]:
     """Engine -> core count from the capture metadata (run.core_types)."""
     row = one(conn, "SELECT CAST(core_types AS VARCHAR) FROM run WHERE run_id = ?", [run_id])
@@ -117,13 +139,35 @@ def guard_window(t0_us: float, t1_us: float) -> None:
         raise QueryError(f"invalid window: t1_us={t1_us} must exceed t0_us={t0_us}")
 
 
-def task_fact(conn, run_id: int, task_id: str) -> Fact | None:
-    """The canonical TASK fact for one logical task, or None when absent."""
-    row = task_row(conn, run_id, task_id)
-    if row is None:
-        return None
+def task_facts(conn, run_id: int, task_ids: Sequence[str]) -> list[Fact]:
+    """TASK facts for many ids in one read, ordered like ``task_ids``.
+
+    The single-id ``task_fact`` in a loop would issue one query per task,
+    which a wide ``region`` window turns into hundreds of round trips.
+    """
+    if not task_ids:
+        return []
+    marks = ", ".join("?" for _ in task_ids)
+    rows = q(
+        conn,
+        "SELECT task_id, name, family, engine, scope, early_dispatch_flag, "
+        "CAST(kernel_ids AS VARCHAR), block_num, num_rows, busy_us, wall_us, "
+        "min_dispatch_us, min_receive_us, min_start_us, max_end_us, "
+        "max_finish_us, on_cpm_observed, on_cpm_static "
+        f"FROM task WHERE run_id = ? AND task_id IN ({marks})",
+        [run_id, *task_ids],
+    )
+    by_id = {str(row[0]): row for row in rows}
+    return [
+        _task_fact_from_row(run_id, by_id[task_id])
+        for task_id in task_ids
+        if task_id in by_id
+    ]
+
+
+def _task_fact_from_row(run_id: int, row: tuple) -> Fact:
     (
-        _tid,
+        task_id,
         name,
         family,
         engine,
@@ -167,6 +211,14 @@ def task_fact(conn, run_id: int, task_id: str) -> Fact | None:
         ),
         Evidence.MEASURED,
     )
+
+
+def task_fact(conn, run_id: int, task_id: str) -> Fact | None:
+    """The canonical TASK fact for one logical task, or None when absent."""
+    row = task_row(conn, run_id, task_id)
+    if row is None:
+        return None
+    return _task_fact_from_row(run_id, row)
 
 
 def gap_fact(run_id: int, row: tuple) -> Fact:

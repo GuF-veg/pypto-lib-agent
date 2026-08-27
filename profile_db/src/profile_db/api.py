@@ -19,13 +19,20 @@ the milestone modules, never a parallel implementation).
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from profile_db.db import ProfileDB as _ProfileDB
 from profile_db.errors import QueryError, RenderError
-from profile_db.facts import Evidence, Fact, serialize_facts
+from profile_db.facts import (
+    Evidence,
+    Fact,
+    serialize_facts,
+    truncate_facts,
+    truncated_line,
+)
 from profile_db.query import execute as execute_query
 
 DEFAULT_BUDGET_BYTES = 4096
@@ -57,7 +64,12 @@ class ProfileDB(_ProfileDB):
     def ingest(self, source, *, prune_after: bool = True, prune_keep: int = 3, **meta) -> dict[str, Any]:
         """Ingest one capture directory; returns the summary dict. By
         default the working set is pruned afterward (latest ``prune_keep``
-        runs survive); pass ``prune_after=False`` to disable."""
+        runs survive); pass ``prune_after=False`` to disable.
+
+        ``**meta`` forwards to ``ingest.ingest_capture`` (program /
+        platform / device_id / captured_at / notes / tags / rank_label /
+        copy / git_* / bench_*).
+        """
         from profile_db.ingest import ingest_capture
 
         report = ingest_capture(self, source, **meta)
@@ -129,6 +141,27 @@ class ProfileDB(_ProfileDB):
 
     # -- lifecycle & short-term memory (DESIGN.md 8) ------------------------
 
+    @contextmanager
+    def _writing(self):
+        """Every mutation outside ingest/prune goes through here.
+
+        DESIGN.md 5.1 makes the database single-writer and puts mutual
+        exclusion on the library lock. The trial/baseline/note writers
+        assign surrogate ids as ``max(id) + 1``, which is a read-then-write
+        that needs the lock to stay correct, and a transaction so a failed
+        multi-statement write leaves no partial row.
+        """
+        from profile_db.db import WriterGuard
+
+        with WriterGuard(self.path or ":memory:"):
+            self.connection.execute("BEGIN TRANSACTION")
+            try:
+                yield self.connection
+            except Exception:
+                self.connection.execute("ROLLBACK")
+                raise
+            self.connection.execute("COMMIT")
+
     def prune(self, keep: int = 3) -> dict[str, Any]:
         """Delete every run outside the working set (latest ``keep`` +
         baseline- and active-trial-referenced runs). Returns a report."""
@@ -140,7 +173,8 @@ class ProfileDB(_ProfileDB):
         """Set the free-text note on a run."""
         if self.connection.execute("SELECT 1 FROM run WHERE run_id = ?", [run_id]).fetchone() is None:
             raise QueryError(f"run {run_id} does not exist")
-        self.connection.execute("UPDATE run SET notes = ? WHERE run_id = ?", [text, run_id])
+        with self._writing() as conn:
+            conn.execute("UPDATE run SET notes = ? WHERE run_id = ?", [text, run_id])
 
     def compare(self, run_a: int, run_b: int) -> Result:
         """Neutral before/after comparison (compatibility-gated). Raises
@@ -158,23 +192,26 @@ class ProfileDB(_ProfileDB):
     ) -> int:
         from profile_db.lifecycle import register_trial as _register_trial
 
-        return _register_trial(
-            self.connection,
-            goal=goal,
-            hypothesis=hypothesis,
-            changed_files=changed_files,
-            parent_trial_id=parent_trial_id,
-        )
+        with self._writing() as conn:
+            return _register_trial(
+                conn,
+                goal=goal,
+                hypothesis=hypothesis,
+                changed_files=changed_files,
+                parent_trial_id=parent_trial_id,
+            )
 
     def bind_trial(self, trial_id: int, run_id: int) -> None:
         from profile_db.lifecycle import bind_trial as _bind_trial
 
-        _bind_trial(self.connection, trial_id, run_id)
+        with self._writing() as conn:
+            _bind_trial(conn, trial_id, run_id)
 
     def set_verdict(self, trial_id: int, verdict: str, evidence_refs: Sequence[Any] = ()) -> None:
         from profile_db.lifecycle import set_verdict as _set_verdict
 
-        _set_verdict(self.connection, trial_id, verdict, evidence_refs)
+        with self._writing() as conn:
+            _set_verdict(conn, trial_id, verdict, evidence_refs)
 
     def list_trials(self, *, active_only: bool = False) -> Result:
         from profile_db.lifecycle import list_trials as _list_trials
@@ -212,13 +249,14 @@ class ProfileDB(_ProfileDB):
     ) -> int:
         from profile_db.lifecycle import add_baseline
 
-        return add_baseline(
-            self.connection,
-            name=name,
-            run_id=run_id,
-            bench_mean_us=bench_mean_us,
-            criteria=criteria,
-        )
+        with self._writing() as conn:
+            return add_baseline(
+                conn,
+                name=name,
+                run_id=run_id,
+                bench_mean_us=bench_mean_us,
+                criteria=criteria,
+            )
 
     def baseline_list(self) -> Result:
         from profile_db.lifecycle import list_baselines
@@ -253,18 +291,36 @@ class ProfileDB(_ProfileDB):
 
 def format_result(result: Result, fmt: str, budget_bytes: int = DEFAULT_BUDGET_BYTES) -> str:
     """Render a Result in one of ``facts`` (DSL, byte-identical to the
-    engine), ``json``, or ``markdown``."""
+    engine), ``json``, or ``markdown``.
+
+    Every format is bounded by the same budget: the fact list is
+    prefix-truncated by ``facts.truncate_facts`` first, then serialized,
+    and each format carries its own explicit truncation marker. A format
+    that silently emitted the untruncated list would let an agent bypass
+    the budget by asking for ``json``.
+    """
+    if fmt not in _FORMATS:
+        raise QueryError(f"unknown format {fmt!r}; use one of: {', '.join(_FORMATS)}")
     if fmt == "facts":
         return serialize_facts(result.facts, budget_bytes)
+    kept, dropped = truncate_facts(result.facts, budget_bytes)
     if fmt == "json":
-        return json.dumps(
-            [_fact_dict(fact) for fact in result.facts],
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-    if fmt == "markdown":
-        return _markdown(result.facts)
-    raise QueryError(f"unknown format {fmt!r}; use one of: {', '.join(_FORMATS)}")
+        payload = [_fact_dict(fact) for fact in kept]
+        if dropped:
+            payload.append(
+                {
+                    "rec": "TRUNCATED",
+                    "first_dropped_index": len(kept),
+                    "remaining": dropped,
+                    "limit": budget_bytes,
+                    "evidence": Evidence.UNAVAILABLE.value,
+                }
+            )
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    text = _markdown(kept)
+    if dropped:
+        text += "\n" + truncated_line(dropped, len(kept), budget_bytes)
+    return text
 
 
 def _fact_dict(fact: Fact) -> dict[str, Any]:

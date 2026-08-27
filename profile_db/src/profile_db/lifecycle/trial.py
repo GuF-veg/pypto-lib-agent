@@ -51,6 +51,10 @@ def bind_trial(conn, trial_id: int, run_id: int) -> None:
     """Attach an ingested run to a trial (the experiment's evidence)."""
     if conn.execute("SELECT 1 FROM trial WHERE trial_id = ?", [trial_id]).fetchone() is None:
         raise LifecycleError(f"trial {trial_id} does not exist")
+    # An active trial's run is prune-protected, so a bogus id would create a
+    # phantom protection and a dangling reference in `trials list`.
+    if conn.execute("SELECT 1 FROM run WHERE run_id = ?", [run_id]).fetchone() is None:
+        raise LifecycleError(f"run {run_id} does not exist; ingest the capture first")
     conn.execute("UPDATE trial SET run_id = ? WHERE trial_id = ?", [run_id, trial_id])
 
 

@@ -44,6 +44,9 @@ _SIZE_CELL = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(B|KB|MB|GB|TB)?\s*$", re.IGNORE
 _BENCH_ROUNDS = re.compile(r"\((\d+)\s+rounds?\)")
 _BENCH_KEYS = {"min", "median", "mean", "max"}
 _ABS_PATH = re.compile(r"/(?:(?:\w+/)?home|root|data\d+)/[^/\s]+")
+# The total-cycles column of pmu.csv, matched by shape because the exact
+# header varies by architecture (DESIGN.md 5.2: PMU column names are dynamic).
+_TOTAL_CYCLES = re.compile(r"^(?=.*total)(?=.*cycle).*$", re.IGNORECASE)
 
 
 def parse_perf_hints(text: str) -> list[dict[str, Any]]:
@@ -119,7 +122,16 @@ def parse_memory_report(text: str) -> list[dict[str, Any]]:
 
 def parse_pmu_csv(text: str) -> list[dict[str, Any]]:
     """Melt a dynamic-column pmu.csv into long form: one row per
-    (task, counter) measurement, the task token preserved verbatim."""
+    (task, counter) measurement, the task token preserved verbatim.
+
+    One column per task carries the task's total cycle count; it is
+    recognized by name shape (``*total*cycle*``, e.g.
+    ``pmu_total_cycles``) rather than an exact spelling, because the
+    header varies by architecture. Its value is stamped onto every row of
+    that task as ``total_cycles`` so the query layer can report a
+    per-pipeline occupancy ratio; the column itself is still melted into
+    its own counter row, so nothing from the artifact is dropped.
+    """
     reader = csv.DictReader(io.StringIO(text))
     if reader.fieldnames is None:
         raise IngestError("pmu.csv has no header row")
@@ -133,24 +145,40 @@ def parse_pmu_csv(text: str) -> list[dict[str, Any]]:
     counter_columns = [name for name in fieldnames if name != id_column]
     if not counter_columns:
         raise IngestError("pmu.csv carries no counter columns besides the task id")
+    total_columns = [name for name in counter_columns if _TOTAL_CYCLES.match(name)]
+    total_column = total_columns[0] if len(total_columns) == 1 else None
 
     rows: list[dict[str, Any]] = []
     for lineno, record in enumerate(reader, start=2):
         task_id = (record.get(id_column) or "").strip()
         if not task_id:
             raise IngestError(f"pmu.csv line {lineno}: empty task id")
-        for counter in counter_columns:
-            raw_value = (record.get(counter) or "").strip()
-            if not raw_value:
-                continue  # sparse cells are absence, not zero
+
+        def _value(column: str) -> float | None:
+            raw = (record.get(column) or "").strip()
+            if not raw:
+                return None  # sparse cells are absence, not zero
             try:
-                value = float(raw_value)
+                return float(raw)
             except ValueError as exc:
                 raise IngestError(
-                    f"pmu.csv line {lineno} column {counter!r}: "
-                    f"non-numeric value {raw_value!r}"
+                    f"pmu.csv line {lineno} column {column!r}: "
+                    f"non-numeric value {raw!r}"
                 ) from exc
-            rows.append({"task_id": task_id, "counter": counter, "value": value})
+
+        total = _value(total_column) if total_column is not None else None
+        for counter in counter_columns:
+            value = _value(counter)
+            if value is None:
+                continue
+            rows.append(
+                {
+                    "task_id": task_id,
+                    "counter": counter,
+                    "value": value,
+                    "total_cycles": total,
+                }
+            )
     return rows
 
 

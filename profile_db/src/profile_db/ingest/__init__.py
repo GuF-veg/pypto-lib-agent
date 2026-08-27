@@ -52,7 +52,18 @@ _CHILD_TABLES = (
     "cpm_path",
     "args_dump_entry",
     "scope_stats_entry",
+    # Re-ingesting a capture rebuilds the whole run, and it deletes the
+    # artifact rows that registered the in-core manifest — so the in-core
+    # rows must go with them, or incore_entry would keep claiming an
+    # attachment that `inventory` can no longer show. Re-attach with
+    # `pfdb ingest-incore` after a re-ingest.
+    "incore_entry",
+    "bench_sample",
 )
+
+# Artifact kinds owned by `ingest_incore` rather than by the capture
+# ingest, so its replace-mode delete can be scoped to them.
+_INCORE_ARTIFACT_KINDS = ("incore_manifest", "instr_metrics")
 
 
 def _sha256(path: Path) -> str:
@@ -125,6 +136,7 @@ def ingest_capture(
     captured_at: str | None = None,
     notes: str | None = None,
     tags: Sequence[str] | None = None,
+    rank_label: str | None = None,
     copy: bool = False,
     runtime_cfg: dict[str, Any] | None = None,
     git_commit: str | None = None,
@@ -180,6 +192,25 @@ def ingest_capture(
             _artifact("merged_swimlane", src.merged, source_mod.rel_path(src, src.merged), store_mode)
         )
 
+    # Rank isolation (DESIGN.md 5.3): a multi-rank capture set must label
+    # its runs, otherwise the query layer cannot refuse to mix them. Once
+    # any labelled run exists, a new unlabelled ingest would silently join
+    # the 'single' bucket and mix ranks, so it is refused. Re-ingesting a
+    # capture already in the database is exempt — it inherits its own label.
+    if rank_label is None and writer.find_run_by_records(
+        db.connection, artifacts[0]["sha256"]
+    ) is None:
+        labelled = db.connection.execute(
+            "SELECT DISTINCT rank_label FROM run WHERE rank_label <> 'single' "
+            "ORDER BY rank_label"
+        ).fetchall()
+        if labelled:
+            raise IngestError(
+                "this database already holds rank-labelled runs "
+                f"({', '.join(str(r[0]) for r in labelled)}); pass rank_label/--rank "
+                "so ranks stay isolated"
+            )
+
     # Optional text-modality evidence (T2) and extended modalities (T9):
     # absence is legal.
     report_dir = src.path.parent / "report"
@@ -231,6 +262,7 @@ def ingest_capture(
         "num_cores": swimlane_run.num_cores,
         "core_types": swimlane_run.core_types,
         "core_to_thread": swimlane_run.core_to_thread,
+        "rank_label": rank_label,
         "git_commit": git_commit,
         "git_dirty": git_dirty,
         "runtime_cfg": runtime_cfg,
@@ -260,7 +292,7 @@ def ingest_capture(
             records_sha = artifacts[0]["sha256"]
             run_id = writer.find_run_by_records(conn, records_sha)
             if run_id is not None:
-                _carry_bench(conn, run_id, meta)
+                _carry_forward(conn, run_id, meta)
                 writer.delete_run_rows(conn, run_id, _CHILD_TABLES)
                 writer.update_run(conn, run_id, meta)
             else:
@@ -354,31 +386,38 @@ def ingest_capture(
     }
 
 
-def _carry_bench(conn, run_id: int, meta: dict[str, Any]) -> None:
-    """On re-ingest, merge benchmark numbers with what the run already has:
-    explicitly supplied values win, missing ones keep the previous
-    registration (bench belongs to the unprofiled measurement, which is
-    independent of the artifacts being replaced)."""
-    bench_keys = (
+def _carry_forward(conn, run_id: int, meta: dict[str, Any]) -> None:
+    """On re-ingest, merge the run columns that do not come from the
+    artifacts with what the run already has: explicitly supplied values
+    win, missing ones keep the previous registration.
+
+    Benchmark numbers belong to the unprofiled measurement, which is
+    independent of the artifacts being replaced; ``rank_label`` identifies
+    the capture's rank, which a re-ingest must not silently reset to
+    'single'.
+    """
+    carried = (
         "bench_min_us",
         "bench_median_us",
         "bench_mean_us",
         "bench_max_us",
         "bench_rounds",
+        "rank_label",
     )
     row = conn.execute(
-        "SELECT bench_min_us, bench_median_us, bench_mean_us, bench_max_us, bench_rounds "
-        "FROM run WHERE run_id = ?",
+        "SELECT bench_min_us, bench_median_us, bench_mean_us, bench_max_us, "
+        "bench_rounds, rank_label FROM run WHERE run_id = ?",
         [run_id],
     ).fetchone()
     if row is None:
         return
-    existing = dict(zip(bench_keys, row))
-    merged = {
-        key: (meta.get(key) if meta.get(key) is not None else existing.get(key))
-        for key in bench_keys
-    }
-    meta.update(merged)
+    existing = dict(zip(carried, row))
+    meta.update(
+        {
+            key: (meta.get(key) if meta.get(key) is not None else existing.get(key))
+            for key in carried
+        }
+    )
 
 
 def _task_rows(graph: deps.DepGraph) -> list[dict[str, Any]]:
@@ -458,6 +497,13 @@ def ingest_incore(
         conn.execute("BEGIN TRANSACTION")
         try:
             conn.execute("DELETE FROM incore_entry WHERE run_id = ?", [run_id])
+            # Replace this collection's artifact rows too, or a repeated
+            # attach would stack duplicate manifest entries in `inventory`.
+            marks = ", ".join("?" for _ in _INCORE_ARTIFACT_KINDS)
+            conn.execute(
+                f"DELETE FROM artifact WHERE run_id = ? AND kind IN ({marks})",
+                [run_id, *_INCORE_ARTIFACT_KINDS],
+            )
             writer.insert_incore_entries(conn, run_id, rows)
             writer.insert_artifacts(
                 conn,

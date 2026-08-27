@@ -84,7 +84,7 @@ class Swimlane:
     num_cores: int
     core_types: list[str]
     core_to_thread: list[int]
-    makespan_us: float
+    makespan_us: float | None  # None on level 1: no AICPU dispatch/FIN stream
     raw_span_us: float
     rows: list[RowTime] = field(default_factory=list)
     scheduler_phases: list[list[dict[str, Any]]] = field(default_factory=list)
@@ -221,8 +221,16 @@ def load(records_path: Path, records: dict[str, Any]) -> Swimlane:
             [swimlane_us.phase_us(phase, base, clock_freq_hz) for phase in lane]
         )
 
+    # makespan = max(FIN) - min(dispatch) (DESIGN.md 5.3). Level-1 captures
+    # carry no AICPU stream, so those two columns are 0.0 placeholders and
+    # the difference would be a fabricated 0.0 µs run length; the design
+    # forbids reading the placeholders as instants, so the column stays
+    # NULL and the query layer reports it unavailable. raw_span_us still
+    # holds — it only reads aicore start/end ticks.
     makespan = (
-        max(r.finish_us for r in rows) - min(r.dispatch_us for r in rows) if rows else 0.0
+        max(r.finish_us for r in rows) - min(r.dispatch_us for r in rows)
+        if rows and level >= 2
+        else None
     )
     raw_rows = records.get("aicore_tasks") or []
     raw_span = (

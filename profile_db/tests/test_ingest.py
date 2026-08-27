@@ -321,7 +321,7 @@ def test_level4_converter_join_path(tmp_path: Path, db_file: Path) -> None:
         conn = db.connection
         assert _count(conn, "scheduler_phase", 1) == 1
         assert _count(conn, "orch_phase", 1) == 1
-        # aggregated task timing equals the converter直出 at zero tolerance
+        # aggregated task timing equals the converter output at zero tolerance
         by_task: dict[str, list] = {}
         for row in joined["tasks"]:
             by_task.setdefault(str(row["task_id"]), []).append(row)
@@ -340,7 +340,7 @@ def test_level4_converter_join_path(tmp_path: Path, db_file: Path) -> None:
                 [task_id],
             ).fetchone()
             assert tuple(got) == expected, task_id
-        # makespan must equal the converter直出 span
+        # makespan must equal the converter output span
         span = max(r["finish_time_us"] for r in joined["tasks"]) - min(
             r["dispatch_time_us"] for r in joined["tasks"]
         )

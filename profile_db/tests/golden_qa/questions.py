@@ -88,17 +88,17 @@ BAND band_idx=12 busy_cores=0 drain_tail=true engine="aiv" run_id=1 sparse=false
         "sparse_regions",
         "sparse_regions",
         {"run_id": 1},
-        """SPARSE band_idx=0 busy_cores=0 engine="aiv" kind="unknown" run_id=1 t0_us=0.0 t1_us=5.0 total_cores=2 evidence=unproven
-SPARSE band_idx=1 busy_cores=0 engine="aiv" kind="unknown" run_id=1 t0_us=5.0 t1_us=10.0 total_cores=2 evidence=unproven
-SPARSE band_idx=4 busy_cores=0 engine="aiv" fin_us=10.0 kind="ready_starved" lagging_producer="1" run_id=1 t0_us=20.0 t1_us=25.0 total_cores=2 evidence=proven
-SPARSE band_idx=5 busy_cores=0 engine="aic" fin_us=10.0 kind="ready_starved" lagging_producer="1" run_id=1 t0_us=25.0 t1_us=30.0 total_cores=2 evidence=proven
-SPARSE band_idx=5 busy_cores=0 engine="aiv" fin_us=10.0 kind="ready_starved" lagging_producer="1" run_id=1 t0_us=25.0 t1_us=30.0 total_cores=2 evidence=proven""",
+        """SPARSE busy_cores=0 engine="aiv" kind="unknown" run_id=1 stored_band_idx=0 t0_us=0.0 t1_us=5.0 total_cores=2 evidence=unproven
+SPARSE busy_cores=0 engine="aiv" kind="unknown" run_id=1 stored_band_idx=1 t0_us=5.0 t1_us=10.0 total_cores=2 evidence=unproven
+SPARSE busy_cores=0 engine="aiv" fin_us=10.0 kind="ready_starved" lagging_producer="1" run_id=1 stored_band_idx=4 t0_us=20.0 t1_us=25.0 total_cores=2 evidence=proven
+SPARSE busy_cores=0 engine="aic" fin_us=10.0 kind="ready_starved" lagging_producer="1" run_id=1 stored_band_idx=5 t0_us=25.0 t1_us=30.0 total_cores=2 evidence=proven
+SPARSE busy_cores=0 engine="aiv" fin_us=10.0 kind="ready_starved" lagging_producer="1" run_id=1 stored_band_idx=5 t0_us=25.0 t1_us=30.0 total_cores=2 evidence=proven""",
     ),
     GoldenQuestion(
         "why_sparse",
         "why_sparse",
         {"run_id": 1, "band": 2},
-        """SPARSE band=2 busy_cores=1 fin_us=10.0 kind="ready_starved" lagging_producer="1" run_id=1 t0_us=20.0 t1_us=30.0 evidence=proven""",
+        """SPARSE band=2 bands=20 busy_cores=1 fin_us=10.0 kind="ready_starved" lagging_producer="1" run_id=1 t0_us=20.0 t1_us=30.0 evidence=proven""",
     ),
     GoldenQuestion(
         "region",
@@ -238,7 +238,33 @@ MEMORY kernel="rmsnorm" limit_value=65536.0 run_id=1 space="Vec" usage=512.0 evi
         "missing_band",
         "why_sparse",
         {"run_id": 1, "band": 99},
-        """SPARSE band=99 run_id=1 evidence=unavailable""",
+        """SPARSE band=99 bands=20 run_id=1 evidence=unavailable""",
+    ),
+    # Extended-modality queries (T9): no data in the scenario, so they all
+    # report unavailable — the binding itself is what the registry check needs.
+    GoldenQuestion(
+        "incore_unavailable",
+        "incore",
+        {"run_id": 1},
+        """INCORE run_id=1 evidence=unavailable""",
+    ),
+    GoldenQuestion(
+        "args_dump_unavailable",
+        "args_dump",
+        {"run_id": 1},
+        """ARGS run_id=1 evidence=unavailable""",
+    ),
+    GoldenQuestion(
+        "scope_stats_unavailable",
+        "scope_stats",
+        {"run_id": 1},
+        """SCOPE run_id=1 evidence=unavailable""",
+    ),
+    GoldenQuestion(
+        "bench_unavailable",
+        "bench",
+        {"run_id": 1},
+        """BENCH max_us=13.0 mean_us=12.5 median_us=12.4 min_us=12.0 rounds=100 run_id=1 evidence=measured""",
     ),
 ]
 

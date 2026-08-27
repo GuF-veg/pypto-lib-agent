@@ -87,10 +87,11 @@ def test_tools_are_registry_driven_and_dispatch_queries(tmp_path: Path) -> None:
             ("pfdb.version", {}),
         ],
     )
-    # 17 registered queries + render + version, namespaced under pfdb.
+    # registered queries + lifecycle tools + render + version
+    from profile_db.mcp_server import _LIFECYCLE_TOOLS
     assert "pfdb.overview" in names and "pfdb.list_runs" in names
     assert "pfdb.render" in names and "pfdb.version" in names
-    assert len(names) == len(list_queries()) + 2
+    assert len(names) == len(list_queries()) + len(_LIFECYCLE_TOOLS) + 2
 
     overview = _text_blocks(results[0])[0]
     assert overview.startswith("RUN ") and "METRIC" in overview

@@ -9,8 +9,9 @@
 
 """Z0 handlers: which runs exist, what one run is, where it came from.
 
-These answer the orientation stage ("基线是多少? 最近可用的 run 是哪个?")
-and the inventory stage ("这个 run 有哪些工件、什么配置")."""
+These answer the orientation stage ("what is the baseline? which run is
+the most recent usable one?") and the inventory stage ("which artifacts
+does this run hold, in what configuration?")."""
 
 from __future__ import annotations
 
@@ -40,7 +41,8 @@ def _run_counts(conn, run_id: int) -> dict[str, int]:
 
 @register(
     "runs_list",
-    "定向:基线是多少、平台/配置是什么、最近可用的 run 是哪个?",
+    "Orient: what is the baseline, which platform/config, and which run is "
+    "the latest usable one?",
     RunsListParams,
     rank_axis=True,
 )
@@ -86,7 +88,11 @@ def runs_list(conn, params: RunsListParams) -> list[Fact]:
     return facts
 
 
-@register("overview", "全貌:这个 run 的顶线指标、拓扑、图规模是什么?", OverviewParams)
+@register(
+    "overview",
+    "Survey: what are this run's top-line metrics, topology, and graph size?",
+    OverviewParams,
+)
 def overview(conn, params: OverviewParams) -> list[Fact]:
     run_id = params.run_id
     row = common.run_row(conn, run_id)
@@ -143,10 +149,33 @@ def overview(conn, params: OverviewParams) -> list[Fact]:
                 Evidence.MEASURED,
             )
         )
+    # A metric the capture level cannot supply is named explicitly rather
+    # than just missing from METRIC: makespan needs the AICPU
+    # dispatch/FIN stream, which level-1 captures do not carry.
+    if row[17] is None:
+        facts.append(
+            Fact(
+                "EVIDENCE",
+                common.fields(
+                    run_id=run_id,
+                    metric="makespan_us",
+                    reason="no-aicpu-fin-stream"
+                    if row[4] is not None and int(row[4]) < 2
+                    else "no-timed-rows",
+                    level=row[4],
+                ),
+                Evidence.UNAVAILABLE,
+            )
+        )
     return facts
 
 
-@register("inventory", "定向:这个 run 有哪些工件、怎么归档、是否可重建?", InventoryParams)
+@register(
+    "inventory",
+    "Orient: which artifacts does this run hold, how are they stored, and can "
+    "it be rebuilt?",
+    InventoryParams,
+)
 def inventory(conn, params: InventoryParams) -> list[Fact]:
     run_id = params.run_id
     if common.one(conn, "SELECT 1 FROM run WHERE run_id = ?", [run_id]) is None:

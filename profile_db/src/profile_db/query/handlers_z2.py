@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from profile_db.errors import QueryError
 from profile_db.facts import Evidence, Fact
 from profile_db.query import common
 from profile_db.query.handlers_z1 import _load_bands
@@ -24,28 +25,60 @@ from profile_db.query.registry import register
 from profile_db.query.params import CoreParams, RegionParams, WhySparseParams
 
 
-@register("why_sparse", "归因:这段空窗是没人可派(就绪未派)还是上游没喂够?", WhySparseParams)
+@register(
+    "why_sparse",
+    "Attribute: is this empty window a dispatch stall (tasks ready but not "
+    "dispatched) or upstream starvation?",
+    WhySparseParams,
+)
 def why_sparse(conn, params: WhySparseParams) -> list[Fact]:
     run_id = params.run_id
+    if params.band is not None and params.stored_band is not None:
+        raise QueryError("why_sparse takes either band (+bands) or stored_band, not both")
+    if params.band is None and params.stored_band is None:
+        raise QueryError(
+            "why_sparse requires band (with the same bands value density used) "
+            "or stored_band (as reported by sparse_regions)"
+        )
     if common.one(conn, "SELECT 1 FROM run WHERE run_id = ?", [run_id]) is None:
         return common.run_missing("SPARSE", run_id)
     by_engine = _load_bands(conn, run_id, params.engine)
     if not by_engine:
         return [
-            Fact("SPARSE", common.fields(run_id=run_id, band=params.band), Evidence.UNAVAILABLE)
-        ]
-    reference = by_engine[sorted(by_engine)[0]]
-    buckets = common.chunk_bounds(len(reference), 20)  # density's default bucket axis
-    if params.band >= len(buckets):
-        return [
             Fact(
                 "SPARSE",
-                common.fields(run_id=run_id, band=params.band, engine=params.engine),
+                common.fields(
+                    run_id=run_id, band=params.band, stored_band=params.stored_band
+                ),
                 Evidence.UNAVAILABLE,
             )
         ]
-    start, end = buckets[params.band]
-    window = reference[start:end]
+    reference = by_engine[sorted(by_engine)[0]]
+    if params.stored_band is not None:
+        window = [row for row in reference if row[0] == params.stored_band]
+    else:
+        # The bucket axis must be the one density produced; ``bands``
+        # carries that so a non-default --bands cannot silently shift the
+        # window this query explains.
+        buckets = common.chunk_bounds(len(reference), params.bands)
+        window = []
+        if params.band < len(buckets):
+            start, end = buckets[params.band]
+            window = reference[start:end]
+    if not window:
+        return [
+            Fact(
+                "SPARSE",
+                common.fields(
+                    run_id=run_id,
+                    band=params.band,
+                    bands=params.bands if params.band is not None else None,
+                    stored_band=params.stored_band,
+                    engine=params.engine,
+                ),
+                Evidence.UNAVAILABLE,
+            )
+        ]
     t0, t1 = window[0][1], window[-1][2]
 
     args: list[Any] = [run_id, t1, t0]
@@ -75,6 +108,8 @@ def why_sparse(conn, params: WhySparseParams) -> list[Fact]:
     fact_fields = common.fields(
         run_id=run_id,
         band=params.band,
+        bands=params.bands if params.band is not None else None,
+        stored_band=params.stored_band,
         engine=params.engine,
         t0_us=common.us(t0),
         t1_us=common.us(t1),
@@ -96,7 +131,12 @@ def why_sparse(conn, params: WhySparseParams) -> list[Fact]:
     return [Fact("SPARSE", fact_fields, Evidence.UNPROVEN)]
 
 
-@register("region", "全貌/归因:这个时间窗里发生了什么、为什么这段空着?", RegionParams)
+@register(
+    "region",
+    "Survey/attribute: what happened inside this time window, and why is this "
+    "stretch empty?",
+    RegionParams,
+)
 def region(conn, params: RegionParams) -> list[Fact]:
     common.guard_window(params.t0_us, params.t1_us)
     run_id = params.run_id
@@ -154,7 +194,11 @@ def region(conn, params: RegionParams) -> list[Fact]:
     return facts
 
 
-@register("core", "归因:这核空着的时候别的核在干什么?", CoreParams)
+@register(
+    "core",
+    "Attribute: what were the other cores doing while this one sat idle?",
+    CoreParams,
+)
 def core(conn, params: CoreParams) -> list[Fact]:
     run_id = params.run_id
     if common.one(conn, "SELECT 1 FROM run WHERE run_id = ?", [run_id]) is None:

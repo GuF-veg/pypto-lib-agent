@@ -92,6 +92,7 @@ LAYERS: dict[str, int] = {
     "profile_db.query.handlers_z2": 4,
     "profile_db.query.handlers_z3": 4,
     "profile_db.query.handlers_z4": 4,
+    "profile_db.query.handlers_modalities": 4,
     "profile_db.ingest": 4,
     "profile_db.ingest.source": 4,
     "profile_db.ingest.swimlane": 4,

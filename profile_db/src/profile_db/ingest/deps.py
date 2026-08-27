@@ -7,7 +7,7 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 
-"""deps.json parsing: logical tasks and dependency edges, fields保真.
+"""deps.json parsing: logical tasks and dependency edges, fields preserved verbatim.
 
 Every raw field is preserved (DESIGN.md 5.2/5.3). Kernel names resolve
 through the name_map: the non-negative entries of a task's ``kernel_ids``

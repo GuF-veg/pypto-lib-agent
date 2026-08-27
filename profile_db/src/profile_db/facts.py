@@ -17,8 +17,10 @@ Design contract (DESIGN.md 5.4):
   (``measured / proven / unproven / unavailable``). The enum rejects
   anything else at construction time.
 - Serialization is budget-bound: when ``max_bytes`` is exhausted the
-  stream ends with an explicit ``TRUNCATED remaining=... limit=...``
-  line; omitted facts are never silently dropped.
+  stream ends with an explicit ``TRUNCATED first_dropped_index=...
+  remaining=... limit=...`` line. The cut is a prefix, so what survives is
+  always a contiguous head of the sequence; omitted facts are never
+  silently dropped.
 """
 
 from __future__ import annotations
@@ -91,23 +93,61 @@ def format_fact(fact: Fact) -> str:
     return " ".join(parts)
 
 
+def truncated_line(dropped: int, first_dropped_index: int, max_bytes: int) -> str:
+    """The canonical truncation marker. ``first_dropped_index`` is the
+    0-based position of the first omitted fact; because truncation is a
+    prefix cut, everything from there on is what is missing."""
+    return (
+        f"TRUNCATED first_dropped_index={first_dropped_index} "
+        f"remaining={dropped} limit={max_bytes}"
+    )
+
+
+def truncate_facts(facts: Iterable[Fact], max_bytes: int = 4096) -> tuple[list[Fact], int]:
+    """Prefix-truncate ``facts`` to the UTF-8 byte budget of the canonical
+    facts rendering; returns ``(kept, dropped)``.
+
+    The cut is a **prefix**: the first fact that does not fit ends the
+    stream. Skipping an oversized fact and letting a later, shorter one
+    take its place would hand an ordered sequence (a critical path, a row
+    list) back with invisible holes, which reads as consecutive. Room for
+    the ``TRUNCATED`` line is reserved before any fact is admitted, so the
+    rendered output stays inside the budget — the sole exception is a
+    budget smaller than the marker itself, where the marker is still
+    emitted because silent omission is never an option.
+
+    All output formats share this function, so ``json`` and ``markdown``
+    are bounded by the same fact count as ``facts``.
+    """
+    if max_bytes < 1:
+        raise FactError("max_bytes must be at least 1")
+    items = list(facts)
+    lines = [format_fact(fact) for fact in items]
+    total = sum(len(line.encode("utf-8")) for line in lines) + max(len(lines) - 1, 0)
+    if total <= max_bytes:
+        return items, 0
+
+    used = 0
+    kept = 0
+    for line in lines:
+        cost = len(line.encode("utf-8")) + (1 if kept else 0)
+        # The marker grows with the counts it reports, so its size is
+        # re-measured for the hypothetical "admit this one" state.
+        reserve = len(
+            truncated_line(len(items) - kept - 1, kept + 1, max_bytes).encode("utf-8")
+        ) + 1
+        if used + cost + reserve > max_bytes:
+            break
+        used += cost
+        kept += 1
+    return items[:kept], len(items) - kept
+
+
 def serialize_facts(facts: Iterable[Fact], max_bytes: int = 4096) -> str:
     """Serialize facts up to the UTF-8 byte budget, ending in an explicit
     ``TRUNCATED`` line when anything was omitted."""
-    if max_bytes < 1:
-        raise FactError("max_bytes must be at least 1")
-    lines: list[str] = []
-    used = 0
-    remaining = 0
-    for fact in facts:
-        line = format_fact(fact)
-        line_bytes = len(line.encode("utf-8")) + (1 if lines else 0)
-        if used + line_bytes > max_bytes:
-            remaining += 1
-            continue
-        lines.append(line)
-        used += line_bytes
-    if remaining:
-        tail = f"TRUNCATED remaining={remaining} limit={max_bytes}"
-        lines.append(tail)
+    kept, dropped = truncate_facts(facts, max_bytes)
+    lines = [format_fact(fact) for fact in kept]
+    if dropped:
+        lines.append(truncated_line(dropped, len(kept), max_bytes))
     return "\n".join(lines)
