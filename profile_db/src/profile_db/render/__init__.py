@@ -31,7 +31,7 @@ import matplotlib
 
 from profile_db.errors import RenderError
 from profile_db.render import renderers
-from profile_db.render.cache import RenderCache, params_key
+from profile_db.render.cache import RENDER_VERSION, RenderCache, params_key
 from profile_db.render.styles import (
     DEFAULT_CACHE_MAX_BYTES,
     DEFAULT_IMAGE_MAX_BYTES,
@@ -42,9 +42,6 @@ from profile_db.render.styles import (
 )
 from profile_db.render.types import FigureInfo, RenderResult
 
-# Generator version: bump on any layout/style change so cached manifests
-# can be invalidated as one unit.
-RENDER_VERSION = "profile_db.render/1"
 KINDS = ("whole", "window", "task", "core")
 
 

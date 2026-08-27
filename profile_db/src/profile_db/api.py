@@ -296,6 +296,9 @@ def _result_from_render(rendered) -> Result:
         "x1_us": x1,
         "us_per_px": manifest.get("us_per_px"),
         "downsampled": manifest.get("downsampled"),
+        # Engine -> color mapping so text-channel consumers can interpret
+        # the colors of an image they cannot (or do not) open.
+        "legend": manifest.get("legend"),
     }
     if rendered.note is not None:
         fields["note"] = rendered.note

@@ -32,14 +32,16 @@ DEFAULT_CACHE_MAX_BYTES = 200 * 1024 * 1024
 
 # Engine colors: known engines get fixed colors; unknown ones are assigned
 # from the fallback palette in first-seen sorted order (still deterministic
-# for a given run because the engine set is fixed).
+# for a given run because the engine set is fixed). The fallback palette is
+# kept disjoint from RESERVED_COLORS below so an unknown engine can never
+# be painted with a color that carries another meaning.
 ENGINE_COLORS: dict[str, str] = {
     "aic": "#1f77b4",
     "aiv": "#ff7f0e",
 }
 FALLBACK_PALETTE: tuple[str, ...] = (
-    "#2ca02c",
-    "#d62728",
+    "#00838f",
+    "#673ab7",
     "#9467bd",
     "#8c564b",
     "#e377c2",
@@ -54,6 +56,15 @@ READY_LINE = "#2ca02c"
 WINDOW_LINE = "#999999"
 GAP_FILL = "#ffeb3b"
 DEPENDENCY_ARROW = "#444444"
+
+# Identity-bearing colors that task bars and lines must never share with
+# the fallback palette: engine-fixed colors plus highlight/ready/gap fills.
+RESERVED_COLORS: tuple[str, ...] = (
+    *ENGINE_COLORS.values(),
+    TASK_HIGHLIGHT,
+    READY_LINE,
+    GAP_FILL,
+)
 
 # Line widths and opacity.
 BAR_EDGE_WIDTH = 0.3

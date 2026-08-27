@@ -26,6 +26,8 @@ import matplotlib
 matplotlib.use("Agg")  # headless, deterministic rasterization
 
 from matplotlib.figure import Figure  # noqa: E402
+from matplotlib.lines import Line2D  # noqa: E402
+from matplotlib.patches import Patch  # noqa: E402
 
 from profile_db.errors import RenderError
 from profile_db.render.styles import (
@@ -160,6 +162,11 @@ def _finish_axes(ax, x0: float, x1: float, num_cores: int, ylabel: str = "core i
     if num_cores > 0:
         ax.set_ylim(-0.5, num_cores - 0.5)
         ax.invert_yaxis()
+        # Integer core ticks: a swimlane reader must be able to align rows
+        # with core numbers. Wide runs thin the ticks so labels stay
+        # readable (every core still maps to its row position).
+        step = max(1, -(-num_cores // 20))
+        ax.set_yticks(list(range(0, num_cores, step)))
     else:
         ax.set_ylim(-0.5, 0.5)
 
@@ -174,6 +181,36 @@ def _span(x0: float, x1: float) -> tuple[float, float]:
 def _annotate_empty(ax, note: str) -> None:
     ax.text(0.5, 0.5, note, transform=ax.transAxes, ha="center", va="center",
             fontsize=ANNOTATION_FONT_SIZE, color="#555555")
+
+
+def _legend(ax, colors: Mapping[str, str], extra: Sequence[Any] = ()) -> None:
+    """Draw the legend inside the figure so the PNG is self-describing on
+    the multimodal channel (the manifest legend never travels with the
+    image bytes). The legend is figure-level, pinned below the axes with
+    reserved bottom space, so it can never cover data rows. Fixed
+    placement keeps renders byte-stable."""
+    handles: list[Any] = [
+        Patch(
+            facecolor=color,
+            edgecolor="black",
+            linewidth=BAR_EDGE_WIDTH,
+            label=engine,
+        )
+        for engine, color in sorted(colors.items())
+    ]
+    handles.extend(extra)
+    if not handles:
+        return
+    fig = ax.figure
+    fig.subplots_adjust(bottom=0.24)
+    fig.legend(
+        handles=handles,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.0),
+        ncol=min(len(handles), 4),
+        fontsize=ANNOTATION_FONT_SIZE - 1,
+        framealpha=0.9,
+    )
 
 
 def _draw_bar(ax, core: int, start_us: float, end_us: float, color: str, alpha: float) -> None:
@@ -221,6 +258,7 @@ def _r0(conn, run_id: int, meta: tuple[list[str], int], rows: Sequence[dict[str,
         for r in rows:
             engine = _core_engine(meta, r["core_index"])
             _draw_bar(ax, r["core_index"], r["start_us"], r["end_us"], colors.get(engine, "#555555"), BAR_ALPHA)
+    _legend(ax, colors)
     _finish_axes(ax, x0, x1, num_cores)
     return fig, FigureInfo(x_axis_us=_span(x0, x1), legend=colors, num_rows=len(rows), note=note)
 
@@ -272,6 +310,7 @@ def _r1(
             )
     ax.axvline(t0_us, color=WINDOW_LINE, linestyle="--", linewidth=0.8)
     ax.axvline(t1_us, color=WINDOW_LINE, linestyle="--", linewidth=0.8)
+    _legend(ax, colors)
     _finish_axes(ax, t0_us, t1_us, num_cores)
     return fig, FigureInfo(x_axis_us=(t0_us, t1_us), legend=colors, num_rows=len(visible), note=note)
 
@@ -304,6 +343,14 @@ def _r2(
     colors = _engine_colors(meta)
     fig, ax = _new_figure(f"run {run_id} — task {task_id}")
     note: str | None = None
+    extras: list[Any] = [
+        Patch(
+            facecolor=TASK_HIGHLIGHT,
+            edgecolor="black",
+            linewidth=BAR_EDGE_WIDTH,
+            label="target task",
+        )
+    ]
     if not neighborhood_rows:
         _annotate_empty(ax, "task has no execution rows")
         note = "task has no execution rows"
@@ -318,22 +365,35 @@ def _r2(
                 _draw_bar(ax, r["core_index"], r["start_us"], r["end_us"], TASK_HIGHLIGHT, BAR_ALPHA)
             else:
                 _draw_bar(ax, r["core_index"], r["start_us"], r["end_us"], color, SIBLING_ALPHA)
-        # Ready line: latest producer end (or its FIN when a real FIN stream
-        # exists), which is the earliest this task could have started.
+        # Ready line = max(FIN over the direct producers), exactly the fact
+        # layer's ``ready_time_us`` rule. Level-1 placeholder FIN (0.0) and
+        # untimed producers never produce a line — unavailable, not
+        # estimated, so the image cannot imply evidence the text channel
+        # refuses to claim.
         ready = None
         for pred in producers:
             pred_times = task_times.get(pred)
             if pred_times is None:
                 continue
             finish = pred_times.get("max_finish_us")
-            end = pred_times.get("max_end_us")
-            candidate = finish if finish is not None and finish > 0 else end
-            if candidate is not None:
-                ready = candidate if ready is None else max(ready, candidate)
+            if finish is not None and finish > 0:
+                ready = finish if ready is None else max(ready, finish)
         if ready is not None:
             ax.axvline(ready, color=READY_LINE, linestyle=":", linewidth=1.0)
+            extras.append(
+                Line2D(
+                    [0], [0],
+                    color=READY_LINE,
+                    linestyle=":",
+                    linewidth=1.0,
+                    label="ready = max(producer FIN)",
+                )
+            )
+        elif producers:
+            note = "producers exist but none has a timed FIN; ready line omitted"
         if not producers and not consumers:
             note = "task has no dependency edges"
+    _legend(ax, colors, extras)
     _finish_axes(ax, x0, x1, num_cores)
     return fig, FigureInfo(x_axis_us=_span(x0, x1), legend=colors, num_rows=len(neighborhood_rows), note=note)
 
@@ -371,12 +431,21 @@ def _r3(
     else:
         for r in core_rows:
             _draw_bar(ax, 0, r["start_us"], r["end_us"], color, BAR_ALPHA)
-    # Idle gaps as shaded bands (the core was idle in [t0, t1]).
+    # Idle gaps as shaded bands (the core was idle in [t0, t1]); the kind
+    # label is drawn only when the band is wide enough to hold it apart
+    # from its neighbors, so narrow gaps never smear into each other. The
+    # shading itself stays for every recorded gap.
+    axis_span = max(x1 - x0, 1e-9)
     for t0, t1, kind in gaps:
         ax.axvspan(t0, t1, color=GAP_FILL, alpha=0.35)
-        ax.text((t0 + t1) / 2.0, 0.0, kind, ha="center", va="center",
-                fontsize=ANNOTATION_FONT_SIZE - 2, color="#333333")
+        if (t1 - t0) >= 0.05 * axis_span:
+            ax.text((t0 + t1) / 2.0, 0.0, kind, ha="center", va="center",
+                    fontsize=ANNOTATION_FONT_SIZE - 2, color="#333333")
 
+    extras: list[Any] = [
+        Patch(facecolor=GAP_FILL, edgecolor="none", alpha=0.35, label="idle gap")
+    ]
+    _legend(ax, {engine: color}, extras)
     _finish_axes(ax, x0, x1, 1, ylabel="core")
     return fig, FigureInfo(x_axis_us=_span(x0, x1), legend={engine: color}, num_rows=len(core_rows), note=note)
 

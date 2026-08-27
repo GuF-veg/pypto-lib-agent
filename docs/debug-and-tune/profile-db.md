@@ -105,7 +105,17 @@ pfdb render core   --run 1 --core 5
 Each render writes `<db>/.pfdb/render/<run>/<kind>-<params_key>.png` plus a
 same-named `.manifest.json` (sha256, size, µs/px, legend, generator and
 matplotlib versions). Repeated requests with identical parameters hit the cache
-and are byte-identical.
+and are byte-identical; the cache key includes the generator version, so a
+renderer upgrade invalidates old entries as one unit. A cached PNG whose bytes
+no longer match its manifest sha256 is dropped and re-rendered.
+
+Every figure is self-describing on the multimodal channel: the legend is drawn
+in the image (below the axes, never covering data), core rows carry integer
+tick labels, R2 marks the ready line at `max(producer FIN)` only when a real
+FIN timestamp exists (level-1 placeholder FIN never produces a line), and R3
+shades every idle gap with its kind labeled when the band is wide enough. The
+`IMAGE` fact mirrors the engine→color `legend` so text-channel consumers can
+interpret the colors without opening the pixels.
 
 ## MCP
 

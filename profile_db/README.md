@@ -39,12 +39,14 @@
   模型自动生成，`facts/json/markdown` 三种输出）；CLI 与 API 输出逐字节
   一致（测试兜底）；`ProfileDB.memory()` 内存模式与磁盘模式对拍。
 - ✅ T6 可视化渲染：`render/` 子包（只依赖 schema 表）——R0 whole /
-  R1 window（依赖箭头）/ R2 task（就绪线）/ R3 core（空闲段着色），
-  确定性样式常量 + Agg 后端；缓存 `<kind>-<params_key>.png` + 同名
-  `.manifest.json`（SHA-256、尺寸、µs/px、图例、生成版本），字节预算超限
+  R1 window（依赖箭头）/ R2 task（就绪线，仅真实 FIN 流才画、口径与
+  why-late 一致）/ R3 core（空闲段着色），确定性样式常量 + Agg 后端；
+  图内图例（坐标区下方，不遮数据）、整数核刻度；缓存
+  `<kind>-<params_key>.png` + 同名 `.manifest.json`（SHA-256、尺寸、µs/px、
+  图例、生成版本，缓存键含生成器版本、升级即整体失效），字节预算超限
   自动降采样、总量上限 LRU 逐出；`ProfileDB.render(...)` 与 CLI
-  `pfdb render` 均返回 `IMAGE` fact + `ImageRef`，同参数重复渲染 SHA-256
-  逐字节一致，空窗/无边任务/未知目标不崩。
+  `pfdb render` 均返回 `IMAGE` fact（含 `legend` 映射）+ `ImageRef`，
+  同参数重复渲染 SHA-256 逐字节一致，空窗/无边任务/未知目标不崩。
 - ✅ T7 MCP 服务：`pfdb serve --mcp`（stdio、会话级生命周期、不常驻）——
   工具集由查询注册表自动生成（`pfdb.list_runs / overview / density / ...`
   + `pfdb.render` + `pfdb.version`），`inputSchema` 与 CLI 参数单一同源

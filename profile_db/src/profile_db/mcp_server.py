@@ -16,7 +16,8 @@ the query registry supplies one tool per registered query (tool names
 ``pfdb.render`` image tool and a ``pfdb.version`` schema-version probe.
 Each tool returns the ``Result`` envelope: queries come back as the
 budget-limited facts text, renders as the IMAGE fact plus an
-``ImageContent`` carrying the PNG bytes (base64 data URL). The server is
+``ImageContent`` carrying the raw PNG bytes (base64, mimeType image/png,
+per the MCP spec — not a data URL). The server is
 not long-running: the kernel agent launches it as a subprocess for the
 lifetime of its session and exits it when done.
 """

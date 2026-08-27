@@ -9,19 +9,33 @@
 
 """T6 render-layer tests: determinism, x-axis correctness, manifest
 completeness, empty/edgeless handling, cache eviction, and the API/CLI
-integration surface (DESIGN.md 7 acceptance)."""
+integration surface (DESIGN.md 7 acceptance), plus visual-semantics
+checks that inspect rendered artists directly: legend contents,
+dependency-arrow endpoints, ready-line placement, and gap shading."""
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pytest
+from matplotlib.colors import same_color, to_rgb
+from matplotlib.patches import Rectangle
+from matplotlib.text import Annotation
 
-from fixtures.synth_derived import edge, load, task
+from fixtures.synth_derived import edge, load, materialize, task
 from profile_db.api import ProfileDB, format_result
 from profile_db.errors import RenderError
 from profile_db.render import KINDS, render as render_image
-from profile_db.render.cache import RenderCache
+from profile_db.render import cache as cache_module
+from profile_db.render import renderers
+from profile_db.render.cache import RenderCache, params_key
+from profile_db.render.styles import (
+    FALLBACK_PALETTE,
+    GAP_FILL,
+    READY_LINE,
+    RESERVED_COLORS,
+)
 
 _TASKS = [
     task("1", engine="aic", name="rmsnorm", family="rmsnorm", rows=[(0.0, 10.0, 0.0, 0.0, 10.0)]),
@@ -227,3 +241,188 @@ def test_api_render_unavailable_is_structured(tmp_path: Path) -> None:
 
 def test_known_kinds_exhaustive() -> None:
     assert KINDS == ("whole", "window", "task", "core")
+
+
+# ---------------------------------------------------------------------------
+# Visual-semantics checks: what a programmatic review cannot skip — legend
+# contents, arrow geometry, ready-line placement, and gap shading are
+# asserted against the rendered matplotlib artists themselves.
+# ---------------------------------------------------------------------------
+
+
+def _figure(db: ProfileDB, kind: str, **params):
+    """Run one renderer directly (no cache) and return ``(fig, ax)``."""
+    fig, _info, _unavailable = renderers.render(db.connection, 1, kind, dict(params))
+    return fig, fig.axes[0]
+
+
+def _legend_texts(ax) -> list[str]:
+    """Entry labels of the render's legend (figure-level since the legend
+    is pinned below the axes; axes-level kept as a fallback)."""
+    fig = ax.figure
+    legends = list(fig.legends) + ([ax.get_legend()] if ax.get_legend() else [])
+    assert legends, "figure must carry an in-image legend"
+    return [entry.get_text() for entry in legends[-1].get_texts()]
+
+
+def _ready_line_x(ax) -> float | None:
+    for line in ax.lines:
+        if same_color(line.get_color(), READY_LINE) and line.get_linestyle() == ":":
+            xdata = line.get_xdata()
+            return float(xdata[0])
+    return None
+
+
+def _gap_spans(ax) -> list[tuple[float, float]]:
+    """Extents of every idle-gap shading band on the axes (handles both
+    the Polygon form older matplotlib uses and the Rectangle form newer
+    versions render ``axvspan`` with)."""
+    target = tuple(to_rgb(GAP_FILL))
+    spans: list[tuple[float, float]] = []
+    for patch in ax.patches:
+        if tuple(patch.get_facecolor()[:3]) != target:
+            continue
+        if isinstance(patch, Rectangle):
+            x0 = float(patch.get_x())
+            spans.append((x0, x0 + float(patch.get_width())))
+        else:
+            xs = [float(point[0]) for point in patch.xy]
+            spans.append((min(xs), max(xs)))
+    return sorted(spans)
+
+
+def test_fallback_palette_avoids_reserved_colors() -> None:
+    collisions = set(FALLBACK_PALETTE) & set(RESERVED_COLORS)
+    assert not collisions, f"palette reuses identity-bearing colors: {collisions}"
+
+
+def test_r0_legend_lists_engines() -> None:
+    db = ProfileDB.memory()
+    try:
+        _load(db)
+        _fig, ax = _figure(db, "whole")
+        assert _legend_texts(ax) == ["aic", "aiv"]
+    finally:
+        db.close()
+
+
+def test_r1_legend_and_arrow_endpoints() -> None:
+    db = ProfileDB.memory()
+    try:
+        _load(db)
+        # Producers/consumers exist on both sides of every arrow anchor.
+        _fig, ax = _figure(db, "window", t0_us=0.0, t1_us=50.0)
+        assert _legend_texts(ax) == ["aic", "aiv"]
+        arrows = [t for t in ax.texts if isinstance(t, Annotation)]
+        got = sorted(((float(a.xyann[0]), float(a.xyann[1])), (float(a.xy[0]), float(a.xy[1]))) for a in arrows)
+        # Producer latest end -> consumer earliest start, per edge.
+        expected = sorted([
+            ((10.0, 0.0), (20.0, 1.0)),  # task 1 -> task 2
+            ((10.0, 0.0), (5.0, 2.0)),   # task 1 -> task 3
+        ])
+        assert got == expected
+        # Anchors outside the window suppress the whole arrow.
+        _fig2, ax2 = _figure(db, "window", t0_us=12.0, t1_us=50.0)
+        arrows_out = [t for t in ax2.texts if isinstance(t, Annotation)]
+        assert arrows_out == []
+    finally:
+        db.close()
+
+
+def test_r2_ready_line_equals_max_producer_fin() -> None:
+    db = ProfileDB.memory()
+    try:
+        _load(db)
+        # Producer task 1 FIN = 10.0; the dotted ready vline sits exactly there.
+        _fig, ax = _figure(db, "task", task_id="2")
+        assert _ready_line_x(ax) == 10.0
+        texts = _legend_texts(ax)
+        assert "aic" in texts and "target task" in texts
+        assert "ready = max(producer FIN)" in texts
+    finally:
+        db.close()
+
+
+def test_r2_ready_line_absent_for_level1_placeholders(tmp_path: Path) -> None:
+    db = ProfileDB.memory()
+    try:
+        load(
+            db,
+            level=1,
+            core_types=("aic", "aic"),
+            tasks=[
+                task("1", engine="aic", name="p", family="p", rows=[(0.0, 10.0, 0.0, 0.0, 0.0)]),
+                task("2", engine="aic", name="c", family="c", rows=[(20.0, 30.0, 0.0, 0.0, 0.0)]),
+            ],
+            rows=[
+                ("1", 0, "aic", 0.0, 10.0, 0.0, 0.0, 0.0),
+                ("2", 1, "aic", 20.0, 30.0, 0.0, 0.0, 0.0),
+            ],
+            edges=[edge("1", "2")],
+        )
+        # Level-1 FIN streams are runtime placeholders (0.0): no ready line,
+        # and the note says so instead of silently estimating.
+        _fig, ax = _figure(db, "task", task_id="2")
+        assert _ready_line_x(ax) is None
+        result = render_image(db.connection, 1, "task", render_dir=tmp_path / "r", task_id="2")
+        assert result.note == "producers exist but none has a timed FIN; ready line omitted"
+    finally:
+        db.close()
+
+
+def test_r3_gap_bands_match_idle_gap_table(tmp_path: Path) -> None:
+    db = ProfileDB.memory()
+    try:
+        materialize(
+            db,
+            core_types=("aic", "aic"),
+            tasks=[
+                task("1", engine="aic", name="a", family="a", rows=[(0.0, 10.0, 0.0, 0.0, 10.0)]),
+                task("2", engine="aic", name="b", family="b", rows=[(20.0, 35.0, 20.0, 20.0, 35.0)]),
+            ],
+            rows=[
+                ("1", 0, "aic", 0.0, 10.0, 0.0, 0.0, 10.0),
+                ("2", 0, "aic", 20.0, 35.0, 20.0, 20.0, 35.0),
+            ],
+            edges=[edge("1", "2")],
+        )
+        stored = db.connection.execute(
+            "SELECT t0_us, t1_us FROM idle_gap WHERE run_id = 1 AND core_index = 0 ORDER BY t0_us"
+        ).fetchall()
+        assert stored, "fixture must produce at least one recorded idle gap"
+        _fig, ax = _figure(db, "core", core_index=0)
+        texts = _legend_texts(ax)
+        assert "aic" in texts and "idle gap" in texts
+        drawn = _gap_spans(ax)
+        assert [(float(t0v), float(t1v)) for t0v, t1v in stored] == sorted(drawn)
+        # Bars stay rectangles, distinct from gap polygons.
+        assert any(isinstance(p, Rectangle) for p in ax.patches)
+    finally:
+        db.close()
+
+
+def test_params_key_tracks_generator_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    before = params_key("whole", 1, {})
+    monkeypatch.setattr(cache_module, "RENDER_VERSION", "profile_db.render/x")
+    after = params_key("whole", 1, {})
+    assert before != after
+
+
+def test_cache_get_drops_corrupted_entry(tmp_path: Path) -> None:
+    cache = RenderCache(tmp_path / "cache")
+    data = b"png-bytes"
+    manifest = {"kind": "whole", "run_id": 1, "sha256": hashlib.sha256(data).hexdigest()}
+    cache.put(1, "whole", "k", data, manifest)
+    png, manifest_path = cache._paths(1, "whole", "k")
+    png.write_bytes(b"corrupted")
+    assert cache.get(1, "whole", "k") is None
+    assert not png.exists() and not manifest_path.exists()
+
+
+def test_cache_put_never_evicts_the_fresh_entry(tmp_path: Path) -> None:
+    cache = RenderCache(tmp_path / "cache", max_bytes=100)
+    big = b"x" * 500  # larger than the whole budget
+    path = cache.put(1, "whole", "big", big, {"kind": "whole", "run_id": 1})
+    hit = cache.get(1, "whole", "big")
+    assert hit is not None and hit[0] == big
+    assert path.is_file()

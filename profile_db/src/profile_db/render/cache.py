@@ -15,7 +15,8 @@ Layout (DESIGN.md 7)::
     <render_dir>/<run_id>/<kind>-<params_key>.manifest.json
 
 ``params_key`` is the SHA-256 (first 16 hex chars) of the canonical JSON
-of the render parameters, so a repeated request with identical parameters
+of the render parameters plus the generator version, so a repeated
+request with identical parameters — under the same renderer identity —
 hits the same file. The cache keeps a byte budget (default 200 MB): after
 a write pushes the total over budget, the least-recently-used files are
 evicted. Access time is tracked with ``os.utime`` so hits survive process
@@ -35,11 +36,21 @@ from profile_db.render.styles import DEFAULT_CACHE_MAX_BYTES
 _MANIFEST_SUFFIX = ".manifest.json"
 _PNG_SUFFIX = ".png"
 
+# Render identity. It participates in the cache key so a style/layout bump
+# invalidates every cached entry as one unit; defined here (below the
+# package ``__init__``) to keep the import graph acyclic.
+RENDER_VERSION = "profile_db.render/2"
+
 
 def params_key(kind: str, run_id: int, params: Mapping[str, Any]) -> str:
     """Deterministic 16-hex-char cache key for one render request."""
     canonical = json.dumps(
-        {"kind": kind, "run_id": run_id, **dict(sorted(params.items()))},
+        {
+            "kind": kind,
+            "run_id": run_id,
+            "version": RENDER_VERSION,
+            **dict(sorted(params.items())),
+        },
         ensure_ascii=True,
         sort_keys=True,
         separators=(",", ":"),
@@ -86,7 +97,9 @@ class RenderCache:
 
     def get(self, run_id: int, kind: str, key: str) -> tuple[bytes, dict[str, Any]] | None:
         """Return cached ``(png_bytes, manifest)`` or ``None`` on a miss.
-        A hit refreshes the entry's mtime so it survives the next eviction."""
+        A hit refreshes the entry's mtime so it survives the next eviction;
+        a PNG whose bytes no longer match the manifest sha256 is treated as
+        a miss and dropped (corrupted entries are never served)."""
         png, manifest_path = self._paths(run_id, kind, key)
         if not png.is_file() or not manifest_path.is_file():
             return None
@@ -94,6 +107,14 @@ class RenderCache:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             data = png.read_bytes()
         except (OSError, ValueError):
+            return None
+        expected = manifest.get("sha256")
+        if expected is not None and hashlib.sha256(data).hexdigest() != expected:
+            for path in (png, manifest_path):
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
             return None
         now = os.stat(png).st_mtime_ns if png.exists() else None
         if now is not None:
@@ -117,17 +138,21 @@ class RenderCache:
             json.dumps(dict(manifest), ensure_ascii=True, sort_keys=True, indent=2) + "\n",
             encoding="utf-8",
         )
-        self._evict()
+        self._evict(protect=(png, manifest_path))
         return png
 
-    def _evict(self) -> None:
+    def _evict(self, protect: tuple[Path, Path] | None = None) -> None:
         """Delete least-recently-used files until the total is at or under
-        the byte budget. PNG and its manifest are removed together."""
+        the byte budget. PNG and its manifest are removed together. The
+        freshly written pair is never a victim: an entry larger than the
+        whole budget survives rather than leaving ``put`` with a dangling
+        path."""
+        protected = set(protect or ())
         while _total_bytes(self.root) > self.max_bytes:
-            files = sorted(_all_cache_files(self.root), key=lambda p: p.stat().st_mtime_ns)
-            if not files:
-                break
-            victim = files[0]
+            candidates = [p for p in _all_cache_files(self.root) if p not in protected]
+            if not candidates:
+                return
+            victim = min(candidates, key=lambda p: p.stat().st_mtime_ns)
             stem = victim.name.removesuffix(_PNG_SUFFIX).removesuffix(_MANIFEST_SUFFIX)
             sibling = victim.parent / f"{stem}{_MANIFEST_SUFFIX}"
             if sibling == victim:
