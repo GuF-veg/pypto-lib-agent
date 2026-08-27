@@ -113,9 +113,7 @@ def expert_shared(
         # blocks for the decode shape). Activation, row-amax, scale, and requant
         # stay in one task so this stage can start alongside dispatch_push.
         h_tile_fp32 = pl.create_tensor([SH_M_TILE, MOE_INTER], dtype=pl.FP32)
-        h_tile_i8 = pl.create_tensor(
-            [SH_M_TILE, MOE_INTER], dtype=pl.INT8, init_value=0
-        )
+        h_tile_i8 = pl.create_tensor([SH_M_TILE, MOE_INTER], dtype=pl.INT8)
         h_tile_scale_dq = pl.create_tensor(
             [SH_M_TILE, SH_ROW_PAD], dtype=pl.FP32, manual_dep=True
         )
