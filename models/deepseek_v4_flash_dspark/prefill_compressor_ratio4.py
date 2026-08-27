@@ -102,8 +102,6 @@ def _prefill_compressor_ratio4_tile(
         [state_block_num * CSA_STATE_BLOCK_SIZE, COMPRESS_STATE_DIM],
     )
     cmp_kv_flat = pl.reshape(cmp_kv, [cmp_block_num * BLOCK_SIZE, HEAD_DIM])
-    pooled_kv = pl.create_tensor([MAX_CMP_WRITES, HEAD_DIM], dtype=pl.FP32, init_value=0)
-    normed_kv = pl.create_tensor([MAX_CMP_WRITES, HEAD_DIM], dtype=pl.FP32)
 
     t_dim = pl.tensor.dim(x, 0)
     x_flat = pl.reshape(x, [t_dim, D])
@@ -265,6 +263,7 @@ def _prefill_compressor_ratio4_tile(
                         ],
                     )
 
+    pooled_kv = pl.create_tensor([MAX_CMP_WRITES, HEAD_DIM], dtype=pl.FP32)
     for write_i in pl.spmd(MAX_CMP_WRITES, name_hint="prefill_c4_softmax_pool"):
         pool_kv_tile = pl.create_tensor([STATE_LEN, HEAD_D_TILE], dtype=pl.FP32)
         pool_score_tile = pl.create_tensor([STATE_LEN, HEAD_D_TILE], dtype=pl.FP32)
@@ -364,10 +363,8 @@ def _prefill_compressor_ratio4_tile(
                 li_buf[0:1, 0:HEAD_D_TILE],
             )
         else:
-            pooled_kv[write_i : write_i + 1, 0:HEAD_DIM] = pooled_kv[
-                write_i : write_i + 1,
-                0:HEAD_DIM,
-            ]
+            pooled_zero = pl.full([1, HEAD_DIM], dtype=pl.FP32, value=0.0)
+            pooled_kv[write_i : write_i + 1, 0:HEAD_DIM] = pooled_zero
 
     # A single-output GM task closes the state RAW/WAR chain before the next
     # dynamic tile reuses the 520-row ring.
@@ -377,6 +374,7 @@ def _prefill_compressor_ratio4_tile(
         pl.write(state_order_fence, [0], fence_bit * fence_bit)
 
     norm_w_2d = pl.reshape(norm_w, [1, HEAD_DIM])
+    normed_kv = pl.create_tensor([MAX_CMP_WRITES, HEAD_DIM], dtype=pl.FP32)
     for final_block in pl.spmd(
         MAX_CMP_WRITES // PACKED_RMS_TILE,
         name_hint="prefill_c4_rmsnorm_rope",
@@ -523,7 +521,9 @@ def compressor_ratio4(
                     pl.cast(pl.cast(rope_lane * 2 - 1, pl.INT32), pl.FP32),
                 )
 
-    state_order_fence = pl.create_tensor([1], dtype=pl.INT32, init_value=0)
+    state_order_fence = pl.create_tensor([1], dtype=pl.INT32)
+    with pl.at(level=pl.Level.CORE_GROUP, name_hint="prefill_c4_state_order_init"):
+        pl.write(state_order_fence, [0], pl.cast(0, pl.INT32))
     for tile_base in pl.range(0, t_dim, PREFILL_STATE_TILE):
         tile_rows = pl.min(PREFILL_STATE_TILE, t_dim - tile_base)
         with pl.scope():
