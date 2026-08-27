@@ -8,7 +8,7 @@
 # -----------------------------------------------------------------------------------------------------------
 # ci: devices=2  # CI: 2-card run
 # ci: no-sim    # CI marker: full multi-layer / multi-card forward — device-only, skip on *sim
-"""DeepSeek-V4 Flash DSpark 43-layer layer-major DSA-CP prefill backbone."""
+"""DeepSeek-V4 Flash DSpark 43-layer layer-major DSA-CP prefill forward with LM head and greedy sampling."""
 
 import argparse
 import os
@@ -100,6 +100,18 @@ from prefill_o_proj import (
     O_PROJ_WO_B_WINDOW_ROWS,
     retire_o_proj_weight_signals,
 )
+from hc_head import hc_head
+from lm_head import (
+    GROUP_LOGIT_ROWS,
+    MAX_LOGIT_ROWS,
+    SAMPLED_IDS_PAD,
+    TP_SIZE as LM_HEAD_TP_SIZE,
+    VOCAB as LM_HEAD_VOCAB,
+    VOCAB_PER_TP,
+    greedy_sample,
+    lm_head,
+)
+from rmsnorm import rms_norm
 
 
 # Dynamic shape variables.
@@ -127,9 +139,16 @@ CSA_INNER_COMPRESS_STATE_DIM = 2 * INNER_OUT_DIM
 
 # runtime
 PREFILL_RING_HEAP = (4 * 1024 * 1024 * 1024,) * 4
+LM_HEAD_COMM_EPOCH = 1
 
 if MODEL_NUM_LAYERS != FWD_NUM_LAYERS:
     raise ValueError("DeepSeek-V4 Flash hidden layer count changed")
+if LM_HEAD_TP_SIZE != TP_SIZE:
+    raise ValueError(f"LM-head TP={LM_HEAD_TP_SIZE} does not match prefill TP={TP_SIZE}")
+if LM_HEAD_VOCAB != MODEL_CONFIG.vocab_size:
+    raise ValueError(f"LM-head vocab={LM_HEAD_VOCAB} does not match model vocab={MODEL_CONFIG.vocab_size}")
+if MODEL_CONFIG.vocab_size % TP_SIZE:
+    raise ValueError(f"vocab size {MODEL_CONFIG.vocab_size} must be divisible by TP={TP_SIZE}")
 
 # FWD-layer stacked tensors, indexed by layer 0-42.
 FWD_LAYER_STACKED_NAMES = [
@@ -204,6 +223,18 @@ RESIDENT_CACHE_NAMES = frozenset(CACHE_NAMES)
 
 # Caches returned to the following decode invocation.
 RESIDENT_CACHE_OUTPUT_NAMES = RESIDENT_CACHE_NAMES
+
+
+@pl.jit.inline
+def mask_inactive_sample_rows(
+    logit_row_indices: pl.Tensor[[MAX_LOGIT_ROWS], pl.INT32],
+    sampled_ids: pl.Tensor[[MAX_LOGIT_ROWS, SAMPLED_IDS_PAD], pl.INT32],
+):
+    """Mark sampled rows without a live logit row with -1."""
+    for row in pl.spmd(MAX_LOGIT_ROWS, name_hint="prefill_fwd_sample_mask"):
+        if pl.read(logit_row_indices, [row]) < 0:
+            sampled_ids[row : row + 1, :] = pl.full([1, SAMPLED_IDS_PAD], dtype=pl.INT32, value=-1)
+    return sampled_ids
 
 
 @pl.jit(auto_scope=False)
@@ -292,6 +323,16 @@ def prefill_fwd(
     post_ffn: pl.Tensor[[FWD_GROUP_TOKENS_DYN, HC_MULT], pl.FP32],
     comb_ffn: pl.Tensor[[FWD_GROUP_TOKENS_DYN, HC_MULT * HC_MULT], pl.FP32],
     ffn_out: pl.Tensor[[FWD_TOKENS_DYN, D], pl.BF16],
+    hc_head_fn: pl.Tensor[[HC_MULT, HC_DIM], pl.FP32],
+    hc_head_scale: pl.Tensor[[1], pl.FP32],
+    hc_head_base: pl.Tensor[[HC_MULT], pl.FP32],
+    final_norm_w: pl.Tensor[[D], pl.BF16],
+    lm_head_weight: pl.Tensor[[VOCAB_PER_TP, D], pl.BF16],
+    logit_row_indices: pl.Tensor[[MAX_LOGIT_ROWS], pl.INT32],
+    hidden_workspace: pl.Tensor[[FWD_GROUP_TOKENS_DYN, D], pl.BF16],
+    x_out: pl.Out[pl.Tensor[[FWD_GROUP_TOKENS_DYN, D], pl.BF16]],
+    logits: pl.Out[pl.Tensor[[MAX_LOGIT_ROWS, LM_HEAD_VOCAB], pl.FP32]],
+    sampled_ids: pl.Out[pl.Tensor[[MAX_LOGIT_ROWS, SAMPLED_IDS_PAD], pl.INT32]],
     recv_meta: pld.DistributedTensor[[N_RANKS, N_LOCAL], pl.INT32],
     recv_x: pld.DistributedTensor[[N_LOCAL * RECV_MAX, D], pl.INT8],
     recv_aux: pld.DistributedTensor[[N_LOCAL * RECV_MAX, AUX_PAD], pl.FP32],
@@ -307,9 +348,13 @@ def prefill_fwd(
     o_proj_wo_b_window: pld.DistributedTensor[[O_PROJ_WO_B_WINDOW_ROWS, O_PROJ_WO_B_WINDOW_COLS], pl.INT8],
     o_proj_weight_ready: pld.DistributedTensor[[TP_SIZE, 1], pl.INT32],
     o_proj_weight_consumed: pld.DistributedTensor[[TP_SIZE, 1], pl.INT32],
+    lm_head_hidden_window: pld.DistributedTensor[[GROUP_LOGIT_ROWS, D], pl.BF16],
+    lm_head_hidden_done: pld.DistributedTensor[[LM_HEAD_TP_SIZE, 1], pl.INT32],
+    lm_head_logits_window: pld.DistributedTensor[[MAX_LOGIT_ROWS * LM_HEAD_VOCAB], pl.FP32],
+    lm_head_logits_done: pld.DistributedTensor[[LM_HEAD_TP_SIZE, 1], pl.INT32],
     my_rank: pl.Scalar[pl.INT32],
 ):
-    """Run explicit layers 0, 1, and 42 around the repeated CSA/HCA layer pairs 2-41."""
+    """Run explicit layers 0, 1, and 42 around the repeated CSA/HCA pairs 2-41, then head, LM head, and sampling."""
     group_base = my_rank // TP_SIZE * TP_SIZE
     tp_rank = my_rank % TP_SIZE
 
@@ -932,7 +977,23 @@ def prefill_fwd(
             o_proj_weight_ready, o_proj_weight_consumed,
             group_base, tp_rank, pl.const(43, pl.INT32),
         )
-    return x_hc
+
+    # Final head over the gathered TP-group tokens: after the layer-42 token
+    # gather x_hc holds every group token on each rank, and logit_row_indices
+    # index that group token space.
+    with pl.scope():
+        hc_head(x_hc, hc_head_fn, hc_head_scale, hc_head_base, hidden_workspace)
+        final_norm_tid = rms_norm(hidden_workspace, final_norm_w, x_out)
+        lm_head(
+            x_out, lm_head_weight, logit_row_indices, logits,
+            lm_head_hidden_window, lm_head_hidden_done,
+            lm_head_logits_window, lm_head_logits_done,
+            group_base, tp_rank,
+            pl.const(LM_HEAD_COMM_EPOCH, pl.INT32), final_norm_tid,
+        )
+        greedy_sample(logits, sampled_ids)
+        mask_inactive_sample_rows(logit_row_indices, sampled_ids)
+    return x_out
 
 
 # DSA-CP layer-major multi-wave forward.
@@ -1022,9 +1083,21 @@ def l3_prefill_fwd(
     post_ffn: pl.Tensor[[N_RANKS, FWD_GROUP_TOKENS_DYN, HC_MULT], pl.FP32],
     comb_ffn: pl.Tensor[[N_RANKS, FWD_GROUP_TOKENS_DYN, HC_MULT * HC_MULT], pl.FP32],
     ffn_out: pl.Tensor[[N_RANKS, FWD_TOKENS_DYN, D], pl.BF16],
+    hc_head_fn: pl.Tensor[[N_RANKS, HC_MULT, HC_DIM], pl.FP32],
+    hc_head_scale: pl.Tensor[[N_RANKS, 1], pl.FP32],
+    hc_head_base: pl.Tensor[[N_RANKS, HC_MULT], pl.FP32],
+    final_norm_w: pl.Tensor[[N_RANKS, D], pl.BF16],
+    lm_head_weight: pl.Tensor[[N_RANKS, VOCAB_PER_TP, D], pl.BF16],
+    logit_row_indices: pl.Tensor[[N_RANKS, MAX_LOGIT_ROWS], pl.INT32],
+    hidden_workspace: pl.Tensor[[N_RANKS, FWD_GROUP_TOKENS_DYN, D], pl.BF16],
+    x_out: pl.Out[pl.Tensor[[N_RANKS, FWD_GROUP_TOKENS_DYN, D], pl.BF16]],
+    logits: pl.Out[pl.Tensor[[N_RANKS, MAX_LOGIT_ROWS, LM_HEAD_VOCAB], pl.FP32]],
+    sampled_ids: pl.Out[pl.Tensor[[N_RANKS, MAX_LOGIT_ROWS, SAMPLED_IDS_PAD], pl.INT32]],
 ):
-    """Run layer-major DSA-CP with replicated boundaries and token-local compute."""
+    """Run layer-major DSA-CP with replicated boundaries, token-local compute, and a TP LM head."""
     x_hc.bind_dynamic(1, FWD_GROUP_TOKENS_DYN)
+    hidden_workspace.bind_dynamic(1, FWD_GROUP_TOKENS_DYN)
+    x_out.bind_dynamic(1, FWD_GROUP_TOKENS_DYN)
     attn_stage.bind_dynamic(1, FWD_GROUP_TOKENS_DYN)
     x_mixed.bind_dynamic(1, FWD_GROUP_TOKENS_DYN)
     post_ffn.bind_dynamic(1, FWD_GROUP_TOKENS_DYN)
@@ -1056,6 +1129,10 @@ def l3_prefill_fwd(
     o_proj_wo_b_window_buf = pld.alloc_window_buffer([O_PROJ_WO_B_WINDOW_ROWS, O_PROJ_WO_B_WINDOW_COLS], dtype=pl.INT8)
     o_proj_weight_ready_buf = pld.alloc_window_buffer([TP_SIZE, 1], dtype=pl.INT32)
     o_proj_weight_consumed_buf = pld.alloc_window_buffer([TP_SIZE, 1], dtype=pl.INT32)
+    lm_head_hidden_window_buf = pld.alloc_window_buffer([GROUP_LOGIT_ROWS, D], dtype=pl.BF16)
+    lm_head_hidden_done_buf = pld.alloc_window_buffer([LM_HEAD_TP_SIZE, 1], dtype=pl.INT32)
+    lm_head_logits_window_buf = pld.alloc_window_buffer([MAX_LOGIT_ROWS * LM_HEAD_VOCAB], dtype=pl.FP32)
+    lm_head_logits_done_buf = pld.alloc_window_buffer([LM_HEAD_TP_SIZE, 1], dtype=pl.INT32)
 
     for r in pl.range(pld.world_size()):
         recv_meta = pld.window(recv_meta_buf, [N_RANKS, N_LOCAL], dtype=pl.INT32)
@@ -1077,6 +1154,10 @@ def l3_prefill_fwd(
         )
         o_proj_weight_ready = pld.window(o_proj_weight_ready_buf, [TP_SIZE, 1], dtype=pl.INT32)
         o_proj_weight_consumed = pld.window(o_proj_weight_consumed_buf, [TP_SIZE, 1], dtype=pl.INT32)
+        lm_head_hidden_window = pld.window(lm_head_hidden_window_buf, [GROUP_LOGIT_ROWS, D], dtype=pl.BF16)
+        lm_head_hidden_done = pld.window(lm_head_hidden_done_buf, [LM_HEAD_TP_SIZE, 1], dtype=pl.INT32)
+        lm_head_logits_window = pld.window(lm_head_logits_window_buf, [MAX_LOGIT_ROWS * LM_HEAD_VOCAB], dtype=pl.FP32)
+        lm_head_logits_done = pld.window(lm_head_logits_done_buf, [LM_HEAD_TP_SIZE, 1], dtype=pl.INT32)
         prefill_fwd(
             x_hc[r],
             hc_attn_fn[r], hc_attn_scale[r], hc_attn_base[r],
@@ -1115,15 +1196,21 @@ def l3_prefill_fwd(
             o_proj_wo_a_full[r], o_proj_wo_b_full[r],
             attn_stage[r], x_mixed[r],
             post_ffn[r], comb_ffn[r], ffn_out[r],
+            hc_head_fn[r], hc_head_scale[r], hc_head_base[r],
+            final_norm_w[r], lm_head_weight[r], logit_row_indices[r],
+            hidden_workspace[r], x_out[r], logits[r], sampled_ids[r],
             recv_meta, recv_x, recv_aux, recv_route,
             arrived, data_arrived, routed_y_buf, combine_arrived,
             stage_done,
             gather_window, gather_signal,
             o_proj_wo_a_window, o_proj_wo_b_window,
             o_proj_weight_ready, o_proj_weight_consumed,
+            lm_head_hidden_window, lm_head_hidden_done,
+            lm_head_logits_window, lm_head_logits_done,
             r,
             device=r,
         )
+    return x_out, logits, sampled_ids
 
 
 # Kernel-only smoke fixtures.
@@ -1616,11 +1703,178 @@ def build_tensor_specs(
     for spec in moe_stage_specs:
         spec.resident = "stacked"
         specs.append(spec)
+
+    # Head and LM-head fixtures: one replicated draw per model weight, per-rank
+    # LM-head vocabulary shards.
+    def init_hc_head_fn():
+        head_fn = torch.randn(HC_MULT, HC_DIM) * 0.0519
+        return head_fn.unsqueeze(0).expand(N_RANKS, -1, -1).contiguous()
+
+    def init_hc_head_scale():
+        return torch.full((N_RANKS, 1), 0.076099, dtype=torch.float32)
+
+    def init_hc_head_base():
+        base = torch.tensor([5.9166, -3.6223, -2.9324, -3.3124], dtype=torch.float32)
+        return base.view(1, HC_MULT).expand(N_RANKS, -1).contiguous()
+
+    def init_final_norm_w():
+        norm = (torch.randn(D) * 0.1 + 1.0).to(torch.bfloat16)
+        return norm.unsqueeze(0).expand(N_RANKS, -1).contiguous()
+
+    def init_lm_head_weight():
+        shards = (torch.randn(TP_SIZE, VOCAB_PER_TP, D) / D**0.5).to(torch.bfloat16)
+        return torch.stack([shards[rank % TP_SIZE] for rank in range(N_RANKS)], dim=0)
+
+    # Leader-owned rows: the group leader publishes the last prompt token as its
+    # single live logit row; peers keep every row at -1 and still join the TP
+    # collective.
+    def init_logit_row_indices(tokens=num_tokens):
+        indices = torch.full((N_RANKS, MAX_LOGIT_ROWS), -1, dtype=torch.int32)
+        indices[::TP_SIZE, 0] = tokens - 1
+        return indices
+
+    def init_hidden_workspace():
+        return torch.zeros(N_RANKS, stage_tokens, D, dtype=torch.bfloat16)
+
+    head_specs = [
+        TensorSpec("hc_head_fn", [N_RANKS, HC_MULT, HC_DIM], torch.float32, init_value=init_hc_head_fn),
+        TensorSpec("hc_head_scale", [N_RANKS, 1], torch.float32, init_value=init_hc_head_scale),
+        TensorSpec("hc_head_base", [N_RANKS, HC_MULT], torch.float32, init_value=init_hc_head_base),
+        TensorSpec("final_norm_w", [N_RANKS, D], torch.bfloat16, init_value=init_final_norm_w),
+        TensorSpec("lm_head_weight", [N_RANKS, VOCAB_PER_TP, D], torch.bfloat16, init_value=init_lm_head_weight),
+        TensorSpec("logit_row_indices", [N_RANKS, MAX_LOGIT_ROWS], torch.int32, init_value=init_logit_row_indices),
+        TensorSpec("hidden_workspace", [N_RANKS, stage_tokens, D], torch.bfloat16, init_value=init_hidden_workspace),
+        TensorSpec("x_out", [N_RANKS, stage_tokens, D], torch.bfloat16, is_output=True),
+        TensorSpec("logits", [N_RANKS, MAX_LOGIT_ROWS, LM_HEAD_VOCAB], torch.float32, is_output=True),
+        TensorSpec("sampled_ids", [N_RANKS, MAX_LOGIT_ROWS, SAMPLED_IDS_PAD], torch.int32, is_output=True),
+    ]
+    for spec in head_specs:
+        spec.resident = "stacked"
+        specs.append(spec)
     return specs
 
 
+def golden_prefill_fwd(_tensors):
+    """Prefill forward is a topology/liveness witness; layer math is gated by prefill_layer."""
+
+
+def finite_tensor_compare(actual, _expected, **_kwargs):
+    """Require a completed finite device result without duplicating 43 goldens."""
+    import torch
+
+    if actual.numel() == 0:
+        return False, "    prefill forward output is empty"
+    if actual.is_floating_point() and not bool(torch.isfinite(actual).all()):
+        return False, "    prefill forward output contains NaN or Inf"
+    return True, ""
+
+
+def x_out_compare(actual, _expected, **kwargs):
+    """Recompute hc_head plus the final norm from the device x_hc and compare."""
+    import torch
+    from hc_head import golden_hc_head
+    from rmsnorm import golden_rms_norm
+
+    inputs = kwargs.get("inputs", {})
+    device_x_hc = kwargs.get("actual_outputs", {}).get("x_hc")
+    if device_x_hc is None:
+        return False, "    missing device x_hc output"
+    for rank in range(actual.shape[0]):
+        head_out = torch.empty(device_x_hc.shape[1], D, dtype=torch.bfloat16)
+        golden_hc_head({
+            "x_hc": device_x_hc[rank].cpu(),
+            "hc_head_fn": inputs["hc_head_fn"][rank],
+            "hc_head_scale": inputs["hc_head_scale"][rank],
+            "hc_head_base": inputs["hc_head_base"][rank],
+            "y": head_out,
+        })
+        expected_rank = golden_rms_norm(head_out, inputs["final_norm_w"][rank]).float()
+        actual_rank = actual[rank].float()
+        if not bool(torch.isfinite(actual_rank).all()):
+            return False, f"    rank {rank} x_out contains NaN or Inf"
+        # bf16 point tolerance plus a per-token outlier bound: a fully corrupted
+        # token row stays under the tensor-wide 0.5% budget.
+        tolerance = 1e-4 + (1.0 / 128) * expected_rank.abs()
+        bad = (actual_rank - expected_rank).abs() > tolerance
+        ratio = float(bad.float().mean())
+        if ratio > 0.005:
+            return False, f"    rank {rank} head oracle mismatch: {ratio:.2%} points out of tolerance"
+        row_bad = bad.float().mean(dim=1)
+        worst_row = int(torch.argmax(row_bad))
+        if float(row_bad[worst_row]) > 0.05:
+            return False, f"    rank {rank} token {worst_row}: {float(row_bad[worst_row]):.1%} points out of tolerance"
+    return True, ""
+
+
+def logits_compare(actual, _expected, **kwargs):
+    """Recompute every active logit row from the device x_out and the TP vocab shards."""
+    import torch
+
+    inputs = kwargs.get("inputs", {})
+    device_x_out = kwargs.get("actual_outputs", {}).get("x_out")
+    row_indices = inputs.get("logit_row_indices")
+    weight = inputs.get("lm_head_weight")
+    if device_x_out is None or row_indices is None or weight is None:
+        return False, "    missing device x_out or LM-head inputs"
+    if not bool(torch.isfinite(actual).all()):
+        return False, "    logits contain NaN or Inf"
+    for rank in range(actual.shape[0]):
+        group_base = rank // TP_SIZE * TP_SIZE
+        for row in range(MAX_LOGIT_ROWS):
+            source = int(row_indices[rank, row])
+            if source < 0:
+                continue
+            hidden_row = device_x_out[rank][source].float()
+            # Shard tp owns vocabulary rows [tp * VOCAB_PER_TP, (tp + 1) * VOCAB_PER_TP).
+            expected_row = torch.cat([weight[group_base + tp].float() @ hidden_row for tp in range(TP_SIZE)])
+            actual_row = actual[rank, row].cpu()
+            if not torch.allclose(actual_row, expected_row, rtol=1e-3, atol=1e-3):
+                worst = float((actual_row - expected_row).abs().max())
+                return False, f"    rank {rank} row {row} (token {source}) logits mismatch, max |err|={worst:.3e}"
+    return True, ""
+
+
+def sampled_ids_compare(actual, _expected, **kwargs):
+    """Validate greedy ids against the device logits and the inactive-row -1 contract."""
+    import torch
+
+    row_indices = kwargs.get("inputs", {}).get("logit_row_indices")
+    device_logits = kwargs.get("actual_outputs", {}).get("logits")
+    if row_indices is None or device_logits is None:
+        return False, "    missing logit_row_indices input or device logits output"
+    active = row_indices >= 0
+    inactive_values = actual.masked_select((~active).unsqueeze(-1).expand_as(actual))
+    if inactive_values.numel() and not bool(torch.all(inactive_values == -1)):
+        return False, "    inactive sampled-id rows are not -1"
+    for rank in range(actual.shape[0]):
+        for row in range(MAX_LOGIT_ROWS):
+            if int(row_indices[rank, row]) < 0:
+                continue
+            sampled = int(actual[rank, row, 0])
+            expected = int(torch.argmax(device_logits[rank][row]))
+            # Both scans keep the first maximum, over identical fp32 data.
+            if sampled != expected:
+                return False, f"    rank {rank} row {row}: sampled id {sampled} != device logits argmax {expected}"
+    return True, ""
+
+
+def compare_functions():
+    """Return the head oracles and finite-completion comparators for every output."""
+    finite_names = {
+        "x_hc", "attn_stage",
+        "kv_cache", "hca_cmp_kv", "csa_cmp_kv",
+        "hca_compress_state", "csa_compress_state", "csa_inner_compress_state",
+        "idx_kv_cache", "idx_kv_scale",
+    }
+    compare = {name: finite_tensor_compare for name in finite_names}
+    compare["x_out"] = x_out_compare
+    compare["logits"] = logits_compare
+    compare["sampled_ids"] = sampled_ids_compare
+    return compare
+
+
 def main():
-    parser = argparse.ArgumentParser(description="DeepSeek-V4 Flash DSA-CP 43-layer prefill-backbone driver.")
+    parser = argparse.ArgumentParser(description="DeepSeek-V4 Flash DSA-CP 43-layer prefill-forward driver.")
     parser.add_argument("-p", "--platform", type=str, default="a2a3", choices=["a2a3", "a5"])
     parser.add_argument(
         "--ep", type=int, default=N_RANKS, choices=[2, 4, 8, 16],
@@ -1684,7 +1938,7 @@ def main():
     result = run_jit(
         fn=l3_prefill_fwd,
         specs=specs,
-        golden_fn=None,
+        golden_fn=golden_prefill_fwd,
         compile_only=args.compile_only,
         runtime_dir=args.runtime_dir,
         save_data=False,
@@ -1698,6 +1952,7 @@ def main():
             enable_scope_stats=args.enable_scope_stats,
             ring_heap=PREFILL_RING_HEAP,
         ),
+        compare_fn=compare_functions(),
     )
     if not result.passed:
         if result.error:
