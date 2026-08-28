@@ -334,8 +334,8 @@ overhead is visible per iteration on the swimlane, replace the explicit
 `for ... in pl.parallel: with pl.at: ...` pattern with `pl.spmd`:
 
 ```python
-# qwen3_32b/decode.py: one AICPU dispatch fans out every q_proj block
-for qi in pl.spmd(HIDDEN // Q_OUT_TILE, name_hint="q_proj"):
+# qwen3_14b/decode_layer_a8w8.py: one AICPU dispatch fans out every q_proj block
+for q_grid in pl.spmd(Q_ON * N_SUB, name_hint="q_proj_fused_dequant"):
     ...
 ```
 
