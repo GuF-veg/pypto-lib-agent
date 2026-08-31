@@ -248,11 +248,10 @@ def decode_swa(
             lens_slice = swa_lens[token_start : token_start + BIAS_T_TILE]
             lens_col = pl.reshape(lens_slice, [BIAS_T_TILE, 1])
             lens_fp32 = pl.cast(lens_col, target_type=pl.FP32)
-            valid = pl.neg(pl.row_expand_sub(valid_cols, lens_fp32))
-            valid = pl.maximum(valid, 0.0)
-            valid = pl.minimum(valid, 1.0)
-            invalid = pl.sub(valid, 1.0)
-            sparse_bias[token_start : token_start + BIAS_T_TILE, 0 : ATTN_K_TILE] = pl.mul(invalid, -NEG_INF)
+            valid = pl.minimum(pl.maximum(pl.neg(pl.row_expand_sub(valid_cols, lens_fp32)), 0.0), 1.0)
+            sparse_bias[token_start : token_start + BIAS_T_TILE, 0 : ATTN_K_TILE] = pl.mul(
+                pl.sub(valid, 1.0), -NEG_INF,
+            )
 
     attention_local_flat = pl.create_tensor([ATTENTION_WINDOW_ROWS, O_GROUP_IN], dtype=pl.BF16)
     attn_out = pl.create_tensor([t_dim, D], dtype=pl.BF16)
@@ -262,7 +261,7 @@ def decode_swa(
             rope_cos_il, rope_sin_signed, rope_swap_idx,
             qk_tid, rope_tid,
         ) = sparse_attn_swa(
-            q, kv_cache, swa_indices, sparse_bias,
+            q, kv_cache, swa_indices, swa_lens, sparse_bias,
             freqs_cos_local, freqs_sin_local,
         )
 
@@ -594,7 +593,7 @@ def decode_swa_tp1(
     attn_out = pl.create_tensor([t_dim, D], dtype=pl.BF16)
     o_packed_heads = pl.create_tensor([O_GROUPS * T_PAD * HEADS_PER_GROUP, HEAD_DIM], dtype=pl.BF16)
     o_packed_heads, heads_dep = sparse_attn_swa_tp1(
-        q, kv_cache, swa_indices, sparse_bias,
+        q, kv_cache, swa_indices, swa_lens, sparse_bias,
         attn_sink, freqs_cos, freqs_sin,
         o_packed_heads,
     )
