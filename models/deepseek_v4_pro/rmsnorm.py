@@ -109,13 +109,13 @@ def build_tensor_specs(B, S):
     return [
         TensorSpec("x", [T, D], torch.bfloat16, init_value=init_x),
         TensorSpec("norm_w", [D], torch.bfloat16, init_value=init_norm_w),
-        TensorSpec("x_normed", [T, D], torch.bfloat16, is_output=True),
+        TensorSpec("x_normed", [T, D], torch.bfloat16),
     ]
 
 
 if __name__ == "__main__":
     import argparse
-    from golden import ratio_allclose, run_jit
+    from golden import ratio_allclose, run
 
     MODES = {
         "decode": (DECODE_BATCH, DECODE_SEQ),
@@ -139,7 +139,7 @@ if __name__ == "__main__":
     for mode_name in modes_to_run:
         B, S = MODES[mode_name]
         print(f"--- rms_norm_test {mode_name}: B={B}, S={S} ---")
-        result = run_jit(
+        result = run(
             fn=rms_norm_test,
             specs=build_tensor_specs(B, S),
             golden_fn=golden_rms_norm_test,

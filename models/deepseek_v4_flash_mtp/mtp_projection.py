@@ -329,13 +329,13 @@ def build_tensor_specs(batch=DECODE_BATCH, seq=DECODE_SEQ):
         TensorSpec("h_proj_w", [D, D], torch.int8, init_value=init_h_proj_w),
         TensorSpec("h_proj_w_scale", [D], torch.float32, init_value=init_h_proj_w_scale),
         TensorSpec("h_proj_smooth", [D], torch.float32, init_value=lambda: torch.ones(D)),
-        TensorSpec("hidden_states_out", [t, HC_MULT, D], torch.float32, is_output=True),
+        TensorSpec("hidden_states_out", [t, HC_MULT, D], torch.float32),
     ]
 
 
 if __name__ == "__main__":
     import argparse
-    from golden import ratio_allclose, run_jit
+    from golden import ratio_allclose, run
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -357,7 +357,7 @@ if __name__ == "__main__":
     }
     for mode in (modes if args.mode == "all" else [args.mode]):
         batch, seq = modes[mode]
-        result = run_jit(
+        result = run(
             fn=mtp_projection_test,
             specs=build_tensor_specs(batch, seq),
             golden_fn=golden_mtp_projection,

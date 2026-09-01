@@ -661,10 +661,10 @@ def build_tensor_specs(layer_id=0, num_tokens=T):
         ScalarSpec("num_tokens", torch.int32, num_tokens),
         TensorSpec("tid2eid", [VOCAB, TOPK], torch.int32, init_value=init_tid2eid),
         TensorSpec("input_ids", [T], torch.int64, init_value=init_input_ids),
-        TensorSpec("x_norm_i8", [T, D], torch.int8, is_output=True),
-        TensorSpec("x_norm_scale", [T, 1], torch.float32, is_output=True),
-        TensorSpec("indices", [T, TOPK], torch.int32, is_output=True),
-        TensorSpec("weights", [T, TOPK], torch.float32, is_output=True),
+        TensorSpec("x_norm_i8", [T, D], torch.int8),
+        TensorSpec("x_norm_scale", [T, 1], torch.float32),
+        TensorSpec("indices", [T, TOPK], torch.int32),
+        TensorSpec("weights", [T, TOPK], torch.float32),
     ]
 
 
@@ -685,7 +685,7 @@ def gate_x_norm_scale_compare(num_tokens):
 if __name__ == "__main__":
     import argparse
     import torch
-    from golden import ratio_allclose, run_jit
+    from golden import ratio_allclose, run
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--platform", type=str, default="a2a3", choices=["a2a3", "a2a3sim", "a5", "a5sim"])
@@ -698,7 +698,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     torch.manual_seed(args.seed)
 
-    result = run_jit(
+    result = run(
         fn=gate_test,
         specs=build_tensor_specs(layer_id=args.layer_id, num_tokens=args.num_tokens),
         golden_fn=golden_gate_core,

@@ -14,7 +14,7 @@ import argparse
 
 import pypto.language as pl
 import pypto.language.distributed as pld
-from golden import ratio_allclose, ratio_reldiff, run_jit
+from golden import ratio_allclose, ratio_reldiff, run
 from pypto.ir.distributed_compiled_program import DistributedConfig
 
 import config
@@ -371,10 +371,10 @@ def l3_mtp_prefill_fwd(
         )
 
 
-def _ranked(spec, torch, is_output=False):
+def _ranked(spec, torch):
     from golden import TensorSpec
 
-    return TensorSpec(spec.name, list(spec.shape), spec.dtype, init_value=spec.init_value, is_output=is_output)
+    return TensorSpec(spec.name, list(spec.shape), spec.dtype, init_value=spec.init_value)
 
 
 def _projection_specs():
@@ -542,7 +542,6 @@ def build_tensor_specs(
             cache_spec = TensorSpec(
                 name, [N_RANKS, ori_block_num, BLOCK_SIZE, 1, HEAD_DIM], cache_dtype,
                 init_value=init_kv_cache,
-                is_output=True,
                 resident="stacked",
             )
             specs.append(cache_spec)
@@ -587,19 +586,16 @@ def build_tensor_specs(
     specs.append(lm_head_spec)
     hidden_out_spec = TensorSpec(
         "hidden_out", [N_RANKS, T, D], torch.bfloat16,
-        is_output=True,
         resident="stacked",
     )
     specs.append(hidden_out_spec)
     pre_hc_hidden_spec = TensorSpec(
         "pre_hc_hidden_out", [N_RANKS, T, HC_MULT, D], torch.float32,
-        is_output=True,
         resident="stacked",
     )
     specs.append(pre_hc_hidden_spec)
     logits_spec = TensorSpec(
         "logits", [N_RANKS, MAX_LOGIT_ROWS, LM_HEAD_VOCAB], torch.float32,
-        is_output=True,
         resident="stacked",
     )
     specs.append(logits_spec)
@@ -762,7 +758,7 @@ def main():
     device_ids = [int(d) for d in args.device.split(",")]
     assert len(device_ids) >= N_RANKS, f"need at least {N_RANKS} devices, got {device_ids}"
 
-    result = run_jit(
+    result = run(
         fn=l3_mtp_prefill_fwd,
         specs=build_tensor_specs(
             start_pos=args.start_pos,

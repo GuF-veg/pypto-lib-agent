@@ -131,7 +131,7 @@ assert S == WIN, "packed CSA prefill currently assumes one static window page"
 # ring; measured on a5, every ring at 512 MiB is already enough for all three prefill
 # attention variants, so 1 GiB is one doubling of headroom over the measured need.
 # All four rings, not just ring 2: ring 2 alone (what prefill_fwd.py sets) does not
-# clear it. Applied through run_jit's runtime_cfg, which reaches the device only on
+# clear it. Applied through run's runtime_cfg, which reaches the device only on
 # the ChipWorker route -- see golden/runner.py::_execute_via_runner.
 PREFILL_ATTN_RING_HEAP = (1024 * 1024 * 1024,) * 4
 
@@ -879,7 +879,6 @@ def build_tensor_specs(
             [CSA_STATE_BLOCK_NUM, CSA_STATE_BLOCK_SIZE, MAIN_COMPRESS_STATE_DIM],
             torch.float32,
             init_value=init_compress_state,
-            is_output=True,
         ),
         TensorSpec("compress_state_block_table", [CSA_STATE_MAX_BLOCKS], torch.int32, init_value=init_compress_state_block_table),
         TensorSpec("hadamard_idx", [IDX_HEAD_DIM, IDX_HEAD_DIM], torch.bfloat16, init_value=init_hadamard_idx),
@@ -895,11 +894,10 @@ def build_tensor_specs(
             [INNER_STATE_BLOCK_NUM, INNER_STATE_BLOCK_SIZE, INNER_COMPRESS_STATE_DIM],
             torch.float32,
             init_value=init_inner_compress_state,
-            is_output=True,
         ),
         TensorSpec("inner_compress_state_block_table", [INNER_STATE_MAX_BLOCKS], torch.int32, init_value=init_inner_compress_state_block_table),
         TensorSpec("kv_cache", [CSA_ORI_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], torch.bfloat16,
-                   init_value=init_kv_cache, is_output=True),
+                   init_value=init_kv_cache),
         TensorSpec("ori_block_table", [SPARSE_ORI_MAX_BLOCKS], torch.int32, init_value=init_ori_block_table),
         TensorSpec("ori_slot_mapping", [T], torch.int64, init_value=init_ori_slot_mapping),
         TensorSpec(
@@ -907,7 +905,6 @@ def build_tensor_specs(
             [CSA_CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM],
             torch.bfloat16,
             init_value=init_cmp_kv,
-            is_output=True,
         ),
         TensorSpec("cmp_block_table", [SPARSE_CMP_MAX_BLOCKS], torch.int32, init_value=init_cmp_block_table),
         TensorSpec(
@@ -915,14 +912,12 @@ def build_tensor_specs(
             [PREFILL_IDX_BLOCK_NUM, BLOCK_SIZE, 1, IDX_HEAD_DIM],
             torch.int8,
             init_value=init_idx_kv_cache,
-            is_output=True,
         ),
         TensorSpec(
             "idx_kv_scale",
             [PREFILL_IDX_BLOCK_NUM, BLOCK_SIZE, 1, 1],
             torch.float32,
             init_value=init_idx_kv_scale,
-            is_output=True,
         ),
         TensorSpec("idx_block_table", [IDX_CACHE_MAX_BLOCKS], torch.int32, init_value=init_idx_block_table),
         TensorSpec("position_ids", [T], torch.int32, init_value=init_position_ids),
@@ -934,7 +929,7 @@ def build_tensor_specs(
         TensorSpec("wo_a", [O_GROUPS, O_LORA, O_GROUP_IN], torch.bfloat16, init_value=init_wo_a),
         TensorSpec("wo_b", [D, O_GROUPS * O_LORA], torch.int8, init_value=lambda: wo_b_i8),
         TensorSpec("wo_b_scale", [D], torch.float32, init_value=lambda: wo_b_scale),
-        TensorSpec("x_out", [T, HC_MULT, D], torch.float32, is_output=True),
+        TensorSpec("x_out", [T, HC_MULT, D], torch.float32),
         ScalarSpec("num_tokens", torch.int32, num_tokens),
     ]
 
@@ -952,7 +947,7 @@ def _quant_w_per_output_channel_local(w):
 
 if __name__ == "__main__":
     import argparse
-    from golden import ratio_reldiff, run_jit
+    from golden import ratio_reldiff, run
 
     parser = argparse.ArgumentParser(description="Standalone DeepSeek V4 packed prefill CSA correctness test.")
     parser.add_argument("-p", "--platform", type=str, default="a2a3", choices=["a2a3", "a2a3sim", "a5", "a5sim"])
@@ -978,7 +973,7 @@ if __name__ == "__main__":
 
     from pypto.runtime import RunConfig
 
-    result = run_jit(
+    result = run(
         fn=prefill_attention_csa_test,
         specs=build_tensor_specs(
             args.start_pos,

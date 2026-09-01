@@ -825,7 +825,6 @@ def build_tensor_specs(start_pos: int = START_POS, token_count: int = PREFILL_SE
             [HCA_STATE_BLOCK_NUM, HCA_STATE_BLOCK_SIZE, MAIN_COMPRESS_STATE_DIM],
             torch.float32,
             init_value=init_compress_state,
-            is_output=True,
         ),
         TensorSpec(
             "compress_state_block_table",
@@ -838,7 +837,6 @@ def build_tensor_specs(start_pos: int = START_POS, token_count: int = PREFILL_SE
             [HCA_ORI_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM],
             torch.bfloat16,
             init_value=init_kv_cache,
-            is_output=True,
         ),
         TensorSpec("ori_slot_mapping", [token_count], torch.int64, init_value=init_ori_slot_mapping),
         TensorSpec("ori_block_table", [1, SPARSE_ORI_MAX_BLOCKS], torch.int32, init_value=init_ori_block_table),
@@ -847,7 +845,6 @@ def build_tensor_specs(start_pos: int = START_POS, token_count: int = PREFILL_SE
             [HCA_CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM],
             torch.bfloat16,
             init_value=init_cmp_kv,
-            is_output=True,
         ),
         TensorSpec("cmp_block_table", [1, SPARSE_CMP_MAX_BLOCKS], torch.int32, init_value=init_cmp_block_table),
         TensorSpec("position_ids", [token_count], torch.int32, init_value=init_position_ids),
@@ -857,7 +854,7 @@ def build_tensor_specs(start_pos: int = START_POS, token_count: int = PREFILL_SE
         TensorSpec("wo_a", [O_GROUPS, O_LORA, O_GROUP_IN], torch.bfloat16, init_value=init_wo_a),
         TensorSpec("wo_b", [D, O_GROUPS * O_LORA], torch.int8, init_value=lambda: wo_b_i8),
         TensorSpec("wo_b_scale", [D], torch.float32, init_value=lambda: wo_b_scale),
-        TensorSpec("x_out", [token_count, HC_MULT, D], torch.float32, is_output=True),
+        TensorSpec("x_out", [token_count, HC_MULT, D], torch.float32),
     ]
 
 
@@ -1429,11 +1426,11 @@ def build_cp_tensor_specs(
                 init_value=torch.stack(shards).contiguous(),
             ))
         elif spec.name == "x_out":
-            specs.append(TensorSpec("x_out_full", [tp_size, token_count, HC_MULT, D], spec.dtype, is_output=True))
+            specs.append(TensorSpec("x_out_full", [tp_size, token_count, HC_MULT, D], spec.dtype))
         else:
             specs.append(TensorSpec(
                 spec.name, [tp_size, *spec.shape], spec.dtype,
-                init_value=cp_stack(value, tp_size), is_output=spec.is_output,
+                init_value=cp_stack(value, tp_size), 
             ))
     return specs
 
@@ -1552,7 +1549,7 @@ def build_ragged2_cp_tensor_specs(tp_size: int = TP_SIZE):
             continue
         replacement_spec = TensorSpec(
             spec.name, list(value.shape), spec.dtype, init_value=value,
-            is_output=spec.is_output, resident=spec.resident,
+            resident=spec.resident,
         )
         specs.append(replacement_spec)
     return specs
@@ -1599,7 +1596,7 @@ def golden_prefill_attention_hca_cp(tensors):
 if __name__ == "__main__":
     import argparse
 
-    from golden import ratio_allclose, ratio_reldiff, run_jit
+    from golden import ratio_allclose, ratio_reldiff, run
 
     parser = argparse.ArgumentParser(
         description="Standalone DeepSeek V4 packed prefill HCA correctness test."
@@ -1646,7 +1643,7 @@ if __name__ == "__main__":
         parser.error(f"--token-count must be a multiple of --tp={TP_SIZE}, got {args.token_count}")
 
     if TP_SIZE == 1:
-        result = run_jit(
+        result = run(
             fn=prefill_attention_hca_test,
             specs=build_tensor_specs(args.start_pos, args.token_count),
             golden_fn=golden_prefill_attention_hca,
@@ -1675,7 +1672,7 @@ if __name__ == "__main__":
             if args.case == "ragged2"
             else build_cp_tensor_specs(args.start_pos, args.token_count, TP_SIZE)
         )
-        result = run_jit(
+        result = run(
             fn=l3_prefill_attention_hca_cp,
             specs=specs,
             golden_fn=golden_prefill_attention_hca_cp,

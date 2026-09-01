@@ -973,7 +973,7 @@ def build_tensor_specs(
                    init_value=init_final_norm_weight),
         TensorSpec("lm_head_weight", [vocab, hidden_size], torch.bfloat16,
                    init_value=init_lm_head_weight),
-        TensorSpec("out", [batch, vocab], torch.float32, is_output=True),
+        TensorSpec("out", [batch, vocab], torch.float32),
     ]
 
 
@@ -1319,7 +1319,7 @@ def golden_qwen3_14b_prefill_tq(tensors):
 
 if __name__ == "__main__":
     import argparse
-    from golden import run_jit
+    from golden import run
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -1347,7 +1347,7 @@ if __name__ == "__main__":
 
     torch.manual_seed(args.seed)
 
-    result = run_jit(
+    result = run(
         fn=prefill_fwd_tq,
         specs=build_tensor_specs(
             batch=args.batch, num_layers=args.num_layers,

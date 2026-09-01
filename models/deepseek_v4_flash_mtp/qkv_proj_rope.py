@@ -537,16 +537,16 @@ def build_tensor_specs(B, S):
         TensorSpec("rope_sin",  [T, ROPE_DIM],          torch.bfloat16, init_value=init_sin),
         TensorSpec("gamma_cq",  [Q_LORA],               torch.bfloat16, init_value=init_gamma_cq),
         TensorSpec("gamma_ckv", [HEAD_DIM],             torch.bfloat16, init_value=init_gamma_ckv),
-        TensorSpec("q",         [T, H, HEAD_DIM],       torch.bfloat16, is_output=True),
-        TensorSpec("kv",        [T, HEAD_DIM],          torch.bfloat16, is_output=True),
-        TensorSpec("qr",        [T, Q_LORA],            torch.int8,     is_output=True),
-        TensorSpec("qr_scale",  [T, 1],                 torch.float32,  is_output=True),
+        TensorSpec("q",         [T, H, HEAD_DIM],       torch.bfloat16),
+        TensorSpec("kv",        [T, HEAD_DIM],          torch.bfloat16),
+        TensorSpec("qr",        [T, Q_LORA],            torch.int8),
+        TensorSpec("qr_scale",  [T, 1],                 torch.float32),
     ]
 
 
 if __name__ == "__main__":
     import argparse
-    from golden import ratio_allclose, run_jit
+    from golden import ratio_allclose, run
 
     MODES = {
         "decode":  (DECODE_BATCH, DECODE_SEQ),
@@ -573,7 +573,7 @@ if __name__ == "__main__":
     for mode_name in modes_to_run:
         B, S = MODES[mode_name]
         print(f"--- qkv_proj_rope {mode_name}: B={B}, S={S} ---")
-        result = run_jit(
+        result = run(
             fn=qkv_proj_rope_test,
             specs=build_tensor_specs(B, S),
             golden_fn=golden_qkv_proj_rope,

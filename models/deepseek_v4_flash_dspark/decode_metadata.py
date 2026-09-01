@@ -466,14 +466,14 @@ def build_tensor_specs():
         ("csa_state_slot_mapping", [T], torch.int64),
         ("csa_inner_state_slot_mapping", [T], torch.int64),
     ):
-        specs.append(TensorSpec(name, shape, dtype, is_output=True))
+        specs.append(TensorSpec(name, shape, dtype))
     return specs
 
 
 if __name__ == "__main__":
     import argparse
 
-    from golden import run_jit
+    from golden import run
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -486,7 +486,7 @@ if __name__ == "__main__":
     parser.add_argument("--compile-only", action="store_true")
     args = parser.parse_args()
 
-    result = run_jit(
+    result = run(
         fn=decode_metadata,
         specs=build_tensor_specs(),
         golden_fn=golden_decode_metadata,

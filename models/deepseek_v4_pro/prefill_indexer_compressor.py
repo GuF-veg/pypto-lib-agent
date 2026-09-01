@@ -1079,8 +1079,8 @@ def build_tensor_specs(start_pos: int = START_POS, num_tokens: int = T):
 
     return [
         TensorSpec("x", [T, D], torch.bfloat16, init_value=init_x),
-        TensorSpec("kv", [MAX_CMP_WRITES, HEAD_DIM], torch.int8, is_output=True),
-        TensorSpec("compress_state", [INNER_STATE_BLOCK_NUM, INNER_STATE_BLOCK_SIZE, COMPRESS_STATE_DIM], torch.float32, init_value=init_compress_state, is_output=True),
+        TensorSpec("kv", [MAX_CMP_WRITES, HEAD_DIM], torch.int8),
+        TensorSpec("compress_state", [INNER_STATE_BLOCK_NUM, INNER_STATE_BLOCK_SIZE, COMPRESS_STATE_DIM], torch.float32, init_value=init_compress_state),
         TensorSpec("inner_compress_state_block_table", [INNER_STATE_MAX_BLOCKS], torch.int32, init_value=init_inner_compress_state_block_table),
         TensorSpec("wkv", [OUT_DIM, D], torch.bfloat16, init_value=init_wkv),
         TensorSpec("wgate", [OUT_DIM, D], torch.bfloat16, init_value=init_wgate),
@@ -1089,8 +1089,8 @@ def build_tensor_specs(start_pos: int = START_POS, num_tokens: int = T):
         TensorSpec("freqs_cos", [MAX_SEQ_LEN, ROPE_HEAD_DIM], torch.bfloat16, init_value=init_freqs_cos),
         TensorSpec("freqs_sin", [MAX_SEQ_LEN, ROPE_HEAD_DIM], torch.bfloat16, init_value=init_freqs_sin),
         TensorSpec("hadamard", [HEAD_DIM, HEAD_DIM], torch.bfloat16, init_value=init_hadamard),
-        TensorSpec("idx_kv_cache", [PREFILL_IDX_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], torch.int8, init_value=init_idx_kv_cache, is_output=True),
-        TensorSpec("idx_kv_scale", [PREFILL_IDX_BLOCK_NUM, BLOCK_SIZE, 1, 1], torch.float32, init_value=init_idx_kv_scale, is_output=True),
+        TensorSpec("idx_kv_cache", [PREFILL_IDX_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], torch.int8, init_value=init_idx_kv_cache),
+        TensorSpec("idx_kv_scale", [PREFILL_IDX_BLOCK_NUM, BLOCK_SIZE, 1, 1], torch.float32, init_value=init_idx_kv_scale),
         TensorSpec("idx_block_table", [IDX_CACHE_MAX_BLOCKS], torch.int32, init_value=init_idx_block_table),
         TensorSpec("position_ids", [T], torch.int32, init_value=init_position_ids),
         ScalarSpec("num_tokens", torch.int32, num_tokens),
@@ -1101,7 +1101,7 @@ def build_tensor_specs(start_pos: int = START_POS, num_tokens: int = T):
 
 if __name__ == "__main__":
     import argparse
-    from golden import run_jit
+    from golden import run
 
     parser = argparse.ArgumentParser(description="Standalone token-major DeepSeek V4 prefill indexer compressor validation.")
     parser.add_argument("-p", "--platform", type=str, default="a2a3",
@@ -1121,7 +1121,7 @@ if __name__ == "__main__":
     parser.add_argument("--dump-passes", action="store_true", default=False)
     args = parser.parse_args()
 
-    result = run_jit(
+    result = run(
         fn=prefill_indexer_compressor_test,
         specs=build_tensor_specs(args.start_pos, args.num_tokens),
         golden_fn=golden_prefill_indexer_compressor,

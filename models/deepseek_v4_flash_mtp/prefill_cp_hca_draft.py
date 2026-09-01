@@ -1668,7 +1668,6 @@ def build_tensor_specs(cp_size: int = CP_SIZE):
                 list(state.shape),
                 state.dtype,
                 init_value=state,
-                is_output=True,
             ),
             TensorSpec(
                 "compress_state_block_table",
@@ -1681,14 +1680,12 @@ def build_tensor_specs(cp_size: int = CP_SIZE):
                 list(kv_cache.shape),
                 kv_cache.dtype,
                 init_value=kv_cache,
-                is_output=True,
             ),
             TensorSpec(
                 "cmp_kv",
                 list(cmp_cache.shape),
                 cmp_cache.dtype,
                 init_value=cmp_cache,
-                is_output=True,
             ),
             TensorSpec(
                 "cmp_block_table",
@@ -1740,7 +1737,6 @@ def build_tensor_specs(cp_size: int = CP_SIZE):
             "x_out",
             list(x_hc.shape),
             torch.float32,
-            is_output=True,
         )
     )
 
@@ -2129,12 +2125,12 @@ if __name__ == "__main__":
     parser.add_argument("--enable-chip-swimlane", action="store_true")
     args = parser.parse_args()
 
-    from golden import ratio_allclose, ratio_reldiff, run_jit
+    from golden import ratio_allclose, ratio_reldiff, run
 
     device_ids = [int(device) for device in args.device.split(",")]
     if len(device_ids) < args.cp:
         raise SystemExit(f"CP{args.cp} requires {args.cp} devices, got {device_ids}")
-    result = run_jit(
+    result = run(
         fn=prefill_cp_hca_test,
         specs=build_tensor_specs(args.cp),
         golden_fn=golden_prefill_cp_hca,

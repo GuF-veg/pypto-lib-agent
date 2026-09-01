@@ -833,7 +833,7 @@ def build_tensor_specs(
         TensorSpec("final_norm_weight", [1, hidden_size], torch.float32, init_value=init_final_norm_weight),
         TensorSpec("lm_head_weight", [vocab, hidden_size], torch.bfloat16, init_value=init_lm_head_weight),
         # Outputs.
-        TensorSpec("out", [batch, vocab], torch.float32, is_output=True),
+        TensorSpec("out", [batch, vocab], torch.float32),
     ]
 
 
@@ -1253,7 +1253,7 @@ if __name__ == "__main__":
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
 
-    from golden import run_jit
+    from golden import run
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--platform", type=str, default="a2a3",
@@ -1280,7 +1280,7 @@ if __name__ == "__main__":
             f"decode_fwd_tq currently supports max_seq <= {MAX_SEQ}"
         )
 
-    result = run_jit(
+    result = run(
         fn=decode_fwd_tq,
         specs=build_tensor_specs(
             batch=args.batch,

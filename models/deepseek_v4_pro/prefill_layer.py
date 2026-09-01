@@ -1203,8 +1203,7 @@ def build_tensor_specs(layer_id=2, chunk_lens=DEFAULT_CHUNK_LENS, start_position
 
         dim0 = batch * src.shape[0]
         tensor_specs.append(TensorSpec(packed_name, [N_RANKS, dim0, *src.shape[1:]],
-                                       src.dtype, init_value=make_init(),
-                                       is_output=is_global_pool))
+                                       src.dtype, init_value=make_init()))
 
     # Batch metadata.
     tensor_specs.append(TensorSpec("seq_lens", [N_RANKS, batch], torch.int32, init_value=replicate(seq_lens_t)))
@@ -1232,7 +1231,7 @@ def build_tensor_specs(layer_id=2, chunk_lens=DEFAULT_CHUNK_LENS, start_position
     # InOut, not Out: the kernel writes only the packed chunk rows, and the host zeros
     # must reach the device so valid_ratio_reldiff can check the pad rows are untouched.
     tensor_specs.append(TensorSpec("x_next", [N_RANKS, total_tokens, HC_MULT, D], torch.float32,
-                                   init_value=torch.zeros, is_output=True))
+                                   init_value=torch.zeros))
 
     # Keep static weight parameters device-resident (child_memory), sharded per
     # rank. Dynamic cache/state/table tensors must stay as host tensors because
@@ -1610,7 +1609,7 @@ if __name__ == "__main__":
     import argparse
     import torch
 
-    from golden import run_jit
+    from golden import run
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--platform", type=str, default="a2a3",
@@ -1712,7 +1711,7 @@ if __name__ == "__main__":
         count = apply_real_layer_weights(specs, args.weights, layer_id=args.layer_id, ep=N_RANKS)
         print(f"[RUN] real weights: layer {args.layer_id}, {count} tensors from {args.weights}", flush=True)
 
-    result = run_jit(
+    result = run(
         fn=l3_prefill_layer,
         specs=specs,
         golden_fn=golden_prefill_layer,

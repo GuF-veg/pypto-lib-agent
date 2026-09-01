@@ -846,7 +846,6 @@ def build_tensor_specs(layer_id=2):
                 [N_RANKS, *src.shape],
                 src.dtype,
                 init_value=make_init(),
-                is_output=packed_name in _HISTORY_CACHE_NAMES,
             )
         )
 
@@ -866,7 +865,7 @@ def build_tensor_specs(layer_id=2):
         else:
             tensor_specs.append(spec)
 
-    tensor_specs.append(TensorSpec("x_next", [N_RANKS, total_tokens, HC_MULT, D], torch.float32, is_output=True))
+    tensor_specs.append(TensorSpec("x_next", [N_RANKS, total_tokens, HC_MULT, D], torch.float32))
 
     # Keep static weight parameters device-resident (child_memory), sharded per
     # rank. Cache/state/table tensors remain host tensors for output validation.
@@ -1004,7 +1003,7 @@ def golden_prefill_layer(tensors):
 if __name__ == "__main__":
     import argparse
 
-    from golden import ratio_allclose, ratio_reldiff, run_jit
+    from golden import ratio_allclose, ratio_reldiff, run
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--platform", type=str, default="a2a3",
@@ -1024,7 +1023,7 @@ if __name__ == "__main__":
     device_ids = [int(d) for d in args.device.split(",")]
     assert len(device_ids) >= N_RANKS, f"need at least {N_RANKS} devices, got {device_ids}"
 
-    result = run_jit(
+    result = run(
         fn=l3_prefill_layer,
         specs=build_tensor_specs(layer_id=args.layer_id),
         golden_fn=golden_prefill_layer,

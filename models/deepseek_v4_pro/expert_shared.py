@@ -278,13 +278,13 @@ def build_tensor_specs():
         TensorSpec("shared_w3_scale", [MOE_INTER], torch.float32, init_value=lambda: sw3_s),
         TensorSpec("shared_w2", [D, MOE_INTER], torch.int8, init_value=lambda: sw2_i8),
         TensorSpec("shared_w2_scale", [D], torch.float32, init_value=lambda: sw2_s),
-        TensorSpec("sh", [T, D], torch.bfloat16, is_output=True),
+        TensorSpec("sh", [T, D], torch.bfloat16),
     ]
 
 
 if __name__ == "__main__":
     import argparse
-    from golden import ratio_reldiff, run_jit
+    from golden import ratio_reldiff, run
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--platform", type=str, default="a2a3", choices=["a2a3", "a2a3sim", "a5", "a5sim"])
@@ -293,7 +293,7 @@ if __name__ == "__main__":
     parser.add_argument("--dump-passes", action="store_true", default=False)
     args = parser.parse_args()
 
-    result = run_jit(
+    result = run(
         fn=expert_shared_test,
         specs=build_tensor_specs(),
         golden_fn=golden_expert_shared,

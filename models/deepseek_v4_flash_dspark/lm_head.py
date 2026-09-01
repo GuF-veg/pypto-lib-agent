@@ -510,14 +510,14 @@ def build_tensor_specs(num_tokens=TEST_TOKENS):
             "lm_head_weight", [WORLD_SIZE, VOCAB_PER_TP, D], torch.bfloat16,
             init_value=init_lm_head_weight, resident="stacked",
         ),
-        TensorSpec("logits", [WORLD_SIZE, MAX_LOGIT_ROWS, VOCAB], torch.float32, is_output=True),
+        TensorSpec("logits", [WORLD_SIZE, MAX_LOGIT_ROWS, VOCAB], torch.float32),
         TensorSpec("logit_row_indices", [WORLD_SIZE, MAX_LOGIT_ROWS], torch.int32, init_value=init_logit_row_indices),
     ]
 
 
 if __name__ == "__main__":
     import argparse
-    from golden import run_jit
+    from golden import run
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--platform", type=str, default="a2a3", choices=["a2a3", "a2a3sim", "a5", "a5sim"])
@@ -544,7 +544,7 @@ if __name__ == "__main__":
     specs = build_tensor_specs(args.num_tokens)
     golden_fn = golden_lm_head
 
-    result = run_jit(
+    result = run(
         fn=fn,
         specs=specs,
         golden_fn=golden_fn,

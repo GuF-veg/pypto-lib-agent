@@ -1529,13 +1529,13 @@ def build_tensor_specs(
         TensorSpec("wo_a", [O_GROUPS, O_LORA, O_GROUP_IN], torch.bfloat16, init_value=init_wo_a),
         TensorSpec("wo_b", [D, O_GROUPS * O_LORA], torch.int8, init_value=lambda: wo_b_i8),
         TensorSpec("wo_b_scale", [D], torch.float32, init_value=lambda: wo_b_scale),
-        TensorSpec("attn_out", [token_count, D], torch.bfloat16, is_output=True),
+        TensorSpec("attn_out", [token_count, D], torch.bfloat16),
     ]
 
 
 if __name__ == "__main__":
     import argparse
-    from golden import ratio_allclose, run_jit
+    from golden import ratio_allclose, run
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -1556,7 +1556,7 @@ if __name__ == "__main__":
     parser.add_argument("--dump-passes", action="store_true", default=False)
     args = parser.parse_args()
 
-    result = run_jit(
+    result = run(
         fn=prefill_sparse_attn_test,
         specs=build_tensor_specs(args.compress_ratio, args.tokens, args.ori_block_num, args.cmp_block_num),
         golden_fn=golden_prefill_sparse_attn,

@@ -94,14 +94,14 @@ def build_tensor_specs(token_count, vocab_size):
     return [
         TensorSpec("input_ids", [token_count], torch.int64, init_value=init_input_ids),
         TensorSpec("embed_weight", [vocab_size, D], torch.bfloat16, init_value=init_embed_weight),
-        TensorSpec("hidden_states", [token_count, D], torch.bfloat16, is_output=True),
-        TensorSpec("x_hc", [token_count, HC_MULT, D], torch.float32, is_output=True),
+        TensorSpec("hidden_states", [token_count, D], torch.bfloat16),
+        TensorSpec("x_hc", [token_count, HC_MULT, D], torch.float32),
     ]
 
 
 if __name__ == "__main__":
     import argparse
-    from golden import run_jit
+    from golden import run
 
     MODES = {"decode": DECODE_TOKENS, "prefill": PREFILL_TOKENS}
     TEST_VOCAB_SIZE = 256
@@ -116,7 +116,7 @@ if __name__ == "__main__":
     for mode_name in modes_to_run:
         token_count = MODES[mode_name]
         print(f"--- lookup_embedding_test {mode_name}: T={token_count} ---")
-        result = run_jit(
+        result = run(
             fn=lookup_embedding_test,
             specs=build_tensor_specs(token_count, TEST_VOCAB_SIZE),
             golden_fn=golden_lookup_embedding_test,

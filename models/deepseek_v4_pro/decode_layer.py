@@ -891,7 +891,6 @@ def build_tensor_specs(
         TensorSpec(
             name, [N_RANKS, *spec.shape], spec.dtype,
             init_value=_ranked_init(spec, replicated=name in replicated_attention),
-            is_output=name in mutable_cache_names,
         )
         for name, spec in attention_specs
     ]
@@ -944,7 +943,7 @@ def build_tensor_specs(
             spec.resident = "stacked"
 
     specs.extend([
-        TensorSpec("x_next", [N_RANKS, T, HC_MULT, D], torch.float32, is_output=True),
+        TensorSpec("x_next", [N_RANKS, T, HC_MULT, D], torch.float32),
         ScalarSpec("layer_id", torch.int32, layer_id),
         ScalarSpec("moe_epoch", torch.int32, 1, compile_runtime=True, benchmark_step=1),
     ])
@@ -954,7 +953,7 @@ def build_tensor_specs(
 if __name__ == "__main__":
     import argparse
     import torch
-    from golden import run_jit
+    from golden import run
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--platform", type=str, default="a2a3",
@@ -1095,7 +1094,7 @@ if __name__ == "__main__":
         count = apply_real_layer_weights(specs, args.weights, layer_id=args.layer_id, ep=N_RANKS)
         print(f"[RUN] real weights: layer {args.layer_id}, {count} tensors from {args.weights}", flush=True)
 
-    result = run_jit(
+    result = run(
         fn=host_fn,
         specs=specs,
         golden_fn=golden_fn,

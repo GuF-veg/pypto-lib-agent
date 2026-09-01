@@ -549,13 +549,11 @@ def build_tensor_specs(num_tokens=TEST_TOKENS):
             "logits",
             [WORLD_SIZE, MAX_LOGIT_ROWS, VOCAB],
             torch.float32,
-            is_output=True,
         ),
         TensorSpec(
             "sampled_ids",
             [WORLD_SIZE, MAX_LOGIT_ROWS, SAMPLED_IDS_PAD],
             torch.int32,
-            is_output=True,
         ),
         TensorSpec(
             "logit_row_indices",
@@ -606,7 +604,7 @@ def compare_sampled_ids(actual, _expected, *, actual_outputs, **_):
 
 if __name__ == "__main__":
     import argparse
-    from golden import run_jit
+    from golden import run
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--platform", type=str, default="a2a3",
@@ -642,7 +640,7 @@ if __name__ == "__main__":
         "sampled_ids": compare_sampled_ids,
     }
 
-    result = run_jit(
+    result = run(
         fn=fn,
         specs=specs,
         golden_fn=golden_fn,

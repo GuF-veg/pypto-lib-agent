@@ -876,13 +876,11 @@ def build_tensor_specs(batch: int, *, distributed: bool = False):
             "draft_token_ids",
             with_world(batch, DSPARK_QUERY_WIDTH),
             torch.int32,
-            is_output=True,
         ),
         TensorSpec(
             "confidence_probs",
             with_world(batch, DSPARK_QUERY_WIDTH),
             torch.float32,
-            is_output=True,
         ),
     ])
     return specs
@@ -959,7 +957,7 @@ def golden_distributed_markov(tensors):
 
 if __name__ == "__main__":
     import argparse
-    from golden import run_jit
+    from golden import run
 
     parser = argparse.ArgumentParser(description="Validate the DeepSeek V4 DSpark Markov sampler.")
     parser.add_argument("--batch", type=int, choices=DSPARK_SUPPORTED_BATCHES, default=4)
@@ -990,7 +988,7 @@ if __name__ == "__main__":
     else:
         runtime_cfg["device_id"] = int(args.device)
 
-    result = run_jit(
+    result = run(
         fn=fn,
         specs=build_tensor_specs(args.batch, distributed=args.distributed),
         golden_fn=golden_fn,

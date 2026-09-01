@@ -896,15 +896,6 @@ def build_tensor_specs(cp_size: int = CP_SIZE):
                 list(value.shape),
                 value.dtype,
                 init_value=value,
-                is_output=name
-                in {
-                    "compress_state",
-                    "inner_compress_state",
-                    "kv_cache",
-                    "cmp_kv",
-                    "idx_kv_cache",
-                    "idx_kv_scale",
-                },
             )
         )
     for name, value in raw.items():
@@ -1020,7 +1011,7 @@ def build_tensor_specs(cp_size: int = CP_SIZE):
         )
     specs.append(
         TensorSpec(
-            "x_out", list(x_hc.shape), torch.float32, is_output=True
+            "x_out", list(x_hc.shape), torch.float32
         )
     )
     golden_prefill_cp_csa._ctx = {
@@ -3288,14 +3279,14 @@ if __name__ == "__main__":
     parser.add_argument("--dump-passes", action="store_true")
     parser.add_argument("--enable-chip-swimlane", action="store_true")
     args = parser.parse_args()
-    from golden import ratio_allclose, ratio_reldiff, run_jit
+    from golden import ratio_allclose, ratio_reldiff, run
 
     if args.cp != CP_SIZE:
         raise SystemExit(f"--cp={args.cp} does not match import-time CP_SIZE={CP_SIZE}")
     device_ids = [int(device) for device in args.device.split(",")]
     if len(device_ids) < args.cp:
         raise SystemExit(f"CP{args.cp} requires {args.cp} devices, got {device_ids}")
-    result = run_jit(
+    result = run(
         fn=prefill_cp_csa_test,
         specs=build_tensor_specs(args.cp),
         golden_fn=golden_prefill_cp_csa,

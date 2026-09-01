@@ -228,7 +228,7 @@ def build_tensor_specs(local_t=FIXTURE_LOCAL_T):
 
     return [
         TensorSpec("hidden_local", [FIXTURE_ROUNDS, TP_SIZE, local_t, D], torch.bfloat16, init_value=init_hidden_local),
-        TensorSpec("group_out", [FIXTURE_ROUNDS, TP_SIZE, group_t, D], torch.bfloat16, is_output=True),
+        TensorSpec("group_out", [FIXTURE_ROUNDS, TP_SIZE, group_t, D], torch.bfloat16),
     ]
 
 
@@ -243,7 +243,7 @@ def golden_prefill_cp_token_allgather(tensors):
 if __name__ == "__main__":
     import argparse
 
-    from golden import run_jit
+    from golden import run
     from pypto.ir.distributed_compiled_program import DistributedConfig
 
     parser = argparse.ArgumentParser(description="Standalone context-parallel prefill token-row all-gather test.")
@@ -267,7 +267,7 @@ if __name__ == "__main__":
     if not 1 <= args.local_t <= PREFILL_LOCAL_CAP:
         parser.error(f"--local-t must be in [1, {PREFILL_LOCAL_CAP}], got {args.local_t}")
 
-    result = run_jit(
+    result = run(
         fn=l3_prefill_cp_token_allgather_fixture,
         specs=build_tensor_specs(args.local_t),
         golden_fn=golden_prefill_cp_token_allgather,
