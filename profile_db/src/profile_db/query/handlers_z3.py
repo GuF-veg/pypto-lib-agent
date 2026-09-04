@@ -15,10 +15,11 @@ from __future__ import annotations
 import collections
 from typing import Any
 
+from profile_db.errors import QueryError
 from profile_db.facts import Evidence, Fact
 from profile_db.query import common
 from profile_db.query.registry import register
-from profile_db.query.params import DepsParams, SubgraphParams, TaskParams
+from profile_db.query.params import DepsParams, SubgraphParams, TaskParams, TasksParams
 
 _DEP_COLS = (
     "pred, succ, source, arg, CAST(flags AS VARCHAR), tensor_id, consumer_dtype, "
@@ -43,6 +44,53 @@ def task_detail(conn, params: TaskParams) -> list[Fact]:
             )
         ]
     return [fact]
+
+
+@register(
+    "tasks",
+    "Locate: which task_ids belong to this family or name so the next "
+    "task/pmu/why_long call does not walk the critical path hop by hop?",
+    TasksParams,
+    default_budget_bytes=16384,
+)
+def tasks(conn, params: TasksParams) -> list[Fact]:
+    if params.family is None and params.name is None:
+        raise QueryError("tasks requires --family or --name (refusing to dump the whole graph)")
+    run_id = params.run_id
+    if common.one(conn, "SELECT 1 FROM run WHERE run_id = ?", [run_id]) is None:
+        return common.run_missing("TASK", run_id)
+    sql = "SELECT task_id FROM task WHERE run_id = ?"
+    args: list[Any] = [run_id]
+    if params.family is not None:
+        sql += " AND family = ?"
+        args.append(params.family)
+    if params.name is not None:
+        sql += " AND instr(name, ?) > 0"
+        args.append(params.name)
+    if params.engine is not None:
+        sql += " AND engine = ?"
+        args.append(params.engine)
+    if params.on_cpm == "observed":
+        sql += " AND on_cpm_observed = TRUE"
+    elif params.on_cpm == "static":
+        sql += " AND on_cpm_static = TRUE"
+    rows = common.q(conn, sql, args)
+    task_ids = sorted((str(row[0]) for row in rows), key=common.num_key)
+    if not task_ids:
+        return [
+            Fact(
+                "TASK",
+                common.fields(
+                    run_id=run_id,
+                    family=params.family,
+                    name=params.name,
+                    engine=params.engine,
+                    on_cpm=params.on_cpm,
+                ),
+                Evidence.UNAVAILABLE,
+            )
+        ]
+    return common.task_facts(conn, run_id, task_ids)
 
 
 @register(

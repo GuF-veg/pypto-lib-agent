@@ -73,9 +73,75 @@ def compat_reasons(a: Mapping[str, Any], b: Mapping[str, Any]) -> list[str]:
     return reasons
 
 
-def compare_runs(conn, run_a: int, run_b: int) -> dict[str, Any]:
+def _family_stats(conn, run_id: int) -> dict[str, dict[str, float]]:
+    """family -> {count, busy_us, wall_us} for one run."""
+    rows = conn.execute(
+        "SELECT family, COUNT(*), COALESCE(SUM(busy_us), 0), "
+        "COALESCE(SUM(wall_us), 0) FROM task "
+        "WHERE run_id = ? AND family IS NOT NULL GROUP BY family",
+        [run_id],
+    ).fetchall()
+    return {
+        str(family): {
+            "count": float(count),
+            "busy_us": float(busy),
+            "wall_us": float(wall),
+        }
+        for family, count, busy, wall in rows
+    }
+
+
+def _family_deltas(
+    stats_a: Mapping[str, Mapping[str, float]],
+    stats_b: Mapping[str, Mapping[str, float]],
+    family: str,
+) -> list[dict[str, Any]]:
+    names = set(stats_a) | set(stats_b)
+    if family != "*":
+        names = {family} if family in names else set()
+    ranked = sorted(
+        names,
+        key=lambda name: (
+            -abs(
+                stats_b.get(name, {}).get("busy_us", 0.0)
+                - stats_a.get(name, {}).get("busy_us", 0.0)
+            ),
+            name,
+        ),
+    )
+    deltas: list[dict[str, Any]] = []
+    empty = {"count": 0.0, "busy_us": 0.0, "wall_us": 0.0}
+    for name in ranked:
+        before = stats_a.get(name, empty)
+        after = stats_b.get(name, empty)
+        for metric, key in (
+            ("family_busy_us", "busy_us"),
+            ("family_wall_us", "wall_us"),
+            ("family_tasks", "count"),
+        ):
+            b, a = before[key], after[key]
+            deltas.append(
+                {
+                    "metric": metric,
+                    "family": name,
+                    "before": b,
+                    "after": a,
+                    "delta": a - b,
+                    "ratio": (a / b) if b else None,
+                }
+            )
+    return deltas
+
+
+def compare_runs(
+    conn, run_a: int, run_b: int, *, family: str | None = None
+) -> dict[str, Any]:
     """Compare two runs. Returns ``{run_a, run_b, program, compatible,
-    reasons, deltas}``. Raises ``LifecycleError`` when incompatible."""
+    reasons, deltas}``. Raises ``LifecycleError`` when incompatible.
+
+    ``family`` is ``None`` (run-level only), ``"*"`` (every family), or a
+    single family name.
+    """
     meta_a = _run_meta(conn, run_a)
     meta_b = _run_meta(conn, run_b)
     if meta_a is None:
@@ -118,6 +184,10 @@ def compare_runs(conn, run_a: int, run_b: int) -> dict[str, Any]:
                 "delta": after - before,
                 "ratio": (after / before) if before else None,
             }
+        )
+    if family is not None:
+        deltas.extend(
+            _family_deltas(_family_stats(conn, run_a), _family_stats(conn, run_b), family)
         )
     return {
         "run_a": run_a,

@@ -79,6 +79,26 @@ def test_region_window_guard(db_file: Path) -> None:
         db.close()
 
 
+def test_tasks_requires_family_or_name(db_file: Path) -> None:
+    db = _db(db_file)
+    try:
+        with pytest.raises(QueryError, match="requires --family or --name"):
+            query.execute(db.connection, "tasks", {"run_id": 1})
+        out = query.execute(db.connection, "tasks", {"run_id": 1, "family": "rmsnorm"})
+        assert 'family="rmsnorm"' in out.text
+        assert 'task_id="1"' in out.text
+    finally:
+        db.close()
+
+
+def test_query_default_budgets() -> None:
+    assert query.get_query("overview").default_budget_bytes == 4096
+    assert query.get_query("pmu").default_budget_bytes == 32768
+    assert query.get_query("critical_path").default_budget_bytes == 32768
+    assert query.get_query("tasks").default_budget_bytes == 16384
+    assert query.get_query("idle_window").default_budget_bytes == 16384
+
+
 def test_execute_returns_query_output(db_file: Path) -> None:
     db = _db(db_file)
     try:
@@ -86,5 +106,27 @@ def test_execute_returns_query_output(db_file: Path) -> None:
         assert not out.truncated
         assert out.text.startswith("RUN ")
         assert "METRIC" in out.text
+    finally:
+        db.close()
+
+
+def test_idle_window_measures_named_engine(db_file: Path) -> None:
+    db = _db(db_file)
+    try:
+        out = query.execute(
+            db.connection,
+            "idle_window",
+            {"run_id": 1, "after_task_id": "1", "until_task_id": "2", "engine": "aic"},
+        )
+        assert 'after_task_id="1"' in out.text
+        assert 'until_task_id="2"' in out.text
+        assert "t0_us=10.0" in out.text and "t1_us=20.0" in out.text
+        assert "OCCUPANCY" in out.text
+        missing = query.execute(
+            db.connection,
+            "idle_window",
+            {"run_id": 1, "after_task_id": "999", "until_task_id": "2"},
+        )
+        assert missing.facts[0].evidence.value == "unavailable"
     finally:
         db.close()

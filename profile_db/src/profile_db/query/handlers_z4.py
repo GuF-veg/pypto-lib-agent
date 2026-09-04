@@ -403,6 +403,7 @@ def early(conn, params: EarlyDispatchParams) -> list[Fact]:
     "Constraints: which pipe is close to saturation, and what is the total "
     "cycle count?",
     PmuParams,
+    default_budget_bytes=32768,
 )
 def pmu(conn, params: PmuParams) -> list[Fact]:
     run_id = params.run_id
@@ -521,6 +522,7 @@ def pmu(conn, params: PmuParams) -> list[Fact]:
     "Locate: which chain actually decides the duration (observed/static), and "
     "at which tasks does stall blow up?",
     CriticalPathParams,
+    default_budget_bytes=32768,
 )
 def critical_path(conn, params: CriticalPathParams) -> list[Fact]:
     run_id = params.run_id
@@ -537,26 +539,35 @@ def critical_path(conn, params: CriticalPathParams) -> list[Fact]:
         return [
             Fact("PATH", common.fields(run_id=run_id, kind=params.kind), Evidence.UNAVAILABLE)
         ]
-    return [
-        Fact(
-            "PATH",
-            common.fields(
-                run_id=run_id,
-                kind=params.kind,
-                seq=seq,
-                task_id=task_id,
-                wall_us=common.us(wall),
-                busy_us=common.us(busy),
-                compute_us=common.us(compute),
-                stall_us=common.us(stall),
-                gap_us=common.us(gap),
-                gap_kind=gap_kind,
-                early_dispatch_proven=early_status,
-            ),
-            Evidence.MEASURED,
+    identities = common.task_identities(
+        conn, run_id, [task_id for _, task_id, *_ in rows if task_id is not None]
+    )
+    facts: list[Fact] = []
+    for seq, task_id, wall, busy, compute, stall_us, gap, gap_kind, early_status in rows:
+        name, family, engine = identities.get(str(task_id), (None, None, None))
+        facts.append(
+            Fact(
+                "PATH",
+                common.fields(
+                    run_id=run_id,
+                    kind=params.kind,
+                    seq=seq,
+                    task_id=task_id,
+                    name=name,
+                    family=family,
+                    engine=engine,
+                    wall_us=common.us(wall),
+                    busy_us=common.us(busy),
+                    compute_us=common.us(compute),
+                    stall_us=common.us(stall_us),
+                    gap_us=common.us(gap),
+                    gap_kind=gap_kind,
+                    early_dispatch_proven=early_status,
+                ),
+                Evidence.MEASURED,
+            )
         )
-        for seq, task_id, wall, busy, compute, stall, gap, gap_kind, early_status in rows
-    ]
+    return facts
 
 
 @register(

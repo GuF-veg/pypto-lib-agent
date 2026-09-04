@@ -151,6 +151,13 @@ def _parser() -> argparse.ArgumentParser:
     compare_cmd = sub.add_parser("compare", help="neutral before/after comparison")
     compare_cmd.add_argument("run_a", type=int)
     compare_cmd.add_argument("run_b", type=int)
+    compare_cmd.add_argument(
+        "--family",
+        nargs="?",
+        const="*",
+        default=None,
+        help="per-family busy/wall/count deltas (* = all families when flag is bare)",
+    )
     _add_bootstrap_args(compare_cmd)
     _add_format_args(compare_cmd)
 
@@ -180,8 +187,27 @@ def _parser() -> argparse.ArgumentParser:
     trial_bind.add_argument("run_id", type=int)
     trial_verdict = trial_sub.add_parser("verdict", help="close a trial with its verdict")
     trial_verdict.add_argument("trial_id", type=int)
-    trial_verdict.add_argument("--verdict", choices=("win", "neutral", "regression"), required=True)
+    trial_verdict.add_argument(
+        "--verdict",
+        choices=("win", "neutral", "regression", "compile_error"),
+        required=True,
+    )
     trial_verdict.add_argument("--evidence", nargs="*", default=None)
+    trial_bench = trial_sub.add_parser(
+        "attach-bench", help="store unprofiled bench numbers on a trial (no run required)"
+    )
+    trial_bench.add_argument("trial_id", type=int)
+    trial_bench.add_argument(
+        "--bench-log",
+        action="append",
+        default=None,
+        help="PYPTO_BENCH log with raw headline samples (repeat once per invocation)",
+    )
+    trial_bench.add_argument(
+        "--bench",
+        default=None,
+        help='bench summary string, e.g. "min=12.1 median=13.0 mean=13.2 max=15.0 rounds=100"',
+    )
     trial_list = trial_sub.add_parser("list", help="list trials")
     trial_list.add_argument("--active", action="store_true", dest="active_only")
     _add_format_args(trial_list)
@@ -190,7 +216,12 @@ def _parser() -> argparse.ArgumentParser:
 
 def _add_format_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--format", choices=("facts", "json", "markdown"), default="facts")
-    parser.add_argument("--budget", type=int, default=4096, help="byte budget for the facts format")
+    parser.add_argument(
+        "--budget",
+        type=int,
+        default=None,
+        help="byte budget for the facts format (default: per-query, else 4096)",
+    )
 
 
 def _add_bootstrap_args(parser: argparse.ArgumentParser) -> None:
@@ -255,6 +286,35 @@ def _git_metadata(source: Path) -> tuple[str | None, bool | None]:
             return None, None
         return (commit or None, bool(status.strip()))
     return None, None
+
+
+def _bench_summary_from_args(args: argparse.Namespace) -> dict | None:
+    """Parse ``--bench`` / ``--bench-log`` into a summary dict, or None."""
+    if getattr(args, "bench", None) is not None and getattr(args, "bench_log", None):
+        raise PfdbError("--bench and --bench-log cannot be combined")
+    if getattr(args, "bench", None) is not None:
+        return parse_bench_line(args.bench)
+    if not getattr(args, "bench_log", None):
+        return None
+    samples: list[float] = []
+    for raw_path in args.bench_log:
+        bench_path = Path(raw_path)
+        try:
+            parsed = parse_bench_log(bench_path.read_text(encoding="utf-8"))
+        except OSError as exc:
+            raise PfdbError(f"cannot read bench log {bench_path}: {exc}") from exc
+        samples.extend(parsed["samples"])
+    if not samples:
+        raise PfdbError("no benchmark samples found")
+    import statistics
+
+    return {
+        "min": min(samples),
+        "median": statistics.median(samples),
+        "mean": statistics.fmean(samples),
+        "max": max(samples),
+        "rounds": len(samples),
+    }
 
 
 def _run_ingest(args: argparse.Namespace) -> int:
@@ -412,8 +472,11 @@ def _query_params(spec, args: argparse.Namespace) -> dict:
     return params
 
 
-def _emit(result, args: argparse.Namespace) -> None:
-    text = format_result(result, args.format, args.budget)
+def _emit(result, args: argparse.Namespace, *, budget: int | None = None) -> None:
+    resolved = budget
+    if resolved is None:
+        resolved = args.budget if getattr(args, "budget", None) is not None else 4096
+    text = format_result(result, args.format, resolved)
     sys.stdout.write(text)
     if not text.endswith("\n"):
         sys.stdout.write("\n")
@@ -422,14 +485,15 @@ def _emit(result, args: argparse.Namespace) -> None:
 def _run_query(args: argparse.Namespace) -> int:
     query_name = args.query_name.replace("-", "_")
     spec = get_query(query_name)
+    budget = args.budget if args.budget is not None else spec.default_budget_bytes
     try:
         db = ProfileDB(read_only=True)
     except PfdbError as exc:
         print(f"pfdb: error: {exc}", file=sys.stderr)
         return 1
     try:
-        result = db.query(query_name, budget_bytes=args.budget, **_query_params(spec, args))
-        _emit(result, args)
+        result = db.query(query_name, budget_bytes=budget, **_query_params(spec, args))
+        _emit(result, args, budget=budget)
         return 0
     except PfdbError as exc:
         print(f"pfdb: error: {exc}", file=sys.stderr)
@@ -446,7 +510,7 @@ def _run_list(args: argparse.Namespace) -> int:
         return 1
     try:
         result = db.query("runs_list", budget_bytes=args.budget, rank=args.rank)
-        _emit(result, args)
+        _emit(result, args, budget=args.budget if args.budget is not None else 4096)
         return 0
     except PfdbError as exc:
         print(f"pfdb: error: {exc}", file=sys.stderr)
@@ -538,8 +602,14 @@ def _run_compare(args: argparse.Namespace) -> int:
                 confidence=args.confidence,
                 resamples=args.resamples,
                 seed=args.seed,
+                family=args.family,
             ),
             args,
+            budget=(
+                args.budget
+                if args.budget is not None
+                else (16384 if args.family is not None else 4096)
+            ),
         )
         return 0
     except PfdbError as exc:
@@ -595,7 +665,7 @@ def _run_baseline(args: argparse.Namespace) -> int:
 
 
 def _run_trial(args: argparse.Namespace) -> int:
-    if args.trial_cmd in ("register", "bind", "verdict"):
+    if args.trial_cmd in ("register", "bind", "verdict", "attach-bench"):
         try:
             db = ProfileDB()
         except PfdbError as exc:
@@ -613,6 +683,16 @@ def _run_trial(args: argparse.Namespace) -> int:
             elif args.trial_cmd == "bind":
                 db.bind_trial(args.trial_id, args.run_id)
                 print(f"trial {args.trial_id} bound to run {args.run_id}")
+            elif args.trial_cmd == "attach-bench":
+                bench = _bench_summary_from_args(args)
+                if bench is None:
+                    print(
+                        "pfdb: error: attach-bench requires --bench or --bench-log",
+                        file=sys.stderr,
+                    )
+                    return 1
+                db.attach_bench(args.trial_id, bench)
+                print(f"trial {args.trial_id} bench_mean_us={bench.get('mean')}")
             else:  # verdict
                 db.set_verdict(args.trial_id, args.verdict, evidence_refs=args.evidence or ())
                 print(f"trial {args.trial_id} verdict={args.verdict}")

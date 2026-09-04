@@ -18,9 +18,9 @@ Design contract (DESIGN.md 5.4):
   anything else at construction time.
 - Serialization is budget-bound: when ``max_bytes`` is exhausted the
   stream ends with an explicit ``TRUNCATED first_dropped_index=...
-  remaining=... limit=...`` line. The cut is a prefix, so what survives is
-  always a contiguous head of the sequence; omitted facts are never
-  silently dropped.
+  remaining=... limit=... hint="retry --budget N"`` line. The cut is a
+  prefix, so what survives is always a contiguous head of the sequence;
+  omitted facts are never silently dropped.
 """
 
 from __future__ import annotations
@@ -96,10 +96,16 @@ def format_fact(fact: Fact) -> str:
 def truncated_line(dropped: int, first_dropped_index: int, max_bytes: int) -> str:
     """The canonical truncation marker. ``first_dropped_index`` is the
     0-based position of the first omitted fact; because truncation is a
-    prefix cut, everything from there on is what is missing."""
+    prefix cut, everything from there on is what is missing.
+
+    ``hint`` names a budget that is at least 8× the exhausted limit and
+    at least 32768 bytes — the size that typically admits ``pmu`` and
+    ``critical_path`` streams.
+    """
+    hint = max(max_bytes * 8, 32768)
     return (
         f"TRUNCATED first_dropped_index={first_dropped_index} "
-        f"remaining={dropped} limit={max_bytes}"
+        f"remaining={dropped} limit={max_bytes} hint=\"retry --budget {hint}\""
     )
 
 

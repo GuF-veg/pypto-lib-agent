@@ -19,6 +19,7 @@ import pytest
 
 from fixtures.synth_derived import derive_loaded, edge, task
 from profile_db.db import ProfileDB
+from profile_db.derived.idle_gap import overlap_us
 
 
 def _gaps(result) -> list[dict]:
@@ -197,3 +198,11 @@ def test_gap_record_threshold(db_file: Path, split: float) -> None:
     expected_t1 = [split, 25.0] if first_recorded else [25.0]
     assert [g["t0_us"] for g in gaps] == pytest.approx(expected_t0)
     assert [g["t1_us"] for g in gaps] == pytest.approx(expected_t1)
+
+
+def test_overlap_us_clips_and_rejects_empty() -> None:
+    assert overlap_us(10.0, 20.0, 0.0, 5.0) == 0.0
+    assert overlap_us(10.0, 20.0, 12.0, 15.0) == 3.0
+    assert overlap_us(10.0, 20.0, 5.0, 25.0) == 10.0
+    assert overlap_us(10.0, 20.0, 18.0, 22.0) == 2.0
+    assert overlap_us(10.0, 10.0, 0.0, 20.0) == 0.0

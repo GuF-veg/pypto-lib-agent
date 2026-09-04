@@ -94,6 +94,31 @@ class CoreParams(RunIdParams):
     core: int = Field(ge=0)
 
 
+class IdleWindowParams(RunIdParams):
+    after_task_id: str = Field(
+        description="producer whose end bounds the window start"
+    )
+    until_task_id: str | None = Field(
+        default=None,
+        description="consumer whose start bounds the window end "
+        "(default: next observed-CP successor)",
+    )
+    engine: str | None = Field(
+        default=None,
+        description="engine to measure (default: opposite of the producer)",
+    )
+
+    @field_validator("after_task_id")
+    @classmethod
+    def _canonical_after_task_id(cls, value: str) -> str:
+        return normalize_task_id(value).canonical
+
+    @field_validator("until_task_id")
+    @classmethod
+    def _canonical_until_task_id(cls, value: str | None) -> str | None:
+        return normalize_task_id(value).canonical if value is not None else None
+
+
 class TaskIdParams(RunIdParams):
     task_id: str
 
@@ -105,6 +130,21 @@ class TaskIdParams(RunIdParams):
 
 class TaskParams(TaskIdParams):
     pass
+
+
+class TasksParams(RunIdParams):
+    family: str | None = Field(
+        default=None, description="exact family name (at least one of family/name required)"
+    )
+    name: str | None = Field(
+        default=None, description="substring match on task name"
+    )
+    engine: str | None = Field(default=None, description="restrict to one engine")
+    on_cpm: str | None = Field(
+        default=None,
+        pattern="^(observed|static)$",
+        description="restrict to observed or static critical-path members",
+    )
 
 
 class DepsParams(TaskIdParams):

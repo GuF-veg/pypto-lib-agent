@@ -59,6 +59,11 @@ def runs_list(conn, params: RunsListParams) -> list[Fact]:
     for run_id in run_ids:
         row = common.run_row(conn, run_id)
         counts = _run_counts(conn, run_id)
+        trial = common.one(
+            conn,
+            "SELECT trial_id FROM trial WHERE run_id = ? ORDER BY trial_id DESC LIMIT 1",
+            [run_id],
+        )
         facts.append(
             Fact(
                 "RUN",
@@ -75,6 +80,7 @@ def runs_list(conn, params: RunsListParams) -> list[Fact]:
                     makespan_us=common.us(row[17]),
                     bench_mean_us=common.us(row[14]),
                     retained=row[20],
+                    trial_id=trial[0] if trial is not None else None,
                 ),
                 Evidence.MEASURED,
             )

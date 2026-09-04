@@ -179,3 +179,14 @@ def build_gaps(
             )
     out.sort(key=lambda g: (g.engine, g.core_index, g.t0_us, g.t1_us))
     return tuple(out)
+
+
+def overlap_us(window_t0: float, window_t1: float, start: float, end: float) -> float:
+    """Clipped overlap of ``[start, end)`` with ``[window_t0, window_t1)``.
+
+    Empty or inverted windows yield 0. The helper is shared by the idle-window
+    occupancy query so the clip arithmetic lives in one tested place.
+    """
+    lo = max(window_t0, start)
+    hi = min(window_t1, end)
+    return max(0.0, hi - lo)

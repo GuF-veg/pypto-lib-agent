@@ -239,12 +239,21 @@ def test_serialize_is_prefix_cut() -> None:
 
 
 def test_truncated_line_within_budget() -> None:
-    """P1-8: the output including the TRUNCATED line stays ≤ budget bytes."""
+    """P1-8: the output including the TRUNCATED line stays ≤ budget bytes
+    except when the budget is smaller than the marker itself, which is
+    still emitted because silent omission is never an option."""
+    from profile_db.facts import truncated_line
+
     fact = Fact("X", {"k": "a" * 400}, Evidence.MEASURED)
-    for budget in (50, 100, 200):
+    marker_len = len(truncated_line(1, 0, 50).encode("utf-8"))
+    for budget in (50, 100, 200, marker_len + 20):
         out = serialize_facts([fact], budget)
-        assert len(out.encode("utf-8")) <= budget + 10, (
-            f"output overshot budget {budget}: {len(out.encode())} bytes"
+        encoded = out.encode("utf-8")
+        if budget < len(truncated_line(1, 0, budget).encode("utf-8")):
+            assert out.startswith("TRUNCATED")
+            continue
+        assert len(encoded) <= budget + 10, (
+            f"output overshot budget {budget}: {len(encoded)} bytes"
         )
 
 

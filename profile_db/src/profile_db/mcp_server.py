@@ -41,9 +41,7 @@ from profile_db.query import get_query, list_queries
 
 # Bumped on any breaking change to the tool surface; published with the
 # release (semantic versioning guards the contract).
-TOOL_SCHEMA_VERSION = "2"
-
-_DEFAULT_BUDGET_BYTES = 4096
+TOOL_SCHEMA_VERSION = "3"
 
 # Query registry names -> MCP tool names (only ``runs_list`` is renamed).
 _TOOL_RENAMES = {"runs_list": "list_runs"}
@@ -79,6 +77,10 @@ class CompareToolParams(BaseModel):
     confidence: float = Field(default=0.95, gt=0.0, lt=1.0)
     resamples: int = Field(default=10000, ge=1)
     seed: int = 0
+    family: str | None = Field(
+        default=None,
+        description="family name, or '*' for every family (omit for run-level only)",
+    )
 
 
 class BaselineDiffToolParams(BaseModel):
@@ -128,8 +130,19 @@ class SetVerdictToolParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     trial_id: int
-    verdict: Literal["win", "neutral", "regression"]
+    verdict: Literal["win", "neutral", "regression", "compile_error"]
     evidence_refs: list[str] = Field(default_factory=list)
+
+
+class AttachBenchToolParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    trial_id: int
+    min: float | None = None
+    median: float | None = None
+    mean: float | None = None
+    max: float | None = None
+    rounds: int | None = None
 
 
 class ListTrialsToolParams(BaseModel):
@@ -170,9 +183,14 @@ _LIFECYCLE_TOOLS: dict[str, tuple[type[BaseModel], str, bool]] = {
         True,
     ),
     "bind_trial": (BindTrialToolParams, "remember: attach an ingested run to a trial", True),
+    "attach_bench": (
+        AttachBenchToolParams,
+        "remember: store unprofiled bench numbers on a trial (no run required)",
+        True,
+    ),
     "set_verdict": (
         SetVerdictToolParams,
-        "remember: close a trial with win / neutral / regression",
+        "remember: close a trial with win / neutral / regression / compile_error",
         True,
     ),
     "list_trials": (ListTrialsToolParams, "remember: the trial lineage and verdicts", False),
@@ -240,6 +258,7 @@ def _lifecycle_result(db: ProfileDB, suffix: str, arguments: dict[str, Any]) -> 
     model_cls, _description, _writes = _LIFECYCLE_TOOLS[suffix]
     model = model_cls.model_validate(arguments)
     if suffix == "compare":
+        budget = 16384 if model.family is not None else 4096
         return format_result(
             db.compare(
                 model.run_a,
@@ -248,8 +267,10 @@ def _lifecycle_result(db: ProfileDB, suffix: str, arguments: dict[str, Any]) -> 
                 confidence=model.confidence,
                 resamples=model.resamples,
                 seed=model.seed,
+                family=model.family,
             ),
             "facts",
+            budget,
         )
     if suffix == "baseline_diff":
         return format_result(
@@ -280,6 +301,17 @@ def _lifecycle_result(db: ProfileDB, suffix: str, arguments: dict[str, Any]) -> 
         db.bind_trial(model.trial_id, model.run_id)
         return (
             f"TRIAL trial_id={model.trial_id} run_id={model.run_id} evidence=measured"
+        )
+    if suffix == "attach_bench":
+        bench = {
+            key: getattr(model, key)
+            for key in ("min", "median", "mean", "max", "rounds")
+            if getattr(model, key) is not None
+        }
+        db.attach_bench(model.trial_id, bench)
+        return (
+            f"TRIAL trial_id={model.trial_id} bench_mean_us={bench.get('mean')} "
+            "evidence=measured"
         )
     if suffix == "set_verdict":
         db.set_verdict(model.trial_id, model.verdict, model.evidence_refs)
@@ -326,8 +358,8 @@ async def _dispatch(db: ProfileDB, name: str, arguments: dict[str, Any]):
             TextContent(type="text", text=_lifecycle_result(db, query_name, arguments))
         ]
     spec = get_query(query_name)  # raises QueryError for an unknown tool
-    result = db.query(query_name, budget_bytes=_DEFAULT_BUDGET_BYTES, **arguments)
-    return [TextContent(type="text", text=format_result(result, "facts"))]
+    result = db.query(query_name, budget_bytes=spec.default_budget_bytes, **arguments)
+    return [TextContent(type="text", text=format_result(result, "facts", spec.default_budget_bytes))]
 
 
 def build_server(db: ProfileDB | None = None) -> Server:

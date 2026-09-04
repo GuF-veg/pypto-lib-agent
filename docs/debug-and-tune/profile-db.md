@@ -52,7 +52,8 @@ pfdb init --path /tmp/demo.duckdb
 pfdb ingest build_output/Qwen3Decode_<ts>/dfx_outputs --platform a2a3 --device 0
 # repeat is idempotent (run identified by the records-file sha256)
 # add --copy to archive copies into .pfdb/store (default: link = path + sha256)
-# add --no-prune to skip the automatic working-set prune (keep 3)
+# add --no-prune to skip the automatic working-set prune (keep 3).
+# A campaign longer than three captures should pass --no-prune every ingest.
 
 # attach an in-core simulator collection to an already-ingested run
 pfdb ingest-incore build_output/<case>/kernel_insight_all_funcs_<ts> --run 1
@@ -95,16 +96,20 @@ pfdb list
 pfdb query overview --run-id 1
 pfdb query density --run-id 1 --engine aiv --bands 20
 pfdb query why_sparse --run-id 1 --band 9 --engine aiv
+pfdb query tasks --run-id 1 --family q_proj
 pfdb query task --run-id 1 --task-id 4294967298
 pfdb query deps --run-id 1 --task-id 4294967298 --direction in
 pfdb query why_late --run-id 1 --task-id 4294967298
-pfdb query critical-path --run-id 1        # hyphenated aliases are accepted
+pfdb query critical-path --run-id 1        # PATH rows include name/family/engine
 pfdb query pmu --run-id 1 --task-id 4294967298 --samples
+pfdb query idle_window --run-id 1 --after-task-id 4294967298
 ```
 
 All query output is `facts` (default DSL), `json`, or `markdown`, bounded by
-`--budget` (default 4096 bytes). When the budget cuts the stream it ends with an
-explicit `TRUNCATED` line — omission is never silent.
+`--budget`. When omitted, `pmu` and `critical_path` default to 32768 bytes,
+`tasks` and `idle_window` to 16384, and every other query to 4096. When the
+budget cuts the stream it ends with an explicit `TRUNCATED … hint="retry
+--budget N"` line — omission is never silent.
 
 ```bash
 pfdb query overview --run-id 1 --format markdown
@@ -164,7 +169,10 @@ why_late) using only MCP tools.
 pfdb prune --keep 3
 
 # neutral before/after (refused when program/level/clock/topology differ)
+# a proven NOTE reminds that bench_mean_us and makespan_us are not interchangeable
 pfdb compare 1 2
+pfdb compare 1 2 --family              # per-family busy/wall/count, all families
+pfdb compare 1 2 --family qk_pv        # one family
 pfdb compare 1 2 --bootstrap --confidence 0.95 --resamples 10000 --seed 0
 
 # named baseline (protected from prune) and a relative diff
@@ -177,6 +185,11 @@ pfdb trial register --goal "reduce tail" --hypothesis "early dispatch"
 pfdb trial bind 1 7
 pfdb trial verdict 1 --verdict win --evidence run_id=7
 pfdb trial list --active
+
+# compile failed, or benches without a swimlane — no bind required
+pfdb trial verdict 2 --verdict compile_error --evidence "Vec UB overflow"
+pfdb trial attach-bench 3 --bench-log bench-1.log --bench-log bench-2.log --bench-log bench-3.log
+pfdb trial verdict 3 --verdict regression
 ```
 
 ## Facts and evidence

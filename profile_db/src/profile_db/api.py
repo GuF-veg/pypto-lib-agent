@@ -85,9 +85,12 @@ class ProfileDB(_ProfileDB):
         return ingest_incore(self, source, run_id=run_id)
 
     def query(
-        self, name: str, *, budget_bytes: int = DEFAULT_BUDGET_BYTES, **params: Any
+        self, name: str, *, budget_bytes: int | None = None, **params: Any
     ) -> Result:
-        """Run a registered query and return its Result envelope."""
+        """Run a registered query and return its Result envelope.
+
+        ``budget_bytes=None`` uses the query's registered default.
+        """
         output = execute_query(
             self.connection, name, params, budget_bytes=budget_bytes
         )
@@ -185,12 +188,17 @@ class ProfileDB(_ProfileDB):
         confidence: float = 0.95,
         resamples: int = 10000,
         seed: int = 0,
+        family: str | None = None,
     ) -> Result:
         """Neutral before/after comparison (compatibility-gated). Raises
-        ``LifecycleError`` when the runs are not comparable."""
+        ``LifecycleError`` when the runs are not comparable.
+
+        ``family`` is ``None`` (run-level only), ``"*"`` (every family),
+        or a single family name.
+        """
         from profile_db.lifecycle import compare_runs
 
-        comparison = compare_runs(self.connection, run_a, run_b)
+        comparison = compare_runs(self.connection, run_a, run_b, family=family)
         if bootstrap:
             from profile_db.lifecycle.bootstrap import stratified_speedup
 
@@ -228,6 +236,12 @@ class ProfileDB(_ProfileDB):
         with self._writing() as conn:
             _bind_trial(conn, trial_id, run_id)
 
+    def attach_bench(self, trial_id: int, bench: Mapping[str, Any]) -> None:
+        from profile_db.lifecycle import attach_bench as _attach_bench
+
+        with self._writing() as conn:
+            _attach_bench(conn, trial_id, bench)
+
     def set_verdict(self, trial_id: int, verdict: str, evidence_refs: Sequence[Any] = ()) -> None:
         from profile_db.lifecycle import set_verdict as _set_verdict
 
@@ -252,6 +266,8 @@ class ProfileDB(_ProfileDB):
                         "status": t["status"],
                         "verdict": t["verdict"],
                         "evidence_refs": t["evidence_refs"],
+                        "bench_mean_us": t.get("bench_mean_us"),
+                        "bench_rounds": t.get("bench_rounds"),
                     }.items()
                     if v is not None
                 },
@@ -430,7 +446,16 @@ def _compare_result(comparison: Mapping[str, Any]) -> Result:
         if key in comparison:
             header_fields[key] = comparison[key]
     facts: list[Fact] = [
-        Fact("COMPARE", {k: v for k, v in header_fields.items() if v is not None}, Evidence.MEASURED)
+        Fact("COMPARE", {k: v for k, v in header_fields.items() if v is not None}, Evidence.MEASURED),
+        Fact(
+            "NOTE",
+            {
+                "topic": "metric-scope",
+                "bench_mean_us": "unprofiled",
+                "makespan_us": "profiled-with-observer",
+            },
+            Evidence.PROVEN,
+        ),
     ]
     for delta in comparison["deltas"]:
         fields: dict[str, Any] = {
@@ -441,8 +466,10 @@ def _compare_result(comparison: Mapping[str, Any]) -> Result:
             "after": _num(delta["after"]),
             "delta": _num(delta["delta"]),
         }
-        if delta["ratio"] is not None:
+        if delta.get("ratio") is not None:
             fields["ratio"] = _num(delta["ratio"])
+        if delta.get("family") is not None:
+            fields["family"] = delta["family"]
         if "baseline" in comparison:
             fields["baseline"] = comparison["baseline"]
         facts.append(Fact("DELTA", fields, Evidence.MEASURED))

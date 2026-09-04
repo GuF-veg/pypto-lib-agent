@@ -22,7 +22,7 @@ from profile_db.facts import Evidence, Fact
 from profile_db.query import common
 from profile_db.query.handlers_z1 import _load_bands
 from profile_db.query.registry import register
-from profile_db.query.params import CoreParams, RegionParams, WhySparseParams
+from profile_db.query.params import CoreParams, IdleWindowParams, RegionParams, WhySparseParams
 
 
 @register(
@@ -256,4 +256,214 @@ def core(conn, params: CoreParams) -> list[Fact]:
             )
         )
     facts.extend(common.gap_fact(run_id, gap) for gap in gaps)
+    return facts
+
+
+_OPPOSITE_ENGINE = {"aic": "aiv", "aiv": "aic"}
+
+
+def _next_observed_successor(conn, run_id: int, task_id: str) -> str | None:
+    """Next observed-CP task after ``task_id``, or None if it is not on
+    that path or is the last hop."""
+    row = common.one(
+        conn,
+        "SELECT seq FROM cpm_path WHERE run_id = ? AND kind = 'observed' "
+        "AND task_id = ?",
+        [run_id, task_id],
+    )
+    if row is None:
+        return None
+    nxt = common.one(
+        conn,
+        "SELECT task_id FROM cpm_path WHERE run_id = ? AND kind = 'observed' "
+        "AND seq = ?",
+        [run_id, int(row[0]) + 1],
+    )
+    return None if nxt is None else str(nxt[0])
+
+
+@register(
+    "idle_window",
+    "Attribute: between this producer finishing and a later consumer starting, "
+    "how occupied was the other engine, and which recorded gaps overlap "
+    "that window?",
+    IdleWindowParams,
+    default_budget_bytes=16384,
+)
+def idle_window(conn, params: IdleWindowParams) -> list[Fact]:
+    from profile_db.derived.idle_gap import overlap_us
+
+    run_id = params.run_id
+    after_id = params.after_task_id
+    if common.one(conn, "SELECT 1 FROM run WHERE run_id = ?", [run_id]) is None:
+        return common.run_missing("WINDOW", run_id)
+    after = common.task_row(conn, run_id, after_id)
+    if after is None:
+        return [
+            Fact(
+                "WINDOW",
+                common.fields(run_id=run_id, after_task_id=after_id),
+                Evidence.UNAVAILABLE,
+            )
+        ]
+    until_id = params.until_task_id
+    if until_id is None:
+        on_path = common.one(
+            conn,
+            "SELECT 1 FROM cpm_path WHERE run_id = ? AND kind = 'observed' "
+            "AND task_id = ?",
+            [run_id, after_id],
+        )
+        if on_path is None:
+            return [
+                Fact(
+                    "WINDOW",
+                    common.fields(
+                        run_id=run_id,
+                        after_task_id=after_id,
+                        reason="not-on-observed-cpm",
+                    ),
+                    Evidence.UNAVAILABLE,
+                )
+            ]
+        until_id = _next_observed_successor(conn, run_id, after_id)
+        if until_id is None:
+            return [
+                Fact(
+                    "WINDOW",
+                    common.fields(
+                        run_id=run_id,
+                        after_task_id=after_id,
+                        reason="no-observed-successor",
+                    ),
+                    Evidence.UNAVAILABLE,
+                )
+            ]
+    until = common.task_row(conn, run_id, until_id)
+    if until is None:
+        return [
+            Fact(
+                "WINDOW",
+                common.fields(
+                    run_id=run_id, after_task_id=after_id, until_task_id=until_id
+                ),
+                Evidence.UNAVAILABLE,
+            )
+        ]
+    producer_engine = after[3]
+    engine = params.engine
+    if engine is None:
+        engine = _OPPOSITE_ENGINE.get(str(producer_engine) if producer_engine else "")
+        if engine is None:
+            raise QueryError(
+                "idle_window needs --engine when the producer engine is not "
+                "aic or aiv"
+            )
+    t0 = after[14]
+    t1 = until[13]
+    if t0 is None or t1 is None:
+        return [
+            Fact(
+                "WINDOW",
+                common.fields(
+                    run_id=run_id,
+                    after_task_id=after_id,
+                    until_task_id=until_id,
+                    engine=engine,
+                    reason="missing-timestamps",
+                ),
+                Evidence.UNAVAILABLE,
+            )
+        ]
+    t0_us = float(t0)
+    t1_us = float(t1)
+    if t1_us <= t0_us:
+        return [
+            Fact(
+                "WINDOW",
+                common.fields(
+                    run_id=run_id,
+                    after_task_id=after_id,
+                    until_task_id=until_id,
+                    engine=engine,
+                    t0_us=common.us(t0_us),
+                    t1_us=common.us(t1_us),
+                    reason="non-positive-window",
+                ),
+                Evidence.UNAVAILABLE,
+            )
+        ]
+    window_us = t1_us - t0_us
+    facts: list[Fact] = [
+        Fact(
+            "WINDOW",
+            common.fields(
+                run_id=run_id,
+                after_task_id=after_id,
+                until_task_id=until_id,
+                engine=engine,
+                t0_us=common.us(t0_us),
+                t1_us=common.us(t1_us),
+                window_us=common.us(window_us),
+            ),
+            Evidence.MEASURED,
+        )
+    ]
+    cores = common.engine_cores(conn, run_id).get(engine, 0)
+    row_hits = common.q(
+        conn,
+        "SELECT task_id, start_us, end_us FROM task_row "
+        "WHERE run_id = ? AND engine = ? AND start_us < ? AND end_us > ? "
+        "ORDER BY task_id, start_us",
+        [run_id, engine, t1_us, t0_us],
+    )
+    busy_core_us = sum(
+        overlap_us(t0_us, t1_us, float(start), float(end))
+        for _, start, end in row_hits
+        if start is not None and end is not None
+    )
+    capacity_us = float(cores) * window_us
+    occupancy = (busy_core_us / capacity_us) if capacity_us else None
+    facts.append(
+        Fact(
+            "OCCUPANCY",
+            common.fields(
+                run_id=run_id,
+                engine=engine,
+                cores=cores,
+                busy_core_us=common.us(busy_core_us),
+                capacity_us=common.us(capacity_us),
+                occupancy=round(occupancy, 6) if occupancy is not None else None,
+            ),
+            Evidence.MEASURED if occupancy is not None else Evidence.UNAVAILABLE,
+        )
+    )
+    gap_rows = common.q(
+        conn,
+        "SELECT kind, t0_us, t1_us FROM idle_gap "
+        "WHERE run_id = ? AND engine = ? AND t0_us < ? AND t1_us > ? "
+        "ORDER BY kind, t0_us",
+        [run_id, engine, t1_us, t0_us],
+    )
+    by_kind: dict[str, list[float]] = {}
+    for kind, gap_t0, gap_t1 in gap_rows:
+        clipped = overlap_us(t0_us, t1_us, float(gap_t0), float(gap_t1))
+        by_kind.setdefault(str(kind), []).append(clipped)
+    for kind in sorted(by_kind):
+        parts = by_kind[kind]
+        facts.append(
+            Fact(
+                "GAP_SUMMARY",
+                common.fields(
+                    run_id=run_id,
+                    engine=engine,
+                    kind=kind,
+                    count=len(parts),
+                    total_us=common.us(sum(parts)),
+                ),
+                Evidence.MEASURED,
+            )
+        )
+    task_ids = sorted({str(row[0]) for row in row_hits}, key=common.num_key)
+    facts.extend(common.task_facts(conn, run_id, task_ids))
     return facts

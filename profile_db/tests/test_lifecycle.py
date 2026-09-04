@@ -156,6 +156,9 @@ def test_compare_compatible_deltas(tmp_path: Path) -> None:
         assert "COMPARE" in text and "compatible=true" in text
         assert 'metric="bench_mean_us"' in text
         assert "before=10.0" in text and "after=11.0" in text and "delta=1.0" in text
+        assert 'topic="metric-scope"' in text
+        assert 'bench_mean_us="unprofiled"' in text
+        assert 'makespan_us="profiled-with-observer"' in text
     finally:
         db.close()
 
@@ -170,6 +173,7 @@ def test_baseline_diff_uses_gate(tmp_path: Path) -> None:
         text = format_result(result, "facts")
         assert 'baseline="base"' in text
         assert 'metric="bench_mean_us"' in text and "delta=-2.0" in text
+        assert 'topic="metric-scope"' in text
     finally:
         db.close()
 
@@ -204,6 +208,56 @@ def test_invalid_verdict_rejected(tmp_path: Path) -> None:
         trial_id = db.register_trial("g", "h")
         with pytest.raises(LifecycleError):
             db.set_verdict(trial_id, "bogus")
+    finally:
+        db.close()
+
+
+def test_compare_family_deltas_sorted_by_busy(tmp_path: Path) -> None:
+    db = ProfileDB.memory()
+    try:
+        _load_run(db, 1, bench_mean_us=10.0)
+        _load_run(db, 2, bench_mean_us=10.0)
+        db.connection.execute(
+            "UPDATE task SET busy_us = 25.0, wall_us = 30.0 WHERE run_id = 2 AND family = 'rmsnorm'"
+        )
+        result = db.compare(1, 2, family="*")
+        text = format_result(result, "facts", 16384)
+        assert 'metric="family_busy_us"' in text
+        assert 'family="rmsnorm"' in text
+        assert "before=10.0" in text and "after=25.0" in text
+        assert 'metric="family_tasks"' in text
+        one = db.compare(1, 2, family="rmsnorm")
+        assert 'family="rmsnorm"' in format_result(one, "facts", 16384)
+    finally:
+        db.close()
+
+
+def test_trial_compile_error_without_bind() -> None:
+    db = ProfileDB.memory()
+    try:
+        trial_id = db.register_trial("goal", "hypothesis")
+        db.set_verdict(trial_id, "compile_error", evidence_refs=["vec-ub-overflow"])
+        trials = db.list_trials()
+        assert trials.facts[0].fields["verdict"] == "compile_error"
+        assert trials.facts[0].fields["status"] == "done"
+        assert "run_id" not in trials.facts[0].fields
+    finally:
+        db.close()
+
+
+def test_trial_attach_bench_without_run() -> None:
+    db = ProfileDB.memory()
+    try:
+        trial_id = db.register_trial("goal", "prefetch")
+        db.attach_bench(
+            trial_id,
+            {"min": 890.0, "median": 899.0, "mean": 899.5, "max": 910.0, "rounds": 300},
+        )
+        db.set_verdict(trial_id, "regression")
+        text = format_result(db.list_trials(), "facts")
+        assert "bench_mean_us=899.5" in text
+        assert 'verdict="regression"' in text
+        assert "run_id=" not in text
     finally:
         db.close()
 

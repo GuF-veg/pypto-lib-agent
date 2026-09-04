@@ -29,11 +29,12 @@
   `critical_path` 逐条件同构，真实捕获对拍零差）、stall 四段分解与
   early-dispatch 四态证明；迁移 `0003` 补行级 dispatch/receive/finish。
 - ✅ T4 分层查询引擎：注册表（每条查询强绑定 owner question + pydantic
-  参数单一同源）+ Z0–Z4 共 17 条查询（runs_list/overview/inventory、
-  density/sparse_regions、region/why_sparse/core、task/deps/subgraph、
+  参数单一同源）+ Z0–Z4 共 19 条查询（runs_list/overview/inventory、
+  density/sparse_regions、region/why_sparse/core/idle_window、
+  task/tasks/deps/subgraph、
   why_late/why_long/rows/scheduler/early_dispatch/pmu）；事实 DSL v2 输出、
   字节预算 `TRUNCATED` 显式收尾、unavailable 语义、rank 标签与一致性校验、
-  无原始 JSON 泄漏检查器；金质题库 20 题快照（含 6.4 全会话）+ 真实捕获锚点。
+  无原始 JSON 泄漏检查器；金质题库快照（含 6.4 全会话）+ 真实捕获锚点。
 - ✅ T5 接口：公开 Python API（`profile_db.api.ProfileDB` + `Result` +
   `format_result`）与 CLI `list` / `query` 子命令（参数由注册表 pydantic
   模型自动生成，`facts/json/markdown` 三种输出）；CLI 与 API 输出逐字节

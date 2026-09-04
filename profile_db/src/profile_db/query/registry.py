@@ -65,6 +65,7 @@ class QuerySpec:
     params: type[BaseModel]
     handler: QueryHandler
     rank_axis: bool = False
+    default_budget_bytes: int = 4096
 
 
 _REGISTRY: dict[str, QuerySpec] = {}
@@ -77,12 +78,15 @@ def register(
     params: type[BaseModel],
     *,
     rank_axis: bool = False,
+    default_budget_bytes: int = 4096,
 ) -> Callable[[QueryHandler], QueryHandler]:
     """Decorator: attach a handler as a named, questioned query."""
     if not name or not owner_question:
         raise QueryError("query registration requires a name and an owner question")
     if name in _REGISTRY:
         raise QueryError(f"query {name!r} is registered twice")
+    if default_budget_bytes < 1:
+        raise QueryError("default_budget_bytes must be at least 1")
 
     def decorator(handler: QueryHandler) -> QueryHandler:
         _REGISTRY[name] = QuerySpec(
@@ -91,6 +95,7 @@ def register(
             params=params,
             handler=handler,
             rank_axis=rank_axis,
+            default_budget_bytes=default_budget_bytes,
         )
         _ORDER.append(name)
         return handler
@@ -129,14 +134,15 @@ def execute(
     name: str,
     params: Mapping[str, object] | BaseModel | None = None,
     *,
-    budget_bytes: int = 4096,
+    budget_bytes: int | None = None,
 ):
     """Run one query and render its facts under the byte budget.
 
-    Any non-``PfdbError`` escaping a handler is a bug in that handler, but
-    it must still reach the caller as a structured error: CLI and MCP both
-    catch ``PfdbError`` only, so a bare exception would surface as a
-    traceback on the agent's channel.
+    ``budget_bytes=None`` uses the query's registered default (4096 unless
+    the query opted into a larger one). Any non-``PfdbError`` escaping a
+    handler is a bug in that handler, but it must still reach the caller
+    as a structured error: CLI and MCP both catch ``PfdbError`` only, so a
+    bare exception would surface as a traceback on the agent's channel.
     """
     from profile_db.query.result import render
 
@@ -149,7 +155,8 @@ def execute(
         raise
     except Exception as exc:
         raise QueryError(f"query {name!r} failed: {type(exc).__name__}: {exc}") from exc
-    return render(facts, budget_bytes)
+    resolved = spec.default_budget_bytes if budget_bytes is None else budget_bytes
+    return render(facts, resolved)
 
 
 def _validate_rank(conn, model: BaseModel) -> None:

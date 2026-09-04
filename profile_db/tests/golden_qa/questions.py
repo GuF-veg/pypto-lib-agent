@@ -209,11 +209,25 @@ PMU counter="vec_ratio" ratio=0.0008 run_id=1 samples=1 task_id="3" total_cycles
         "critical_path_observed",
         "critical_path",
         {"run_id": 1, "kind": "observed"},
-        """PATH busy_us=10.0 compute_us=10.0 early_dispatch_proven="none" gap_kind="front-gap" kind="observed" run_id=1 seq=0 stall_us=0.0 task_id="1" wall_us=10.0 evidence=measured
-PATH busy_us=10.0 compute_us=10.0 early_dispatch_proven="none" gap_kind="data-wait" gap_us=2.0 kind="observed" run_id=1 seq=1 stall_us=2.0 task_id="2" wall_us=12.0 evidence=measured
-PATH busy_us=20.0 compute_us=20.0 early_dispatch_proven="none" gap_kind="data-wait" gap_us=7.0 kind="observed" run_id=1 seq=2 stall_us=8.0 task_id="3" wall_us=26.0 evidence=measured
-PATH busy_us=6.0 compute_us=6.0 early_dispatch_proven="full" gap_kind="core-wait" gap_us=-4.0 kind="observed" run_id=1 seq=3 stall_us=52.0 task_id="7" wall_us=9.0 evidence=measured
-PATH busy_us=10.0 compute_us=10.0 early_dispatch_proven="none" gap_kind="data-wait" gap_us=1.0 kind="observed" run_id=1 seq=4 stall_us=2.0 task_id="8" wall_us=18.0 evidence=measured""",
+        """PATH busy_us=10.0 compute_us=10.0 early_dispatch_proven="none" engine="aic" family="rmsnorm" gap_kind="front-gap" kind="observed" name="rmsnorm" run_id=1 seq=0 stall_us=0.0 task_id="1" wall_us=10.0 evidence=measured
+PATH busy_us=10.0 compute_us=10.0 early_dispatch_proven="none" engine="aic" family="q_proj" gap_kind="data-wait" gap_us=2.0 kind="observed" name="q_proj" run_id=1 seq=1 stall_us=2.0 task_id="2" wall_us=12.0 evidence=measured
+PATH busy_us=20.0 compute_us=20.0 early_dispatch_proven="none" engine="aic" family="kv_proj" gap_kind="data-wait" gap_us=7.0 kind="observed" name="kv_proj" run_id=1 seq=2 stall_us=8.0 task_id="3" wall_us=26.0 evidence=measured
+PATH busy_us=6.0 compute_us=6.0 early_dispatch_proven="full" engine="aic" family="gemm" gap_kind="core-wait" gap_us=-4.0 kind="observed" name="gemm_0_aic" run_id=1 seq=3 stall_us=52.0 task_id="7" wall_us=9.0 evidence=measured
+PATH busy_us=10.0 compute_us=10.0 early_dispatch_proven="none" engine="aic" family="gemm" gap_kind="data-wait" gap_us=1.0 kind="observed" name="gemm_1_aic" run_id=1 seq=4 stall_us=2.0 task_id="8" wall_us=18.0 evidence=measured""",
+    ),
+    GoldenQuestion(
+        "tasks_family_gemm",
+        "tasks",
+        {"run_id": 1, "family": "gemm"},
+        """TASK block_num=1 busy_us=6.0 early_dispatch_flag=false engine="aic" family="gemm" kernel_ids=[] max_end_us=108.0 max_finish_us=109.0 min_dispatch_us=100.0 min_receive_us=101.5 min_start_us=102.0 name="gemm_0_aic" num_rows=1 on_cpm_observed=true on_cpm_static=false run_id=1 scope="" task_id="7" wall_us=9.0 evidence=measured
+TASK block_num=1 busy_us=10.0 early_dispatch_flag=false engine="aic" family="gemm" kernel_ids=[] max_end_us=120.0 max_finish_us=121.0 min_dispatch_us=103.0 min_receive_us=109.0 min_start_us=110.0 name="gemm_1_aic" num_rows=1 on_cpm_observed=true on_cpm_static=false run_id=1 scope="" task_id="8" wall_us=18.0 evidence=measured""",
+    ),
+    GoldenQuestion(
+        "idle_window_after_rmsnorm",
+        "idle_window",
+        {"run_id": 1, "after_task_id": "1", "until_task_id": "2"},
+        """WINDOW after_task_id="1" engine="aiv" run_id=1 t0_us=10.0 t1_us=12.0 until_task_id="2" window_us=2.0 evidence=measured
+OCCUPANCY busy_core_us=0.0 capacity_us=4.0 cores=2 engine="aiv" occupancy=0.0 run_id=1 evidence=measured""",
     ),
     GoldenQuestion(
         "perf_hints",

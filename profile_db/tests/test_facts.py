@@ -106,6 +106,7 @@ def test_budget_truncates_with_explicit_tail() -> None:
     out = serialize_facts(facts, max_bytes=10)
     assert "TRUNCATED" in out
     assert "first_dropped_index=0" in out
+    assert 'hint="retry --budget 32768"' in out
     # The marker must account for all facts that did not fit.
     import re
     m = re.search(r"remaining=(\d+)", out)
@@ -124,6 +125,7 @@ def test_single_fact_over_budget_yields_truncated_only() -> None:
     assert out.startswith("TRUNCATED")
     assert "first_dropped_index=0" in out
     assert "remaining=1" in out
+    assert "hint=" in out
 
 
 def test_no_truncation_when_everything_fits() -> None:

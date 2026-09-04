@@ -21,6 +21,7 @@ Task mapping:
 - Kernel style pass: `.claude/skills/fmt-coding-style/SKILL.md`
 - Precision debugging: `.claude/skills/bisect-precision/SKILL.md`
 - Performance profiling: `.claude/skills/incore-profiling/SKILL.md`
+- Profile feedback (pfdb): `.claude/skills/profile-feedback/SKILL.md`
 - Cube tile tuning: `.claude/skills/cube-tile-tuning/SKILL.md`
 - Commit workflow: `.claude/skills/git-commit/SKILL.md`
 - PR workflow: `.claude/skills/github-pr/SKILL.md`

@@ -18,13 +18,13 @@ lineage tree. Trial rows are memory and survive pruning.
 from __future__ import annotations
 
 import json
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 from profile_db.errors import LifecycleError
 from profile_db.lifecycle.ids import next_id
 
 _STATUS = ("running", "done", "abandoned")
-_VERDICT = ("win", "neutral", "regression", "pending")
+_VERDICT = ("win", "neutral", "regression", "compile_error", "pending")
 
 
 def register_trial(
@@ -61,9 +61,16 @@ def bind_trial(conn, trial_id: int, run_id: int) -> None:
 def set_verdict(
     conn, trial_id: int, verdict: str, evidence_refs: Sequence[Any] = ()
 ) -> None:
-    """Close a trial with its verdict (win/neutral/regression)."""
+    """Close a trial with its verdict.
+
+    ``win`` / ``neutral`` / ``regression`` close a measured experiment.
+    ``compile_error`` closes a trial that never produced a run (no bind
+    required). ``pending`` is the open-state marker and is refused here.
+    """
     if verdict not in _VERDICT or verdict == "pending":
-        raise LifecycleError(f"invalid verdict {verdict!r}; use win/neutral/regression")
+        raise LifecycleError(
+            f"invalid verdict {verdict!r}; use win/neutral/regression/compile_error"
+        )
     if conn.execute("SELECT 1 FROM trial WHERE trial_id = ?", [trial_id]).fetchone() is None:
         raise LifecycleError(f"trial {trial_id} does not exist")
     conn.execute(
@@ -73,16 +80,38 @@ def set_verdict(
     )
 
 
+def attach_bench(conn, trial_id: int, bench: Mapping[str, Any]) -> None:
+    """Store unprofiled bench summary numbers on a trial (no run required)."""
+    if conn.execute("SELECT 1 FROM trial WHERE trial_id = ?", [trial_id]).fetchone() is None:
+        raise LifecycleError(f"trial {trial_id} does not exist")
+    conn.execute(
+        "UPDATE trial SET bench_min_us = ?, bench_median_us = ?, bench_mean_us = ?, "
+        "bench_max_us = ?, bench_rounds = ? WHERE trial_id = ?",
+        [
+            bench.get("min"),
+            bench.get("median"),
+            bench.get("mean"),
+            bench.get("max"),
+            bench.get("rounds"),
+            trial_id,
+        ],
+    )
+
+
 def list_trials(conn, *, active_only: bool = False) -> list[dict[str, Any]]:
     """All trials (or only ``running`` ones) as dicts, ordered by id."""
     sql = (
-        "SELECT trial_id, parent_trial_id, run_id, goal, hypothesis, "
-        "CAST(changed_files AS VARCHAR), status, verdict, "
-        "CAST(evidence_refs AS VARCHAR), notes FROM trial"
+        "SELECT trial.trial_id, trial.parent_trial_id, trial.run_id, trial.goal, "
+        "trial.hypothesis, CAST(trial.changed_files AS VARCHAR), trial.status, "
+        "trial.verdict, CAST(trial.evidence_refs AS VARCHAR), trial.notes, "
+        "COALESCE(trial.bench_mean_us, run.bench_mean_us), "
+        "trial.bench_min_us, trial.bench_median_us, trial.bench_max_us, "
+        "trial.bench_rounds FROM trial "
+        "LEFT JOIN run ON run.run_id = trial.run_id"
     )
     if active_only:
-        sql += " WHERE status = 'running'"
-    sql += " ORDER BY trial_id"
+        sql += " WHERE trial.status = 'running'"
+    sql += " ORDER BY trial.trial_id"
     rows = conn.execute(sql).fetchall()
     out: list[dict[str, Any]] = []
     for row in rows:
@@ -98,6 +127,11 @@ def list_trials(conn, *, active_only: bool = False) -> list[dict[str, Any]]:
                 "verdict": row[7],
                 "evidence_refs": json.loads(row[8] or "[]"),
                 "notes": row[9],
+                "bench_mean_us": row[10],
+                "bench_min_us": row[11],
+                "bench_median_us": row[12],
+                "bench_max_us": row[13],
+                "bench_rounds": row[14],
             }
         )
     return out

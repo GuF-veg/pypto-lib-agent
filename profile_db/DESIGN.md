@@ -334,8 +334,8 @@ band / core` 坐标）。
 |------|------|----------|------|
 | **Z0 库与运行** | 有哪些 run、什么配置、哪里来的 | `runs list`、`overview <run>`、`inventory <run>` | run 元数据、工件清单、顶线指标（makespan/CPM/利用率/图规模） |
 | **Z1 宏观密度** | 整图哪里密集哪里稀疏 | `density <run> [--engine aiv] [--bands N]`、`sparse-regions <run> top-k` | 时间带占用表（busy_cores/total_cores、任务数）、稀疏段排行及分类 |
-| **Z2 区域解释** | 一个时间窗里发生了什么、为何如此 | `region <run> --t0 .. --t1 ..`、`why-sparse <run> --band i`、`core <run> --core c` | 窗内活动任务、空闲核及其确定性原因、该带与上下游的时间关系 |
-| **Z3 算子与依赖** | 单个算子的身份、时序与依赖 | `task <run> <id>`、`deps <run> <id> [--dir in/out]`、`subgraph <run> <id>` | 任务全时序、args/tensor 元数据、进出边、BFS 邻域 |
+| **Z2 区域解释** | 一个时间窗里发生了什么、为何如此 | `region <run> --t0 .. --t1 ..`、`why-sparse <run> --band i`、`core <run> --core c`、`idle_window <run> --after-task-id t [--until-task-id u] [--engine]` | 窗内活动任务、空闲核及其确定性原因、该带与上下游的时间关系；生产者结束到消费者启动之间对侧引擎的占用（相关，非阻塞证明） |
+| **Z3 算子与依赖** | 单个算子的身份、时序与依赖 | `task <run> <id>`、`tasks <run> --family/--name`、`deps <run> <id> [--dir in/out]`、`subgraph <run> <id>` | 任务全时序、按 family/name 反查 task_id、args/tensor 元数据、进出边、BFS 邻域 |
 | **Z4 微观归因** | 算子内部的等待到底花在哪 | `why-late <run> <id>`、`why-long <run> <id>`、`rows <run> <id>`、`scheduler <run> --around <id>`、`early-dispatch <run> <id>`、`pmu <run> <id>` | 行级时序、stall 分解、调度/编排相位、early-dispatch 证明、PMU 比值 |
 
 纵向过滤轴（可叠加于任意层）：`--family`、`--engine`、`--core`、`--t0/--t1`、
@@ -428,11 +428,11 @@ STALL ready_us=... dispatch_us=... receive_us=... start_us=...
 |--------------|------------------|------------------|
 | **定向**（我改什么、从哪出发） | 基线是多少？平台/形状/配置/版本是什么？最近可用的 run 是哪个？ | `runs list`、`overview`、`baseline list` |
 | **全貌**（时间去哪了） | makespan 里 compute 与 stall 各占多少？哪个引擎闲？哪些 family 最贵？图多深多宽、并发放得开吗？ | `density`、`sparse-regions`、family 聚合、CPM 顶线 |
-| **定位**（先打哪里） | 真正决定时长的链是哪条（observed/static）？stall 在路径上哪几个任务炸开？哪些时间带利用率塌陷？ | `critical-path`、`region`、`why-sparse` 目标筛选 |
-| **归因**（为什么慢/为什么空） | 这个任务为什么不能早启动，FIN→dispatch→receive→start 各段各花多少？这段空窗是没人可派还是调度没派？early dispatch 的资格用上了吗？ | `why-late`、`why-sparse`、`why-long`、`early-dispatch`、`scheduler --around` |
+| **定位**（先打哪里） | 真正决定时长的链是哪条（observed/static）？stall 在路径上哪几个任务炸开？哪些时间带利用率塌陷？这个 family 对应哪些 task_id？生产者结束后对侧引擎有多空？ | `critical-path`（PATH 行带 name/family/engine）、`tasks --family`、`region`、`why-sparse`、`idle_window` |
+| **归因**（为什么慢/为什么空） | 这个任务为什么不能早启动，FIN→dispatch→receive→start 各段各花多少？这段空窗是没人可派还是调度没派？early dispatch 的资格用上了吗？哪根管子接近满载？ | `why-late`、`why-sparse`、`why-long`、`early-dispatch`、`scheduler --around`、`pmu` |
 | **施动前的约束**（动手前必须知道什么） | 候选算子的直接依赖是谁、边上的张量形状/stride/dtype？缓冲区离上限多远？编译器给了什么 tile hint？PMU 里哪根管子接近满载？ | `deps`、`subgraph`、`memory`、`perf-hints`、`pmu` |
-| **验证**（改动生效了吗） | bench 动了多少？profiled 指标怎么联动？对比的两个 capture 前提一致吗（同配置/形状/工具链）？ | `compare`、`baseline diff`（内置兼容门禁） |
-| **记忆**（沉淀与再出发） | 这个假设之前试过吗？上次同类改动是 win 还是 regression？基线要更新吗？ | `trial`、`trials --active`、`baseline add` |
+| **验证**（改动生效了吗） | bench 动了多少？某个 family 的 busy 动了多少？profiled 指标怎么联动？对比的两个 capture 前提一致吗（同配置/形状/工具链）？ | `compare`、`compare --family`、`baseline diff`（内置兼容门禁；`NOTE` 标明 bench ≠ makespan） |
+| **记忆**（沉淀与再出发） | 这个假设之前试过吗？上次同类改动是 win 还是 regression？编译没跑起来怎么记？基线要更新吗？ | `trial`（含 `compile_error` / `attach-bench`）、`trials --active`、`baseline add` |
 
 两条边界（与非目标呼应）：
 
@@ -440,9 +440,12 @@ STALL ready_us=... dispatch_us=... receive_us=... start_us=...
   施动前的约束信息与施动后的验证证据是齐的。
 - 数值正确性验证属于 golden 校验域，本库不覆盖。
 
-**候选池**（当前空置，出现对应 owner question 才转正）：family 瓶颈综合
-排行、引擎失衡诊断、尾段（drain tail）专项、跨 run 占位对比、scheduler
-等待带热点描述、渲染图摘要文本化……池子开放，问题驱动进出。
+**候选池**（当前空置，出现对应 owner question 才转正）：引擎失衡诊断、
+尾段（drain tail）专项、跨 run 占位对比、scheduler 等待带热点描述、
+渲染图摘要文本化、family 级 PMU 对比（实例选择有歧义，现走
+`tasks --family` + 单任务 `pmu`）……池子开放，问题驱动进出。
+已转正：`tasks --family/--name`（按名字反查 task_id）、`idle_window`
+（生产者结束后对侧引擎占用）、`compare --family`（family busy/wall/count）。
 
 ---
 
@@ -487,9 +490,12 @@ STALL ready_us=... dispatch_us=... receive_us=... start_us=...
 
 - **trial 生命周期**：`register_trial(goal, hypothesis, changed_files)` →
   ingest 绑定 `run_id` → `set_verdict(win/neutral/regression, evidence_refs)`。
+  编译失败、没有 `dfx_outputs` 时允许不 bind，直接
+  `set_verdict(compile_error)`；只有 bench、没有泳道时用 `attach_bench`
+  把未 profiled 数字记在 trial 上再给 win/neutral/regression。
   血缘树可回溯（`parent_trial_id`），形成"假设 → 实验 → 证据 → 结论"链条，
   服务于**当前优化循环**；循环结束由 agent 决定是否归档（导出 report 或
-  仅留 baseline）。
+  仅留 baseline）。查询层仍然不下 verdict——trial 表只记录调用方已经做出的结论。
 - **baseline**：命名 + `bench_mean_us`（以未 profiled 的 `PYPTO_BENCH` 为准；
   profiled makespan ≠ 基准）+ 验收标准；`baseline diff` 做相对基线变化，
   需 level/时钟/拓扑/程序名兼容（沿用采集方口径）。

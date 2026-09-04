@@ -22,12 +22,19 @@ from profile_db.lifecycle.compare import compare_runs
 from profile_db.lifecycle.bootstrap import stratified_speedup
 from profile_db.lifecycle.ids import next_id
 from profile_db.lifecycle.prune import prune_runs
-from profile_db.lifecycle.trial import bind_trial, list_trials, register_trial, set_verdict
+from profile_db.lifecycle.trial import (
+    attach_bench,
+    bind_trial,
+    list_trials,
+    register_trial,
+    set_verdict,
+)
 from profile_db.lifecycle.working_set import retained_run_ids
 
 
 __all__ = [
     "add_baseline",
+    "attach_bench",
     "bind_trial",
     "compare_runs",
     "diff_baseline",
