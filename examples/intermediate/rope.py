@@ -69,7 +69,7 @@ def build_tensor_specs(
         TensorSpec("x", [total_rows, head_dim], torch.float32, init_value=torch.randn),
         TensorSpec("cos", [1, head_dim], torch.float32, init_value=torch.randn),
         TensorSpec("sin", [1, head_dim], torch.float32, init_value=torch.randn),
-        TensorSpec("y", [total_rows, head_dim], torch.float32, is_output=True),
+        TensorSpec("y", [total_rows, head_dim], torch.float32),
     ]
 
 
@@ -92,23 +92,23 @@ def golden_rope(tensors):
 
 if __name__ == "__main__":
     import argparse
-    from golden import run_jit
+    from golden import run
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--platform", type=str, default="a2a3",
                         choices=["a2a3", "a2a3sim", "a5", "a5sim"])
     parser.add_argument("-d", "--device", type=int, default=0)
-    parser.add_argument("--enable-l2-swimlane", action="store_true", default=False)
+    parser.add_argument("--enable-chip-swimlane", action="store_true", default=False)
     args = parser.parse_args()
 
-    result = run_jit(
+    result = run(
         fn=rope,
         specs=build_tensor_specs(),
         golden_fn=golden_rope,
         runtime_cfg=dict(
             platform=args.platform,
             device_id=args.device,
-            enable_l2_swimlane=args.enable_l2_swimlane,
+            enable_chip_swimlane=args.enable_chip_swimlane,
         ),
         rtol=1e-2,
         atol=1e-2,

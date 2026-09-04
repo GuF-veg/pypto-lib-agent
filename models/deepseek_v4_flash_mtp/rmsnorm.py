@@ -104,13 +104,13 @@ def build_tensor_specs(B, S):
     return [
         TensorSpec("x", [T, D], torch.bfloat16, init_value=init_x),
         TensorSpec("norm_w", [D], torch.bfloat16, init_value=init_norm_w),
-        TensorSpec("x_normed", [T, D], torch.bfloat16, is_output=True),
+        TensorSpec("x_normed", [T, D], torch.bfloat16),
     ]
 
 
 if __name__ == "__main__":
     import argparse
-    from golden import ratio_allclose, run_jit
+    from golden import ratio_allclose, run
 
     MODES = {
         "decode":  (DECODE_BATCH, DECODE_SEQ),
@@ -122,7 +122,7 @@ if __name__ == "__main__":
     parser.add_argument("-d", "--device", type=int, default=0)
     parser.add_argument("--mode", choices=["decode", "prefill", "all"], default="all",
                         help="Use decode or prefill batch sizes, or 'all' to test both.")
-    parser.add_argument("--enable-l2-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2, 4))
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2, 4))
     parser.add_argument("--runtime-dir", type=str, default=None)
     parser.add_argument("--golden-data", type=str, default=None)
     parser.add_argument("--compile-only", action="store_true", default=False)
@@ -134,7 +134,7 @@ if __name__ == "__main__":
     for mode_name in modes_to_run:
         B, S = MODES[mode_name]
         print(f"--- rms_norm_test {mode_name}: B={B}, S={S} ---")
-        result = run_jit(
+        result = run(
             fn=rms_norm_test,
             specs=build_tensor_specs(B, S),
             golden_fn=golden_rms_norm_test,
@@ -144,7 +144,7 @@ if __name__ == "__main__":
             runtime_cfg=dict(
                 platform=args.platform,
                 device_id=args.device,
-                enable_l2_swimlane=args.enable_l2_swimlane,
+                enable_chip_swimlane=args.enable_chip_swimlane,
             ),
             rtol=5e-3,
             atol=5e-3,

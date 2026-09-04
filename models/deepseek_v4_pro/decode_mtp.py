@@ -32,7 +32,8 @@ import pypto.language as pl
 import pypto.language.distributed as pld
 from pypto.ir.distributed_compiled_program import DistributedConfig
 
-from config import DECODE_START_POS, PRO_KERNEL as M
+from config import ACTIVE as M, DECODE_START_POS
+from decode_attention_csa import COMPRESS_RATIO as CSA_COMPRESS_RATIO
 from decode_attention_swa import (
     BLOCK_SIZE,
     HEAD_DIM,
@@ -64,8 +65,10 @@ from moe import (
     N_RANKS,
     N_ROUTES,
     RECV_MAX,
+    SIGNAL_PAD,
     TOPK as MOE_TOPK,
     VOCAB as MOE_VOCAB,
+    _token_partition_ratio_reldiff,
     build_tensor_specs as build_moe_tensor_specs,
     golden_moe,
     moe,
@@ -104,8 +107,8 @@ def mtp_decode_layer(
     wkv: pl.Tensor[[D, HEAD_DIM], pl.BF16],
     gamma_cq: pl.Tensor[[Q_LORA], pl.BF16],
     gamma_ckv: pl.Tensor[[HEAD_DIM], pl.BF16],
-    freqs_cos: pl.Tensor[[MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16],
-    freqs_sin: pl.Tensor[[MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16],
+    freqs_cos: pl.Tensor[[2, MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16],
+    freqs_sin: pl.Tensor[[2, MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16],
     kv_cache: pl.InOut[pl.Tensor[[ORI_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
     swa_slot_mapping: pl.Tensor[[T], pl.INT64],
     swa_indices: pl.Tensor[[T, WIN], pl.INT32],
@@ -144,13 +147,26 @@ def mtp_decode_layer(
     recv_x: pld.DistributedTensor[[N_LOCAL * RECV_MAX, D], pl.INT8],
     recv_aux: pld.DistributedTensor[[N_LOCAL * RECV_MAX, AUX_PAD], pl.FP32],
     recv_route: pld.DistributedTensor[[N_LOCAL * RECV_MAX, IDX_PAD], pl.INT32],
-    arrived: pld.DistributedTensor[[N_RANKS, 1], pl.INT32],
-    data_arrived: pld.DistributedTensor[[N_RANKS, 1], pl.INT32],
+    arrived: pld.DistributedTensor[[N_RANKS, SIGNAL_PAD], pl.INT32],
+    data_arrived: pld.DistributedTensor[[N_RANKS, N_LOCAL, SIGNAL_PAD], pl.INT32],
     routed_y_buf: pld.DistributedTensor[[N_ROUTES, D], pl.BF16],
-    combine_arrived: pld.DistributedTensor[[N_RANKS, 1], pl.INT32],
+    combine_arrived: pl.InOut[pld.DistributedTensor[[N_RANKS, N_LOCAL, SIGNAL_PAD], pl.INT32]],
+    consumed: pl.InOut[pld.DistributedTensor[[N_RANKS, SIGNAL_PAD], pl.INT32]],
     my_rank: pl.Scalar[pl.INT32],
     num_tokens: pl.Scalar[pl.INT32],
 ) -> pl.Tensor[[T, HC_MULT, D], pl.BF16]:
+    swa_cos_profile: pl.Tensor[[1, MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16] = pl.slice(
+        freqs_cos, [1, MAX_SEQ_LEN, ROPE_HEAD_DIM], [0, 0, 0]
+    )
+    swa_sin_profile: pl.Tensor[[1, MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16] = pl.slice(
+        freqs_sin, [1, MAX_SEQ_LEN, ROPE_HEAD_DIM], [0, 0, 0]
+    )
+    swa_freqs_cos: pl.Tensor[[MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16] = pl.reshape(
+        swa_cos_profile, [MAX_SEQ_LEN, ROPE_HEAD_DIM]
+    )
+    swa_freqs_sin: pl.Tensor[[MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16] = pl.reshape(
+        swa_sin_profile, [MAX_SEQ_LEN, ROPE_HEAD_DIM]
+    )
     projected_hidden = pl.create_tensor([T, HC_MULT, D], dtype=pl.FP32)
     mtp_projection(
         hidden_states,
@@ -178,8 +194,8 @@ def mtp_decode_layer(
         wkv,
         gamma_cq,
         gamma_ckv,
-        freqs_cos,
-        freqs_sin,
+        swa_freqs_cos,
+        swa_freqs_sin,
         kv_cache,
         swa_slot_mapping,
         swa_indices,
@@ -222,11 +238,33 @@ def mtp_decode_layer(
         data_arrived,
         routed_y_buf,
         combine_arrived,
+        consumed,
         pl.cast(MTP_LAYER_ID, pl.INT32),
         num_tokens,
         my_rank,
         pl.cast(MTP_MOE_EPOCH, pl.INT32),
     )
+
+    mtp_moe_epoch = pl.cast(MTP_MOE_EPOCH, pl.INT32)
+    # Wait for every rank's final reduction marker before clearing this rank's
+    # inbound epoch slots. This prevents a late final marker from surviving the
+    # reset and pre-satisfying the next persistent dispatch.
+    with pl.at(level=pl.Level.CORE_GROUP, name_hint="moe_signal_retire"):
+        _pre_hc_anchor = pl.read(next_pre_hc_hidden, [0, 0, 0])
+        for src in pl.range(N_RANKS):
+            pld.system.wait(signal=consumed, offsets=[src, 0], expected=mtp_moe_epoch, cmp=pld.WaitCmp.Ge)
+        for src in pl.range(N_RANKS):
+            pld.system.notify(target=arrived, peer=my_rank, offsets=[src, 0], value=0, op=pld.NotifyOp.Set)
+            pld.system.notify(target=consumed, peer=my_rank, offsets=[src, 0], value=0, op=pld.NotifyOp.Set)
+            for e in pl.range(N_LOCAL):
+                pld.system.notify(
+                    target=data_arrived, peer=my_rank, offsets=[src, e, 0],
+                    value=0, op=pld.NotifyOp.Set,
+                )
+                pld.system.notify(
+                    target=combine_arrived, peer=my_rank, offsets=[src, e, 0],
+                    value=0, op=pld.NotifyOp.Set,
+                )
     x_head = pl.create_tensor([T, D], dtype=pl.BF16)
     hc_head(next_pre_hc_hidden, mtp_hc_head_fn, mtp_hc_head_scale, mtp_hc_head_base, x_head)
     rms_norm(x_head, mtp_norm_w, hidden_out)
@@ -256,8 +294,8 @@ def l3_mtp_decode_layer(
     wkv: pl.Tensor[[N_RANKS, D, HEAD_DIM], pl.BF16],
     gamma_cq: pl.Tensor[[N_RANKS, Q_LORA], pl.BF16],
     gamma_ckv: pl.Tensor[[N_RANKS, HEAD_DIM], pl.BF16],
-    freqs_cos: pl.Tensor[[N_RANKS, MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16],
-    freqs_sin: pl.Tensor[[N_RANKS, MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16],
+    freqs_cos: pl.Tensor[[N_RANKS, 2, MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16],
+    freqs_sin: pl.Tensor[[N_RANKS, 2, MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16],
     kv_cache: pl.InOut[pl.Tensor[[N_RANKS, ORI_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
     swa_slot_mapping: pl.Tensor[[N_RANKS, T], pl.INT64],
     swa_indices: pl.Tensor[[N_RANKS, T, WIN], pl.INT32],
@@ -298,20 +336,22 @@ def l3_mtp_decode_layer(
     recv_x_buf = pld.alloc_window_buffer([N_LOCAL * RECV_MAX, D], dtype=pl.INT8)
     recv_aux_buf = pld.alloc_window_buffer([N_LOCAL * RECV_MAX, AUX_PAD], dtype=pl.FP32)
     recv_route_buf = pld.alloc_window_buffer([N_LOCAL * RECV_MAX, IDX_PAD], dtype=pl.INT32)
-    arrived_buf = pld.alloc_window_buffer([N_RANKS, 1], dtype=pl.INT32)
-    data_arrived_buf = pld.alloc_window_buffer([N_RANKS, 1], dtype=pl.INT32)
+    arrived_buf = pld.alloc_window_buffer([N_RANKS, SIGNAL_PAD], dtype=pl.INT32)
+    data_arrived_buf = pld.alloc_window_buffer([N_RANKS, N_LOCAL, SIGNAL_PAD], dtype=pl.INT32)
     routed_y_buf_buf = pld.alloc_window_buffer([N_ROUTES, D], dtype=pl.BF16)
-    combine_arrived_buf = pld.alloc_window_buffer([N_RANKS, 1], dtype=pl.INT32)
+    combine_arrived_buf = pld.alloc_window_buffer([N_RANKS, N_LOCAL, SIGNAL_PAD], dtype=pl.INT32)
+    consumed_buf = pld.alloc_window_buffer([N_RANKS, SIGNAL_PAD], dtype=pl.INT32)
 
     for r in pl.range(pld.world_size()):
         recv_meta = pld.window(recv_meta_buf, [N_RANKS, N_LOCAL], dtype=pl.INT32)
         recv_x = pld.window(recv_x_buf, [N_LOCAL * RECV_MAX, D], dtype=pl.INT8)
         recv_aux = pld.window(recv_aux_buf, [N_LOCAL * RECV_MAX, AUX_PAD], dtype=pl.FP32)
         recv_route = pld.window(recv_route_buf, [N_LOCAL * RECV_MAX, IDX_PAD], dtype=pl.INT32)
-        arrived = pld.window(arrived_buf, [N_RANKS, 1], dtype=pl.INT32)
-        data_arrived = pld.window(data_arrived_buf, [N_RANKS, 1], dtype=pl.INT32)
+        arrived = pld.window(arrived_buf, [N_RANKS, SIGNAL_PAD], dtype=pl.INT32)
+        data_arrived = pld.window(data_arrived_buf, [N_RANKS, N_LOCAL, SIGNAL_PAD], dtype=pl.INT32)
         routed_y_buf = pld.window(routed_y_buf_buf, [N_ROUTES, D], dtype=pl.BF16)
-        combine_arrived = pld.window(combine_arrived_buf, [N_RANKS, 1], dtype=pl.INT32)
+        combine_arrived = pld.window(combine_arrived_buf, [N_RANKS, N_LOCAL, SIGNAL_PAD], dtype=pl.INT32)
+        consumed = pld.window(consumed_buf, [N_RANKS, SIGNAL_PAD], dtype=pl.INT32)
         mtp_decode_layer(
             hidden_states[r],
             prev_pre_hc_hidden[r],
@@ -334,7 +374,7 @@ def l3_mtp_decode_layer(
             hidden_out[r],
             next_pre_hc_hidden[r],
             recv_meta, recv_x, recv_aux, recv_route, arrived, data_arrived,
-            routed_y_buf, combine_arrived,
+            routed_y_buf, combine_arrived, consumed,
             r, num_tokens,
             device=r,
         )
@@ -352,7 +392,7 @@ def _ranked_init(single_spec, *, replicated=False):
     return init
 
 
-def _ranked_spec(name, spec, *, replicated=False, is_output=False):
+def _ranked_spec(name, spec, *, replicated=False):
     from golden import TensorSpec
 
     return TensorSpec(
@@ -360,7 +400,32 @@ def _ranked_spec(name, spec, *, replicated=False, is_output=False):
         [N_RANKS, *spec.shape],
         spec.dtype,
         init_value=_ranked_init(spec, replicated=replicated),
-        is_output=is_output,
+    )
+
+
+def _make_rope_profile_spec(name, swa_spec, csa_spec):
+    import torch
+    from golden import TensorSpec
+
+    if tuple(swa_spec.shape) != tuple(csa_spec.shape):
+        raise ValueError(
+            f"{name} leaf shapes must match, got SWA {swa_spec.shape} and CSA {csa_spec.shape}"
+        )
+    if swa_spec.dtype != csa_spec.dtype:
+        raise ValueError(
+            f"{name} leaf dtypes must match, got SWA {swa_spec.dtype} and CSA {csa_spec.dtype}"
+        )
+
+    def init_value():
+        return torch.stack(
+            (swa_spec.create_tensor(), csa_spec.create_tensor()), dim=0
+        ).contiguous()
+
+    return TensorSpec(
+        name,
+        [2, *swa_spec.shape],
+        swa_spec.dtype,
+        init_value=init_value,
     )
 
 
@@ -467,6 +532,7 @@ def _mtp_head_specs():
 def build_tensor_specs(start_pos=DECODE_START_POS, num_tokens=T):
     import torch
     from golden import ScalarSpec, TensorSpec
+    from rope_tables import build_deepseek_v4_rope_tables
 
     projection_specs = _projection_specs()
     mtp_head_specs = _mtp_head_specs()
@@ -474,6 +540,27 @@ def build_tensor_specs(start_pos=DECODE_START_POS, num_tokens=T):
         spec.name: spec
         for spec in build_swa_tensor_specs(start_pos)
         if isinstance(spec, TensorSpec)
+    }
+    compressed_freqs_cos, compressed_freqs_sin = build_deepseek_v4_rope_tables(
+        M, CSA_COMPRESS_RATIO, dtype=torch.bfloat16
+    )
+    compressed_rope_specs = {
+        "freqs_cos": TensorSpec(
+            "freqs_cos",
+            list(compressed_freqs_cos.shape),
+            compressed_freqs_cos.dtype,
+            init_value=lambda: compressed_freqs_cos.clone(),
+        ),
+        "freqs_sin": TensorSpec(
+            "freqs_sin",
+            list(compressed_freqs_sin.shape),
+            compressed_freqs_sin.dtype,
+            init_value=lambda: compressed_freqs_sin.clone(),
+        ),
+    }
+    rope_specs = {
+        name: _make_rope_profile_spec(name, swa_specs[name], compressed_rope_specs[name])
+        for name in ("freqs_cos", "freqs_sin")
     }
     moe_specs = {
         spec.name: spec
@@ -525,13 +612,14 @@ def build_tensor_specs(start_pos=DECODE_START_POS, num_tokens=T):
             specs.append(mtp_head_specs[name])
         elif name in moe_specs:
             specs.append(moe_specs[name])
+        elif name in rope_specs:
+            specs.append(_ranked_spec(name, rope_specs[name], replicated=True))
         else:
             specs.append(
                 _ranked_spec(
                     name,
                     swa_specs[name],
                     replicated=name in replicated_attention,
-                    is_output=swa_specs[name].is_output,
                 )
             )
 
@@ -550,8 +638,8 @@ def build_tensor_specs(start_pos=DECODE_START_POS, num_tokens=T):
         if spec.name in resident_names:
             spec.resident = "stacked"
 
-    specs.append(TensorSpec("hidden_out", [N_RANKS, T, D], torch.bfloat16, is_output=True))
-    specs.append(TensorSpec("next_pre_hc_hidden", [N_RANKS, T, HC_MULT, D], torch.float32, is_output=True))
+    specs.append(TensorSpec("hidden_out", [N_RANKS, T, D], torch.bfloat16))
+    specs.append(TensorSpec("next_pre_hc_hidden", [N_RANKS, T, HC_MULT, D], torch.float32))
     specs.append(ScalarSpec("num_tokens", torch.int32, num_tokens))
     return specs
 
@@ -590,8 +678,8 @@ def golden_mtp_decode_layer(tensors):
             "wkv": tensors["wkv"][rank],
             "gamma_cq": tensors["gamma_cq"][rank],
             "gamma_ckv": tensors["gamma_ckv"][rank],
-            "freqs_cos": tensors["freqs_cos"][rank],
-            "freqs_sin": tensors["freqs_sin"][rank],
+            "freqs_cos": tensors["freqs_cos"][rank, 0],
+            "freqs_sin": tensors["freqs_sin"][rank, 0],
             "kv_cache": tensors["kv_cache"][rank],
             "swa_slot_mapping": tensors["swa_slot_mapping"][rank],
             "swa_indices": tensors["swa_indices"][rank],
@@ -624,7 +712,9 @@ def golden_mtp_decode_layer(tensors):
 
 
 def main():
-    from golden import ratio_reldiff, run_jit
+    import torch
+
+    from golden import mapped_pool_ratio_reldiff, run
 
     parser = argparse.ArgumentParser(description="DeepSeek-V4 MTP decode layer driver.")
     parser.add_argument("-p", "--platform", type=str, default="a2a3",
@@ -635,16 +725,20 @@ def main():
                         help=f"comma-separated device ids; need at least {N_RANKS}")
     parser.add_argument("--start-pos", type=int, default=DECODE_START_POS)
     parser.add_argument("--num-tokens", type=int, default=T)
-    parser.add_argument("--enable-l2-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2))
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2))
     parser.add_argument("--compile-only", action="store_true", default=False)
     parser.add_argument("--runtime-dir", type=str, default=None)
+    parser.add_argument("--seed", type=int, default=0,
+                        help="RNG seed for reproducible inputs and golden")
     parser.add_argument("--dump-passes", action="store_true", default=False)
     args = parser.parse_args()
+
+    torch.manual_seed(args.seed)
 
     device_ids = [int(d) for d in args.device.split(",")]
     assert len(device_ids) >= N_RANKS, f"need at least {N_RANKS} devices, got {device_ids}"
 
-    result = run_jit(
+    result = run(
         fn=l3_mtp_decode_layer,
         specs=build_tensor_specs(start_pos=args.start_pos, num_tokens=args.num_tokens),
         golden_fn=golden_mtp_decode_layer,
@@ -656,14 +750,32 @@ def main():
         ),
         runtime_cfg=dict(
             platform=args.platform,
-            enable_l2_swimlane=args.enable_l2_swimlane,
+            enable_chip_swimlane=args.enable_chip_swimlane,
         ),
         rtol=1e-3,
         atol=1e-3,
         compare_fn={
-            "hidden_out": ratio_reldiff(diff_thd=0.02, pct_thd=0.10),
-            "next_pre_hc_hidden": ratio_reldiff(diff_thd=0.02, pct_thd=0.05),
-            "kv_cache": ratio_reldiff(diff_thd=0.01, pct_thd=0.05),
+            "hidden_out": _token_partition_ratio_reldiff(
+                args.num_tokens,
+                diff_thd=0.02,
+                pct_thd=0.10,
+                max_abs_diff=float("inf"),
+            ),
+            # This FP32 state follows the composed BF16 attention and MoE path.
+            # Seeded EP2 measurements place 3.88-4.95% of points above 2%
+            # relative difference, with rel-L2 near 1% and max absolute error
+            # below 0.17. Keep the per-point threshold, add modest distribution
+            # margin and a meaningful absolute guard for near-zero crossings.
+            "next_pre_hc_hidden": _token_partition_ratio_reldiff(
+                args.num_tokens,
+                diff_thd=0.02,
+                pct_thd=0.06,
+                max_abs_diff=0.25,
+            ),
+            "kv_cache": mapped_pool_ratio_reldiff(
+                "swa_slot_mapping", mapping_shape=(N_RANKS, T), block_size=BLOCK_SIZE,
+                leading_rank_axis=True, pool_name="kv_cache", diff_thd=0.01, pct_thd=0.05,
+            ),
         },
     )
     if not result.passed:

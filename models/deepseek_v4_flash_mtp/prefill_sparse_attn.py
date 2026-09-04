@@ -31,6 +31,7 @@ from prefill_indexer import INDEXER_TOPK_CAP
 # Dynamic shape variables.
 ORI_BLOCK_NUM_DYN = pl.dynamic("PREFILL_ORI_BLOCK_NUM_DYN")
 CMP_BLOCK_NUM_DYN = pl.dynamic("PREFILL_CMP_BLOCK_NUM_DYN")
+CMP_STORAGE_BLOCK_SIZE_DYN = pl.dynamic("PREFILL_CMP_STORAGE_BLOCK_SIZE_DYN")
 
 # model config
 B = PREFILL_BATCH
@@ -382,8 +383,9 @@ def sparse_attn(
     q: pl.Tensor[[T, H, HEAD_DIM], pl.BF16],
     ori_kv: pl.Tensor[[ORI_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
     swa_indices: pl.Tensor[[T, WIN], pl.INT32],
-    cmp_kv: pl.Tensor[[CMP_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
+    cmp_kv: pl.Tensor[[CMP_BLOCK_NUM_DYN, CMP_STORAGE_BLOCK_SIZE_DYN, 1, HEAD_DIM], pl.BF16],
     cmp_block_table: pl.Tensor[[CMP_MAX_BLOCKS], pl.INT32],
+    cmp_storage_block_size: pl.Scalar[pl.INT32],
     cmp_indices: pl.Tensor[[T, IDX_TOPK], pl.INT32],
     valid_block_mask: pl.Tensor[[T, VALID_BLOCK_MASK_COLS], pl.INT32],
     attn_sink: pl.Tensor[[H], pl.FP32],
@@ -399,7 +401,7 @@ def sparse_attn(
     ori_block_num = pl.tensor.dim(ori_kv, 0)
     cmp_block_num = pl.tensor.dim(cmp_kv, 0)
     ori_cache_rows = ori_block_num * BLOCK_SIZE
-    cmp_cache_rows = cmp_block_num * BLOCK_SIZE
+    cmp_cache_rows = cmp_block_num * pl.tensor.dim(cmp_kv, 1)
     ori_kv_flat = pl.reshape(ori_kv, [ori_cache_rows, HEAD_DIM])
     cmp_kv_flat = pl.reshape(cmp_kv, [cmp_cache_rows, HEAD_DIM])
     sparse_kv = pl.create_tensor([T * PREFILL_SPARSE_PAD, HEAD_DIM], dtype=pl.BF16)
@@ -445,9 +447,11 @@ def sparse_attn(
                                 gather_raw = pl.read(cmp_indices, [gather_t, gather_cmp_k])
                                 if gather_raw >= 0:
                                     cmp_slot = gather_raw
-                                    blk_slot = cmp_slot // BLOCK_SIZE
+                                    blk_slot = cmp_slot // cmp_storage_block_size
                                     blk = pl.cast(pl.read(cmp_block_table, [blk_slot]), pl.INDEX)
-                                    src = blk * BLOCK_SIZE + (cmp_slot - blk_slot * BLOCK_SIZE)
+                                    src = blk * cmp_storage_block_size + (
+                                        cmp_slot - blk_slot * cmp_storage_block_size
+                                    )
                                     stage[gather_ki:gather_ki + 1, :] = cmp_kv_flat[src:src + 1, :]
                         sparse_kv[block_base:block_base + PREFILL_ATTN_TILE, :] = stage
 
@@ -485,8 +489,9 @@ def prefill_sparse_attn_test(
     q: pl.Tensor[[T, H, HEAD_DIM], pl.BF16],
     ori_kv: pl.Tensor[[ORI_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
     swa_indices: pl.Tensor[[T, WIN], pl.INT32],
-    cmp_kv: pl.Tensor[[CMP_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
+    cmp_kv: pl.Tensor[[CMP_BLOCK_NUM_DYN, CMP_STORAGE_BLOCK_SIZE_DYN, 1, HEAD_DIM], pl.BF16],
     cmp_block_table: pl.Tensor[[CMP_MAX_BLOCKS], pl.INT32],
+    cmp_storage_block_size: pl.Scalar[pl.INT32],
     cmp_indices: pl.Tensor[[T, IDX_TOPK], pl.INT32],
     valid_block_mask: pl.Tensor[[T, VALID_BLOCK_MASK_COLS], pl.INT32],
     attn_sink: pl.Tensor[[H], pl.FP32],
@@ -500,9 +505,10 @@ def prefill_sparse_attn_test(
 ):
     ori_kv.bind_dynamic(0, ORI_BLOCK_NUM_DYN)
     cmp_kv.bind_dynamic(0, CMP_BLOCK_NUM_DYN)
+    cmp_kv.bind_dynamic(1, CMP_STORAGE_BLOCK_SIZE_DYN)
     return sparse_attn(
         q, ori_kv, swa_indices,
-        cmp_kv, cmp_block_table, cmp_indices,
+        cmp_kv, cmp_block_table, cmp_storage_block_size, cmp_indices,
         valid_block_mask, attn_sink, num_tokens,
         freqs_cos, freqs_sin,
         wo_a, wo_b, wo_b_scale,
@@ -518,6 +524,7 @@ def golden_prefill_sparse_attn(tensors):
     ori_kv = tensors["ori_kv"].float()
     cmp_kv = tensors["cmp_kv"].float()
     cmp_block_table = tensors["cmp_block_table"]
+    cmp_storage_block_size = int(tensors.get("cmp_storage_block_size", BLOCK_SIZE))
     swa_indices = tensors["swa_indices"]
     cmp_indices = tensors["cmp_indices"]
     attn_sink = tensors["attn_sink"].float()
@@ -537,12 +544,11 @@ def golden_prefill_sparse_attn(tensors):
             gathered.append(ori_kv.reshape(-1, HEAD_DIM)[row])
         for raw_i in cmp_indices[t].tolist():
             cmp_slot = int(raw_i)
-            if cmp_slot < 0 or cmp_slot >= CMP_MAX_BLOCKS * BLOCK_SIZE:
+            if cmp_slot < 0 or cmp_slot >= CMP_MAX_BLOCKS * cmp_storage_block_size:
                 continue
-            block_id = int(cmp_block_table[cmp_slot // BLOCK_SIZE].item())
-            intra = cmp_slot % BLOCK_SIZE
+            block_id = int(cmp_block_table[cmp_slot // cmp_storage_block_size].item())
             if block_id >= 0:
-                gathered.append(cmp_kv[block_id, intra, 0])
+                gathered.append(cmp_kv[block_id, cmp_slot % cmp_storage_block_size, 0])
 
         if not gathered:
             continue
@@ -609,7 +615,12 @@ def get_prefill_cmp_valid(compress_ratio: int) -> int:
     if compress_ratio == 0:
         return 0
     if compress_ratio in (4, 128):
-        return min(IDX_TOPK, S // compress_ratio, CMP_MAX_BLOCKS * BLOCK_SIZE)
+        storage_block_size = BLOCK_SIZE // compress_ratio
+        return min(
+            IDX_TOPK,
+            S // compress_ratio,
+            CMP_MAX_BLOCKS * storage_block_size,
+        )
     raise ValueError(f"Unsupported compress_ratio={compress_ratio}; expected one of {SUPPORTED_COMPRESS_RATIOS}")
 
 def build_tensor_specs(
@@ -627,6 +638,7 @@ def build_tensor_specs(
     if ori_block_num <= 0 or cmp_block_num <= 0:
         raise ValueError("dynamic cache block counts must be positive")
     cmp_valid = get_prefill_cmp_valid(compress_ratio)
+    storage_block_size = BLOCK_SIZE // compress_ratio if compress_ratio else BLOCK_SIZE
     shared_freqs_cos, shared_freqs_sin = build_rope_tables(M, compress_ratio, dtype=torch.bfloat16)
     rope_positions = torch.arange(T, dtype=torch.int32)
     shared_rope_cos, shared_rope_sin = materialize_token_rope_tables(shared_freqs_cos, shared_freqs_sin, rope_positions)
@@ -636,7 +648,10 @@ def build_tensor_specs(
     def init_ori_kv():
         return ((torch.rand(ori_block_num, BLOCK_SIZE, 1, HEAD_DIM) - 0.5) * 0.05).to(torch.bfloat16)
     def init_cmp_kv():
-        return ((torch.rand(cmp_block_num, BLOCK_SIZE, 1, HEAD_DIM) - 0.5) * 0.05).to(torch.bfloat16)
+        return (
+            (torch.rand(cmp_block_num, storage_block_size, 1, HEAD_DIM) - 0.5)
+            * 0.05
+        ).to(torch.bfloat16)
     def init_cmp_block_table():
         table = torch.zeros(CMP_MAX_BLOCKS, dtype=torch.int32)
         for blk in range(CMP_MAX_BLOCKS):
@@ -696,8 +711,14 @@ def build_tensor_specs(
         TensorSpec("q", [T, H, HEAD_DIM], torch.bfloat16, init_value=init_q),
         TensorSpec("ori_kv", [ori_block_num, BLOCK_SIZE, 1, HEAD_DIM], torch.bfloat16, init_value=init_ori_kv),
         TensorSpec("swa_indices", [T, WIN], torch.int32, init_value=init_swa_indices),
-        TensorSpec("cmp_kv", [cmp_block_num, BLOCK_SIZE, 1, HEAD_DIM], torch.bfloat16, init_value=init_cmp_kv),
+        TensorSpec(
+            "cmp_kv",
+            [cmp_block_num, storage_block_size, 1, HEAD_DIM],
+            torch.bfloat16,
+            init_value=init_cmp_kv,
+        ),
         TensorSpec("cmp_block_table", [CMP_MAX_BLOCKS], torch.int32, init_value=init_cmp_block_table),
+        ScalarSpec("cmp_storage_block_size", torch.int32, storage_block_size),
         TensorSpec("cmp_indices", [T, IDX_TOPK], torch.int32, init_value=init_cmp_indices),
         TensorSpec("valid_block_mask", [T, VALID_BLOCK_MASK_COLS], torch.int32, init_value=init_valid_block_mask),
         TensorSpec("attn_sink", [H], torch.float32, init_value=init_attn_sink),
@@ -707,13 +728,13 @@ def build_tensor_specs(
         TensorSpec("wo_a", [O_GROUPS, O_LORA, O_GROUP_IN], torch.bfloat16, init_value=init_wo_a),
         TensorSpec("wo_b", [D, O_GROUPS * O_LORA], torch.int8, init_value=lambda: wo_b_i8),
         TensorSpec("wo_b_scale", [D], torch.float32, init_value=lambda: wo_b_scale),
-        TensorSpec("attn_out", [T, D], torch.bfloat16, is_output=True),
+        TensorSpec("attn_out", [T, D], torch.bfloat16),
     ]
 
 if __name__ == "__main__":
     import argparse
     import torch
-    from golden import ratio_allclose, run_jit
+    from golden import ratio_allclose, run
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--platform", type=str, default="a2a3", choices=["a2a3", "a2a3sim", "a5", "a5sim"])
@@ -725,13 +746,13 @@ if __name__ == "__main__":
     parser.add_argument("--num-tokens", type=int, default=T, help="Active prefix; inactive output rows stay zero.")
     parser.add_argument("--ori-block-num", type=int, default=ORI_BLOCK_NUM)
     parser.add_argument("--cmp-block-num", type=int, default=CMP_BLOCK_NUM)
-    parser.add_argument("--enable-l2-swimlane", nargs="?", const=4, default=0, type=int)
+    parser.add_argument("--enable-chip-swimlane", nargs="?", const=4, default=0, type=int)
     parser.add_argument("--enable-pmu", nargs="?", const=2, default=0, type=int, choices=[0, 1, 2, 4])
     parser.add_argument("--dump-passes", action="store_true", default=False)
     args = parser.parse_args()
     torch.manual_seed(args.seed)
 
-    result = run_jit(
+    result = run(
         fn=prefill_sparse_attn_test,
         specs=build_tensor_specs(args.compress_ratio, args.num_tokens, args.ori_block_num, args.cmp_block_num),
         golden_fn=golden_prefill_sparse_attn,
@@ -739,7 +760,7 @@ if __name__ == "__main__":
         runtime_cfg=dict(
             platform=args.platform,
             device_id=args.device,
-            enable_l2_swimlane=args.enable_l2_swimlane,
+            enable_chip_swimlane=args.enable_chip_swimlane,
             enable_pmu=args.enable_pmu,
         ),
         rtol=1e-3,

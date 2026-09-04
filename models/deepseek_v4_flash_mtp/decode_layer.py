@@ -45,6 +45,7 @@ from decode_swa import (
 from decode_hca import (
     CMP_BLOCK_NUM as HCA_CMP_BLOCK_NUM,
     CMP_MAX_BLOCKS as HCA_CMP_MAX_BLOCKS,
+    CMP_STORAGE_BLOCK_SIZE as HCA_CMP_STORAGE_BLOCK_SIZE,
     COMPRESS_RATIO as HCA_COMPRESS_RATIO,
     COMPRESS_STATE_BLOCK_NUM as HCA_COMPRESS_STATE_BLOCK_NUM,
     COMPRESS_STATE_BLOCK_SIZE as HCA_COMPRESS_STATE_BLOCK_SIZE,
@@ -58,6 +59,7 @@ from decode_hca import (
 from decode_csa import (
     CMP_BLOCK_NUM as CSA_CMP_BLOCK_NUM,
     CMP_MAX_BLOCKS as CSA_CMP_MAX_BLOCKS,
+    CMP_STORAGE_BLOCK_SIZE as CSA_CMP_STORAGE_BLOCK_SIZE,
     COMPRESS_RATIO as CSA_COMPRESS_RATIO,
     IDX_CACHE_BLOCK_NUM as CSA_IDX_CACHE_BLOCK_NUM,
     IDX_CACHE_MAX_BLOCKS as CSA_IDX_CACHE_MAX_BLOCKS,
@@ -95,8 +97,7 @@ from moe import (
     moe,
 )
 
-assert HCA_CMP_BLOCK_NUM == CSA_CMP_BLOCK_NUM, "unified host shares cmp_kv between HCA and CSA"
-assert HCA_CMP_MAX_BLOCKS == CSA_CMP_MAX_BLOCKS, "unified host shares cmp_block_table between HCA and CSA"
+assert HCA_CMP_MAX_BLOCKS == CSA_CMP_MAX_BLOCKS
 
 
 @pl.jit
@@ -162,10 +163,21 @@ def decode_layer(
         pl.FP32,
     ],
     csa_inner_compress_state_block_table: pl.Tensor[[B, CSA_INNER_STATE_MAX_BLOCKS], pl.INT32],
-    cmp_kv: pl.Tensor[[CSA_CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
-    cmp_block_table: pl.Tensor[[B, CSA_CMP_MAX_BLOCKS], pl.INT32],
-    idx_kv_cache: pl.Tensor[[CSA_IDX_CACHE_BLOCK_NUM, BLOCK_SIZE, 1, CSA_IDX_HEAD_DIM], pl.INT8],
-    idx_kv_scale: pl.Tensor[[CSA_IDX_CACHE_BLOCK_NUM, BLOCK_SIZE, 1, 1], pl.FP32],
+    hca_cmp_kv: pl.Tensor[
+        [HCA_CMP_BLOCK_NUM, HCA_CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], pl.BF16
+    ],
+    csa_cmp_kv: pl.Tensor[
+        [CSA_CMP_BLOCK_NUM, CSA_CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], pl.BF16
+    ],
+    hca_cmp_block_table: pl.Tensor[[B, HCA_CMP_MAX_BLOCKS], pl.INT32],
+    csa_cmp_block_table: pl.Tensor[[B, CSA_CMP_MAX_BLOCKS], pl.INT32],
+    idx_kv_cache: pl.Tensor[
+        [CSA_IDX_CACHE_BLOCK_NUM, CSA_CMP_STORAGE_BLOCK_SIZE, 1, CSA_IDX_HEAD_DIM],
+        pl.INT8,
+    ],
+    idx_kv_scale: pl.Tensor[
+        [CSA_IDX_CACHE_BLOCK_NUM, CSA_CMP_STORAGE_BLOCK_SIZE, 1, 1], pl.FP32
+    ],
     idx_block_table: pl.Tensor[[B, CSA_IDX_CACHE_MAX_BLOCKS], pl.INT32],
     hc_ffn_fn: pl.Tensor[[MIX_HC, HC_DIM], pl.FP32],
     hc_ffn_scale: pl.Tensor[[3], pl.FP32],
@@ -219,7 +231,7 @@ def decode_layer(
             wkv, gamma_cq, gamma_ckv, freqs_cos, freqs_sin,
             hca_cmp_wkv, hca_cmp_wgate, hca_cmp_ape, hca_cmp_norm_w,
             hca_compress_state, hca_compress_state_block_table,
-            kv_cache, cmp_kv, cmp_block_table,
+            kv_cache, hca_cmp_kv, hca_cmp_block_table,
             ori_slot_mapping, window_swa_indices, window_swa_lens,
             hca_cmp_slot_mapping, hca_state_slot_mapping,
             position_ids, kv_seq_lens,
@@ -237,7 +249,7 @@ def decode_layer(
             csa_idx_wq_b, csa_idx_wq_b_scale, csa_weights_proj, csa_hadamard_idx,
             csa_inner_wkv, csa_inner_wgate, csa_inner_ape, csa_inner_norm_w,
             csa_inner_compress_state, csa_inner_compress_state_block_table,
-            kv_cache, cmp_kv, cmp_block_table,
+            kv_cache, csa_cmp_kv, csa_cmp_block_table,
             idx_kv_cache, idx_kv_scale, idx_block_table,
             ori_slot_mapping, window_swa_indices, window_swa_lens,
             csa_cmp_slot_mapping, csa_idx_slot_mapping,
@@ -331,10 +343,24 @@ def l3_decode_layer(
         pl.FP32,
     ],
     csa_inner_compress_state_block_table: pl.Tensor[[N_RANKS, B, CSA_INNER_STATE_MAX_BLOCKS], pl.INT32],
-    cmp_kv: pl.Tensor[[N_RANKS, CSA_CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
-    cmp_block_table: pl.Tensor[[N_RANKS, B, CSA_CMP_MAX_BLOCKS], pl.INT32],
-    idx_kv_cache: pl.Tensor[[N_RANKS, CSA_IDX_CACHE_BLOCK_NUM, BLOCK_SIZE, 1, CSA_IDX_HEAD_DIM], pl.INT8],
-    idx_kv_scale: pl.Tensor[[N_RANKS, CSA_IDX_CACHE_BLOCK_NUM, BLOCK_SIZE, 1, 1], pl.FP32],
+    hca_cmp_kv: pl.Tensor[
+        [N_RANKS, HCA_CMP_BLOCK_NUM, HCA_CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM],
+        pl.BF16,
+    ],
+    csa_cmp_kv: pl.Tensor[
+        [N_RANKS, CSA_CMP_BLOCK_NUM, CSA_CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM],
+        pl.BF16,
+    ],
+    hca_cmp_block_table: pl.Tensor[[N_RANKS, B, HCA_CMP_MAX_BLOCKS], pl.INT32],
+    csa_cmp_block_table: pl.Tensor[[N_RANKS, B, CSA_CMP_MAX_BLOCKS], pl.INT32],
+    idx_kv_cache: pl.Tensor[
+        [N_RANKS, CSA_IDX_CACHE_BLOCK_NUM, CSA_CMP_STORAGE_BLOCK_SIZE, 1, CSA_IDX_HEAD_DIM],
+        pl.INT8,
+    ],
+    idx_kv_scale: pl.Tensor[
+        [N_RANKS, CSA_IDX_CACHE_BLOCK_NUM, CSA_CMP_STORAGE_BLOCK_SIZE, 1, 1],
+        pl.FP32,
+    ],
     idx_block_table: pl.Tensor[[N_RANKS, B, CSA_IDX_CACHE_MAX_BLOCKS], pl.INT32],
     hc_ffn_fn: pl.Tensor[[N_RANKS, MIX_HC, HC_DIM], pl.FP32],
     hc_ffn_scale: pl.Tensor[[N_RANKS, 3], pl.FP32],
@@ -399,7 +425,9 @@ def l3_decode_layer(
             csa_idx_wq_b[r], csa_idx_wq_b_scale[r], csa_weights_proj[r], csa_hadamard_idx[r],
             csa_inner_wkv[r], csa_inner_wgate[r], csa_inner_ape[r], csa_inner_norm_w[r],
             csa_inner_compress_state[r], csa_inner_compress_state_block_table[r],
-            cmp_kv[r], cmp_block_table[r], idx_kv_cache[r], idx_kv_scale[r], idx_block_table[r],
+            hca_cmp_kv[r], csa_cmp_kv[r],
+            hca_cmp_block_table[r], csa_cmp_block_table[r],
+            idx_kv_cache[r], idx_kv_scale[r], idx_block_table[r],
             hc_ffn_fn[r], hc_ffn_scale[r], hc_ffn_base[r],
             norm_w[r], gate_w[r], gate_bias[r], tid2eid[r], input_ids[r],
             routed_w1[r], routed_w1_scale[r], routed_w3[r], routed_w3_scale[r],
@@ -443,7 +471,7 @@ def golden_decode_layer(tensors):
             "swa_lens": tensors["swa_lens"][r],
             "position_ids": tensors["position_ids"][r],
             "cmp_kv": tensors["cmp_kv"][r],
-            "cmp_block_table": tensors["cmp_block_table"][r],
+            "cmp_block_table": tensors["csa_cmp_block_table"][r],
             "attn_sink": tensors["attn_sink"][r],
             "wo_a": tensors["wo_a"][r],
             "wo_b": tensors["wo_b"][r],
@@ -484,7 +512,7 @@ def golden_decode_layer_hca(tensors):
             "compress_state_block_table": tensors["compress_state_block_table"][r],
             "kv_cache": tensors["kv_cache"][r],
             "cmp_kv": tensors["cmp_kv"][r],
-            "cmp_block_table": tensors["cmp_block_table"][r],
+            "cmp_block_table": tensors["hca_cmp_block_table"][r],
             "ori_slot_mapping": tensors["ori_slot_mapping"][r],
             "window_swa_indices": tensors["window_swa_indices"][r],
             "window_swa_lens": tensors["window_swa_lens"][r],
@@ -542,7 +570,7 @@ def golden_decode_layer_csa(tensors):
             "inner_compress_state_block_table": tensors["inner_compress_state_block_table"][r],
             "kv_cache": tensors["kv_cache"][r],
             "cmp_kv": tensors["cmp_kv"][r],
-            "cmp_block_table": tensors["cmp_block_table"][r],
+            "cmp_block_table": tensors["csa_cmp_block_table"][r],
             "idx_kv_cache": tensors["idx_kv_cache"][r],
             "idx_kv_scale": tensors["idx_kv_scale"][r],
             "idx_block_table": tensors["idx_block_table"][r],
@@ -581,6 +609,7 @@ def golden_decode_layer_auto(tensors):
             "cmp_norm_w": tensors["hca_cmp_norm_w"],
             "compress_state": tensors["hca_compress_state"],
             "compress_state_block_table": tensors["hca_compress_state_block_table"],
+            "cmp_kv": tensors["hca_cmp_kv"],
             "cmp_slot_mapping": tensors["hca_cmp_slot_mapping"],
             "state_slot_mapping": tensors["hca_state_slot_mapping"],
         })
@@ -604,6 +633,7 @@ def golden_decode_layer_auto(tensors):
             "inner_norm_w": tensors["csa_inner_norm_w"],
             "inner_compress_state": tensors["csa_inner_compress_state"],
             "inner_compress_state_block_table": tensors["csa_inner_compress_state_block_table"],
+            "cmp_kv": tensors["csa_cmp_kv"],
             "cmp_slot_mapping": tensors["csa_cmp_slot_mapping"],
             "idx_slot_mapping": tensors["csa_idx_slot_mapping"],
             "state_slot_mapping": tensors["csa_state_slot_mapping"],
@@ -768,8 +798,10 @@ def build_tensor_specs(start_pos=DECODE_START_POS, layer_id=10):
         ("csa_inner_norm_w", csa_specs["inner_norm_w"]),
         ("csa_inner_compress_state", csa_specs["inner_compress_state"]),
         ("csa_inner_compress_state_block_table", csa_specs["inner_compress_state_block_table"]),
-        ("cmp_kv", csa_specs["cmp_kv"]),
-        ("cmp_block_table", csa_specs["cmp_block_table"]),
+        ("hca_cmp_kv", hca_specs["cmp_kv"]),
+        ("csa_cmp_kv", csa_specs["cmp_kv"]),
+        ("hca_cmp_block_table", hca_specs["cmp_block_table"]),
+        ("csa_cmp_block_table", csa_specs["cmp_block_table"]),
         ("idx_kv_cache", csa_specs["idx_kv_cache"]),
         ("idx_kv_scale", csa_specs["idx_kv_scale"]),
         ("idx_block_table", csa_specs["idx_block_table"]),
@@ -781,7 +813,6 @@ def build_tensor_specs(start_pos=DECODE_START_POS, layer_id=10):
             [N_RANKS, *spec.shape],
             spec.dtype,
             init_value=_ranked_init(spec, replicated=name in replicated_attention),
-            is_output=name == "kv_cache",
         )
         for name, spec in attention_specs
     ]
@@ -815,7 +846,7 @@ def build_tensor_specs(start_pos=DECODE_START_POS, layer_id=10):
     # KV/state cache or per-step metadata); the MoE set adds the FFN/gate/expert
     # weights and the static tid2eid route table. The KV/state caches
     # (RESIDENT_CACHE_NAMES) are kept resident too — the written kv_cache is also
-    # is_output=True (line above) and read back once at the end for validation;
+    # an InOut (line above) and read back once at the end for validation;
     # the others are read-only inputs. NOT resident: the per-step slot mappings /
     # block tables / ids / position_ids / kv_seq_lens, the input activation
     # (x_hc), and the output (x_next), which change per token.
@@ -828,7 +859,7 @@ def build_tensor_specs(start_pos=DECODE_START_POS, layer_id=10):
         "shared_w2", "shared_w2_scale",
     }
     RESIDENT_CACHE_NAMES = {
-        "kv_cache", "cmp_kv", "idx_kv_cache", "idx_kv_scale",
+        "kv_cache", "hca_cmp_kv", "csa_cmp_kv", "idx_kv_cache", "idx_kv_scale",
         "csa_compress_state", "csa_inner_compress_state", "hca_compress_state",
     }
     for spec in specs:
@@ -836,7 +867,7 @@ def build_tensor_specs(start_pos=DECODE_START_POS, layer_id=10):
             spec.resident = "stacked"
 
     specs.extend([
-        TensorSpec("x_next", [N_RANKS, T, HC_MULT, D], torch.float32, is_output=True),
+        TensorSpec("x_next", [N_RANKS, T, HC_MULT, D], torch.float32),
         ScalarSpec("layer_id", torch.int32, layer_id),
     ])
     return specs
@@ -844,7 +875,7 @@ def build_tensor_specs(start_pos=DECODE_START_POS, layer_id=10):
 
 if __name__ == "__main__":
     import argparse
-    from golden import ratio_allclose, ratio_reldiff, run_jit
+    from golden import ratio_allclose, ratio_reldiff, run
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--platform", type=str, default="a2a3",
@@ -857,7 +888,7 @@ if __name__ == "__main__":
     parser.add_argument("--start-pos", type=int, default=DECODE_START_POS,
                         help="Fixture-only start_pos for all batches; default is the 8k target position.")
     parser.add_argument("--layer-id", type=int, default=10)
-    parser.add_argument("--enable-l2-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2))
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2))
     parser.add_argument("--compile-only", action="store_true", default=False)
     parser.add_argument("--runtime-dir", type=str, default=None)
     parser.add_argument("--dump-passes", action="store_true", default=False)
@@ -868,7 +899,7 @@ if __name__ == "__main__":
     host_fn = l3_decode_layer
     golden_fn = golden_decode_layer_auto
 
-    result = run_jit(
+    result = run(
         fn=host_fn,
         specs=build_tensor_specs(
             start_pos=args.start_pos,
@@ -886,7 +917,7 @@ if __name__ == "__main__":
         ),
         runtime_cfg=dict(
             platform=args.platform,
-            enable_l2_swimlane=args.enable_l2_swimlane,
+            enable_chip_swimlane=args.enable_chip_swimlane,
         ),
         rtol=1e-3,
         atol=1e-3,

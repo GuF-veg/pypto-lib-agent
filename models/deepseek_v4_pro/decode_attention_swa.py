@@ -17,8 +17,10 @@ Companion files: attention_csa_draft.py (ratio=4)
 
 import pypto.language as pl
 
+from golden import mapped_pool_ratio_allclose
+
 from config import (
-    PRO_KERNEL as M,
+    ACTIVE as M,
     DECODE_BATCH,
     DECODE_ORI_BLOCK_NUM,
     DECODE_SEQ,
@@ -115,7 +117,8 @@ def attention_swa(
         for b in pl.range(B):
             for s_idx in pl.range(S):
                 t = b * S + s_idx
-                pos_b = pl.cast(pl.read(position_ids, [t]), pl.INDEX)
+                pos_raw = pl.read(position_ids, [t])
+                pos_b = pl.cast(pos_raw, pl.INDEX)
                 cos_row = pl.cast(freqs_cos[pos_b : pos_b + 1, 0 : ROPE_HEAD_DIM], target_type=pl.FP32)
                 sin_row = pl.cast(freqs_sin[pos_b : pos_b + 1, 0 : ROPE_HEAD_DIM], target_type=pl.FP32)
                 rope_cos_t[t : t + 1, 0 : ROPE_HEAD_DIM] = pl.cast(cos_row, target_type=pl.BF16, mode="rint")
@@ -146,14 +149,23 @@ def attention_swa(
             if write_row_i64 >= 0:
                 write_row = pl.cast(write_row_i64, pl.INDEX)
                 kv_cache_flat[write_row : write_row + 1, 0 : HEAD_DIM] = kv[write_t : write_t + 1, 0 : HEAD_DIM]
-        v_col = pl.cast(pl.arange(0, [1, WIN], dtype=pl.INT32), target_type=pl.FP32)
-        v_col_m = pl.col_expand(pl.full([T, WIN], dtype=pl.FP32, value=0.0), v_col)
-        v_lens = pl.cast(pl.reshape(swa_lens[0:T], [T, 1]), target_type=pl.FP32)
-        v_valid = pl.minimum(
-            pl.maximum(pl.neg(pl.row_expand_sub(v_col_m, v_lens)), 0.0),
-            1.0,
-        )
-        sparse_bias[0:T, 0:WIN] = pl.mul(pl.sub(v_valid, 1.0), -NEG_INF)
+        v_col_i32 = pl.arange(0, [1, WIN], dtype=pl.INT32)
+        v_col = pl.cast(v_col_i32, target_type=pl.FP32)
+        v_col_base = pl.full([T, WIN], dtype=pl.FP32, value=0.0)
+        v_col_m = pl.col_expand(v_col_base, v_col)
+        v_lens_row = pl.reshape(swa_lens[0:T], [T, 1])
+        v_lens = pl.cast(v_lens_row, target_type=pl.FP32)
+        v_delta = pl.row_expand_sub(v_col_m, v_lens)
+        v_inside = pl.neg(v_delta)
+        v_floor = pl.maximum(v_inside, 0.0)
+        v_len_valid = pl.minimum(v_floor, 1.0)
+        v_idx_f = pl.cast(swa_indices[0:T, 0:WIN], target_type=pl.FP32)
+        v_idx_one = pl.add(v_idx_f, 1.0)
+        v_idx_floor = pl.maximum(v_idx_one, 0.0)
+        v_idx_valid = pl.minimum(v_idx_floor, 1.0)
+        v_valid = pl.mul(v_len_valid, v_idx_valid)
+        v_mask = pl.sub(v_valid, 1.0)
+        sparse_bias[0:T, 0:WIN] = pl.mul(v_mask, -NEG_INF)
     attn_out = pl.create_tensor([T, D], dtype=pl.BF16)
     sparse_attn_swa(
         q, kv_cache_flat, swa_indices, sparse_bias,
@@ -207,7 +219,7 @@ def attention_swa_test(
         wo_a, wo_b, wo_b_scale,
         x_out,
     )
-    return x_out
+    return kv_cache, x_out
 
 
 def golden_attention_swa(tensors):
@@ -238,8 +250,6 @@ def golden_attention_swa(tensors):
 
     # ===== Attention.forward (model.py:484-543), ratio==0 branch =====
     position_ids = tensors["position_ids"].to(torch.int64)
-    bsz, seqlen = B, S
-    win = WIN
     rd = ROPE_HEAD_DIM
 
     freqs_cos = tensors["freqs_cos"]
@@ -313,8 +323,8 @@ def golden_attention_swa(tensors):
     tensors["x_out"][:] = y
 
 
-def build_tensor_specs(start_pos=None):
-    import torch  # type: ignore[import]
+def build_tensor_specs(start_pos=None, unmapped_visible_page_fixture=False):
+    import torch
     from decode_metadata import (
         block_table,
         paged_slot_mapping,
@@ -325,6 +335,9 @@ def build_tensor_specs(start_pos=None):
     )
     from golden import TensorSpec
     from rope_tables import build_deepseek_v4_rope_tables
+
+    if start_pos is not None and unmapped_visible_page_fixture:
+        raise ValueError("start-pos and unmapped-page fixtures are mutually exclusive")
 
     shared_freqs_cos, shared_freqs_sin = build_deepseek_v4_rope_tables(M, 0, dtype=torch.bfloat16)
 
@@ -389,7 +402,10 @@ def build_tensor_specs(start_pos=None):
         return init_normalized_cache((ORI_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM))
 
     def init_block_table():
-        return block_table(batch=B, table_blocks=ORI_TABLE_MAX_BLOCKS, physical_blocks=ORI_MAX_BLOCKS)
+        table = block_table(batch=B, table_blocks=ORI_TABLE_MAX_BLOCKS, physical_blocks=ORI_MAX_BLOCKS)
+        if unmapped_visible_page_fixture:
+            table[:, 0] = -1
+        return table
 
     def init_attn_sink():
         return torch.zeros(H)
@@ -397,6 +413,14 @@ def build_tensor_specs(start_pos=None):
         # Canonical SWA start-position set (sliding-window regimes + 8k long-context).
         return swa_decode_start_set(batch=B, window=WIN)
     def init_start_pos():
+        if unmapped_visible_page_fixture:
+            fixture_start = BLOCK_SIZE + BLOCK_SIZE // 2 - 1
+            return resolve_start_positions(
+                fixture_start,
+                batch=B,
+                seq=S,
+                max_seq_len=MAX_SEQ_LEN,
+            )
         return resolve_start_positions(
             start_pos,
             batch=B,
@@ -447,7 +471,7 @@ def build_tensor_specs(start_pos=None):
         TensorSpec("gamma_ckv", [HEAD_DIM], torch.bfloat16, init_value=init_gamma_ckv),
         TensorSpec("freqs_cos", [MAX_SEQ_LEN, ROPE_HEAD_DIM], torch.bfloat16, init_value=init_freqs_cos),
         TensorSpec("freqs_sin", [MAX_SEQ_LEN, ROPE_HEAD_DIM], torch.bfloat16, init_value=init_freqs_sin),
-        TensorSpec("kv_cache", [ORI_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], torch.bfloat16, init_value=init_kv_cache, is_output=True),
+        TensorSpec("kv_cache", [ORI_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], torch.bfloat16, init_value=init_kv_cache),
         TensorSpec("swa_slot_mapping", [T], torch.int64, init_value=init_swa_slot_mapping),
         TensorSpec("swa_indices", [T, WIN], torch.int32, init_value=init_swa_indices),
         TensorSpec("swa_lens", [T], torch.int32, init_value=init_swa_lens),
@@ -456,13 +480,13 @@ def build_tensor_specs(start_pos=None):
         TensorSpec("wo_a", [O_GROUPS, O_LORA, O_GROUP_IN], torch.bfloat16, init_value=init_wo_a),
         TensorSpec("wo_b", [D, O_GROUPS * O_LORA], torch.int8, init_value=lambda: wo_b_i8),
         TensorSpec("wo_b_scale", [D], torch.float32, init_value=lambda: wo_b_scale),
-        TensorSpec("x_out", [T, HC_MULT, D], torch.float32, is_output=True),
+        TensorSpec("x_out", [T, HC_MULT, D], torch.float32),
     ]
 
 
 if __name__ == "__main__":
     import argparse
-    from golden import ratio_allclose, ratio_reldiff, run_jit
+    from golden import ratio_reldiff, run
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--platform", type=str, default="a2a3",
@@ -471,15 +495,22 @@ if __name__ == "__main__":
     parser.add_argument("--start-pos", type=int, default=None,
                         help="Uniform fixture-only start_pos override for all batches; "
                              "default (unset) uses the canonical per-batch SWA set that includes the 8k point.")
-    parser.add_argument("--enable-l2-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2, 4))
+    unmapped_help = "Use a visible window whose older cache page is unmapped."
+    parser.add_argument(
+        "--unmapped-visible-page-fixture",
+        action="store_true",
+        default=False,
+        help=unmapped_help,
+    )
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2, 4))
     parser.add_argument("--runtime-dir", type=str, default=None)
     parser.add_argument("--golden-data", type=str, default=None)
     parser.add_argument("--dump-passes", action="store_true", default=False)
     args = parser.parse_args()
 
-    result = run_jit(
+    result = run(
         fn=attention_swa_test,
-        specs=build_tensor_specs(args.start_pos),
+        specs=build_tensor_specs(args.start_pos, args.unmapped_visible_page_fixture),
         golden_fn=golden_attention_swa,
         runtime_dir=args.runtime_dir,
         golden_data=args.golden_data,
@@ -487,7 +518,7 @@ if __name__ == "__main__":
         runtime_cfg=dict(
             platform=args.platform,
             device_id=args.device,
-            enable_l2_swimlane=args.enable_l2_swimlane,
+            enable_chip_swimlane=args.enable_chip_swimlane,
         ),
         rtol=1e-2,
         atol=1e-2,
@@ -495,7 +526,15 @@ if __name__ == "__main__":
             # Tightened from CANN's 1e-2 bar: realistic hc_attn gates keep x_out
             # well-conditioned (0% over 3e-3 across seeds; worst rdiff ~0.16).
             "x_out": ratio_reldiff(diff_thd=3e-3, pct_thd=0.008, max_diff_hd=1),
-            "kv_cache": ratio_allclose(atol=1e-4, rtol=1.0 / 128),
+            "kv_cache": mapped_pool_ratio_allclose(
+                "swa_slot_mapping",
+                mapping_shape=(T,),
+                block_size=BLOCK_SIZE,
+                pool_name="KV cache",
+                atol=1e-4,
+                rtol=1.0 / 128,
+                max_error_ratio=0.005,
+            ),
         },
     )
     if not result.passed:

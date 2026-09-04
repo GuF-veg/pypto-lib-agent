@@ -537,16 +537,16 @@ def build_tensor_specs(B, S):
         TensorSpec("rope_sin",  [T, ROPE_DIM],          torch.bfloat16, init_value=init_sin),
         TensorSpec("gamma_cq",  [Q_LORA],               torch.bfloat16, init_value=init_gamma_cq),
         TensorSpec("gamma_ckv", [HEAD_DIM],             torch.bfloat16, init_value=init_gamma_ckv),
-        TensorSpec("q",         [T, H, HEAD_DIM],       torch.bfloat16, is_output=True),
-        TensorSpec("kv",        [T, HEAD_DIM],          torch.bfloat16, is_output=True),
-        TensorSpec("qr",        [T, Q_LORA],            torch.int8,     is_output=True),
-        TensorSpec("qr_scale",  [T, 1],                 torch.float32,  is_output=True),
+        TensorSpec("q",         [T, H, HEAD_DIM],       torch.bfloat16),
+        TensorSpec("kv",        [T, HEAD_DIM],          torch.bfloat16),
+        TensorSpec("qr",        [T, Q_LORA],            torch.int8),
+        TensorSpec("qr_scale",  [T, 1],                 torch.float32),
     ]
 
 
 if __name__ == "__main__":
     import argparse
-    from golden import ratio_allclose, run_jit
+    from golden import ratio_allclose, run
 
     MODES = {
         "decode":  (DECODE_BATCH, DECODE_SEQ),
@@ -559,8 +559,8 @@ if __name__ == "__main__":
     parser.add_argument("-d", "--device", type=int, default=0)
     parser.add_argument("--mode", choices=["decode", "prefill", "all"], default="all",
                         help="Use decode or prefill batch sizes, or 'all' to test both.")
-    parser.add_argument("--enable-l2-swimlane", type=int, choices=[0, 1, 2, 4], default=0,
-                        help="L2 swimlane level: 0=off, 1=per-kernel AICore timing "
+    parser.add_argument("--enable-chip-swimlane", type=int, choices=[0, 1, 2, 4], default=0,
+                        help="chip swimlane level: 0=off, 1=per-kernel AICore timing "
                              "(prints the per-function Task Statistics table), 2=+AICPU timing.")
     parser.add_argument("--runtime-dir", type=str, default=None)
     parser.add_argument("--golden-data", type=str, default=None)
@@ -573,7 +573,7 @@ if __name__ == "__main__":
     for mode_name in modes_to_run:
         B, S = MODES[mode_name]
         print(f"--- qkv_proj_rope {mode_name}: B={B}, S={S} ---")
-        result = run_jit(
+        result = run(
             fn=qkv_proj_rope_test,
             specs=build_tensor_specs(B, S),
             golden_fn=golden_qkv_proj_rope,
@@ -594,7 +594,7 @@ if __name__ == "__main__":
             runtime_cfg=dict(
                 platform=args.platform,
                 device_id=args.device,
-                enable_l2_swimlane=args.enable_l2_swimlane,
+                enable_chip_swimlane=args.enable_chip_swimlane,
             ),
             compile_only=args.compile_only,
         )

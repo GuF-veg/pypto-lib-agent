@@ -50,8 +50,8 @@ jobs:
           pip install -e ./profile_db
           pip install import-linter
 
-      - name: Run golden unit tests
-        run: pytest tests/golden -v
+      - name: Run unit tests
+        run: pytest tests -v
 
       - name: Run profile_db unit tests
         run: pytest profile_db/tests -v
@@ -147,7 +147,7 @@ jobs:
     if: needs.detect-changes.outputs.has_changes == 'true'
     # Simulator job: no device needed, so it runs on the CPU runner — but on the
     # host, through the same setup-ci-job composite as the a2a3 device job (same
-    # user, same conda venv + activate.sh, same ci-cache). needs-device:false is
+    # user, same bundle venv + activate.sh, same ci-cache). needs-device:false is
     # the only difference: no npu-smi check and no Ascend env, which the simulator
     # does not use.
     runs-on: [self-hosted, linux, arm64, cpu]
@@ -161,7 +161,6 @@ jobs:
         working-directory: checkout
     env:
       PTOAS_ROOT: ${{ github.workspace }}/checkout/ptoas-bin
-      PTO_ISA_ROOT: ${{ github.workspace }}/checkout/pto-isa
       CMAKE_BUILD_PARALLEL_LEVEL: 16
       CMAKE_C_COMPILER_LAUNCHER: ccache
       CMAKE_CXX_COMPILER_LAUNCHER: ccache
@@ -198,16 +197,13 @@ jobs:
         shell: bash
         env:
           PYTHONPATH: ${{ github.workspace }}/checkout
-          PTO2_RING_DEP_POOL: 16384
-          PTO2_RING_TASK_WINDOW: 16384
-          PTO2_RING_HEAP: 1073741824
         run: |
           source activate.sh
           set +e
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             FILES="${{ needs.detect-changes.outputs.files }}"
           else
-            FILES=$(find examples -name '*.py' ! -name '*draft*' | sort)
+            FILES=$(find examples -name '*.py' ! -name '*_draft.py' | sort)
           fi
           if [ -z "$FILES" ]; then
             echo "No runnable changed files; nothing to test."
@@ -263,7 +259,6 @@ jobs:
         working-directory: checkout
     env:
       PTOAS_ROOT: ${{ github.workspace }}/checkout/ptoas-bin
-      PTO_ISA_ROOT: ${{ github.workspace }}/checkout/pto-isa
       CMAKE_BUILD_PARALLEL_LEVEL: 16
       CMAKE_C_COMPILER_LAUNCHER: ccache
       CMAKE_CXX_COMPILER_LAUNCHER: ccache
@@ -298,17 +293,13 @@ jobs:
 
       - name: Run a2a3 tests (via task-submit)
         shell: bash
-        env:
-          PTO2_RING_DEP_POOL: 16384
-          PTO2_RING_TASK_WINDOW: 16384
-          PTO2_RING_HEAP: 1073741824
         run: |
           source activate.sh
           set +e
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             FILES="${{ needs.detect-changes.outputs.files }}"
           else
-            FILES=$(find examples -name '*.py' ! -name '*draft*' | sort)
+            FILES=$(find examples -name '*.py' ! -name '*_draft.py' | sort)
           fi
           if [ -z "$FILES" ]; then
             echo "No runnable changed files; nothing to test."
@@ -320,9 +311,9 @@ jobs:
             # Files needing multiple NPUs declare `# ci: devices=N` (N>1) near
             # the top; borrow that many cards with `--device-num N` (defaults to
             # ep2 / 2-card runs). $TASK_DEVICE is the lent set (a single id, or
-            # comma-separated for N>1) and is passed straight to -d; the ring env
-            # above is preserved into the child. Higher world sizes (ep4/ep8) are
-            # exercised as explicit --device-num 4/8 steps in daily_ci.yml.
+            # comma-separated for N>1) and is passed straight to -d. Higher
+            # world sizes (ep4/ep8) are exercised as explicit --device-num 4/8
+            # steps in daily_ci.yml.
             ndev=$(grep -oP '#\s*ci:\s*devices=\K[0-9]+' "$f" | head -1)
             ndev=${ndev:-1}
             devnum_flag=""
@@ -366,7 +357,6 @@ jobs:
     timeout-minutes: 120
     env:
       PTOAS_ROOT: ${{ github.workspace }}/checkout/ptoas-bin
-      PTO_ISA_ROOT: ${{ github.workspace }}/checkout/pto-isa
       CMAKE_BUILD_PARALLEL_LEVEL: 16
       CMAKE_C_COMPILER_LAUNCHER: ccache
       CMAKE_CXX_COMPILER_LAUNCHER: ccache
@@ -416,8 +406,8 @@ jobs:
   serving-deepseek:
     needs: detect-changes
     # PR-only, DeepSeek V4 — the 8-card (--device-num 8) serving run, split out
-    # of `serving` so the 8-card borrow schedules independently of the single-card
-    # qwen3 run. Same setup contract as `serving`; gated by its own model guard.
+    # of `serving-qwen` so the 8-card borrow schedules independently of the
+    # single-card run. Same setup contract; gated by its own model guard.
     if: >-
       github.event_name == 'pull_request' &&
       needs.detect-changes.outputs.run_deepseek_serving_tests == 'true'
@@ -427,7 +417,6 @@ jobs:
     timeout-minutes: 120
     env:
       PTOAS_ROOT: ${{ github.workspace }}/checkout/ptoas-bin
-      PTO_ISA_ROOT: ${{ github.workspace }}/checkout/pto-isa
       CMAKE_BUILD_PARALLEL_LEVEL: 16
       CMAKE_C_COMPILER_LAUNCHER: ccache
       CMAKE_CXX_COMPILER_LAUNCHER: ccache
@@ -463,9 +452,9 @@ jobs:
           pypto-lib-checkout-path: checkout
           pypto-serving-checkout-path: serving-checkout
           model-name: deepseek-v4
-          pto2-ring-dep-pool: "131072"
-          pto2-ring-task-window: "131072"
-          pto2-ring-heap: "2147483648"
+          # Only the fused K=1 case runs on device: the k3-s4-b4 case starts a
+          # second 8-card server for the same gate.
+          deepseek-mtp-cases: k1
 
       - name: Kill orphaned task-submit tasks
         if: always()

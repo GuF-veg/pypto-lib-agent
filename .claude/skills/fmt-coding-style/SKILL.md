@@ -60,12 +60,12 @@ the long line — when a statement cannot be split into ops (a single
 120 columns instead of trailing one keyword onto a continuation line.
 
 ```python
-# before — 96 + 15 columns split across two lines
+# before — 92 + 23 columns split across two lines
 next_hidden_spec = TensorSpec("next_pre_hc_hidden", [N_RANKS, T, HC_MULT, D], torch.float32,
-                              is_output=True)
+                              init_value=torch.zeros)
 
-# after — 112 columns, one line
-next_hidden_spec = TensorSpec("next_pre_hc_hidden", [N_RANKS, T, HC_MULT, D], torch.float32, is_output=True)
+# after — 116 columns, one line
+next_hidden_spec = TensorSpec("next_pre_hc_hidden", [N_RANKS, T, HC_MULT, D], torch.float32, init_value=torch.zeros)
 ```
 
 Past ~120, go back to Rule 1: split the op, or group the arguments as below.
@@ -147,7 +147,7 @@ return mtp_projection(
 ```python
 # before
 parser.add_argument(
-    "--enable-l2-swimlane",
+    "--enable-chip-swimlane",
     type=int,
     nargs="?",
     const=1,
@@ -156,14 +156,14 @@ parser.add_argument(
 )
 
 # after
-parser.add_argument("--enable-l2-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2, 4))
+parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2, 4))
 ```
 
 Structures that stay one-item-per-line:
 
 - the **kernel signature** — one annotated parameter per line, already the
   convention;
-- the **harness call**, `run_jit(...)` / `run(...)` — leave it exactly as it is.
+- the **harness call**, `run(...)` — leave it exactly as it is.
   One option per line is what makes it easy to toggle `compile_cfg` /
   `runtime_cfg` / `rtol` / `compare_fn` entries while testing;
 - list literals whose elements are themselves full-width expressions, such as

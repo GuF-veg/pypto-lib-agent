@@ -394,10 +394,10 @@ def build_tensor_specs(layer_id=0, num_tokens=T):
         ScalarSpec("num_tokens", torch.int32, num_tokens),
         TensorSpec("tid2eid", [VOCAB, TOPK], torch.int32, init_value=init_tid2eid),
         TensorSpec("input_ids", [T], torch.int64, init_value=init_input_ids),
-        TensorSpec("x_norm_i8", [T, D], torch.int8, is_output=True),
-        TensorSpec("x_norm_scale", [T, 1], torch.float32, is_output=True),
-        TensorSpec("indices", [T, TOPK], torch.int32, is_output=True),
-        TensorSpec("weights", [T, TOPK], torch.float32, is_output=True),
+        TensorSpec("x_norm_i8", [T, D], torch.int8),
+        TensorSpec("x_norm_scale", [T, 1], torch.float32),
+        TensorSpec("indices", [T, TOPK], torch.int32),
+        TensorSpec("weights", [T, TOPK], torch.float32),
     ]
 
 
@@ -409,7 +409,7 @@ def gate_active_rows(num_tokens):
 
 if __name__ == "__main__":
     import argparse
-    from golden import ratio_allclose, run_jit, topk_pair_compare
+    from golden import ratio_allclose, run, topk_pair_compare
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--platform", type=str, default="a2a3",
@@ -417,11 +417,11 @@ if __name__ == "__main__":
     parser.add_argument("-d", "--device", type=int, default=0)
     parser.add_argument("--layer-id", type=int, default=10)
     parser.add_argument("--num-tokens", type=int, default=T)
-    parser.add_argument("--enable-l2-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2))
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2))
     parser.add_argument("--dump-passes", action="store_true", default=False)
     args = parser.parse_args()
 
-    result = run_jit(
+    result = run(
         fn=gate_test,
         specs=build_tensor_specs(layer_id=args.layer_id, num_tokens=args.num_tokens),
         golden_fn=golden_gate_core,
@@ -429,7 +429,7 @@ if __name__ == "__main__":
         runtime_cfg=dict(
             platform=args.platform,
             device_id=args.device,
-            enable_l2_swimlane=args.enable_l2_swimlane,
+            enable_chip_swimlane=args.enable_chip_swimlane,
         ),
         rtol=1e-3,
         atol=1e-3,

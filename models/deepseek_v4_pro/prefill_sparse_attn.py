@@ -17,7 +17,7 @@ import pypto.language as pl
 
 from config import (
     BLOCK_SIZE,
-    PRO_KERNEL as M,
+    ACTIVE as M,
     FP32_NEG_INF,
     INT8_AMAX_EPS,
     INT8_SCALE_MAX,
@@ -28,6 +28,11 @@ from config import (
     PREFILL_ORI_MAX_BLOCKS,
     PREFILL_SEQ,
 )
+
+# Dynamic physical cache-view dimensions used by sparse attention.
+ORI_BLOCK_NUM_DYN = pl.dynamic("PREFILL_ORI_BLOCK_NUM_DYN")
+SPARSE_CMP_BLOCK_NUM_DYN = pl.dynamic("PREFILL_SPARSE_CMP_BLOCK_NUM_DYN")
+
 
 # Prefill target shape. T is fixed at 128.
 B = PREFILL_BATCH
@@ -68,9 +73,11 @@ GATHER_TOKEN_TILE = 4
 BIAS_TOKEN_TILE = 16
 QUANT_TOKEN_TILE = 8
 ROPE_OUT_TOK_TILE = T // 2
+ROPE_CS_T_TILE = 8
 ROPE_TILE = 16
 ROPE_INTERLEAVE_TILE = 2 * ROPE_TILE
 A_K_TILE = 256                       # proj_a cube K-frag: K*2B = 512B = one a2a3 L2 line (128 wastes half)
+A_CUBE_ACC_K = 16                    # BF16 Cube MAD inner group before the FP32 accumulator is rounded
 A_N_TILE = 128
 A_T_TILE = 32                        # token tile for the proj_a/proj_b vec post-process
 B_K_TILE = 256
@@ -95,6 +102,7 @@ PB_ACT_NREG = D // PROJ_B_ACT_N_TILE
 PB_ACT_TBLKS = T // PROJ_B_ACT_TBLK
 assert T % QUANT_TOKEN_TILE == 0
 assert O_GROUP_IN % A_K_TILE == 0    # proj_a_mm peels 0:A_K_TILE then covers O_GROUP_IN // A_K_TILE chunks
+assert A_K_TILE % A_CUBE_ACC_K == 0
 assert O_LORA % B_K_TILE == 0        # proj_b_mm peels 0:B_K_TILE then covers O_LORA // B_K_TILE chunks
 assert D % PROJ_B_MM_N_TILE == 0 and D % PROJ_B_D_CHUNK == 0 and PROJ_B_D_CHUNK % PROJ_B_MM_N_TILE == 0
 assert T % NUM_QUANT_T_CHUNKS == 0 and QUANT_T_CHUNK % QUANT_TOKEN_TILE == 0
@@ -111,9 +119,9 @@ SPARSE_CMP_BIAS_COLS = max(0, SPARSE_BIAS_COLS - WIN)
 @pl.jit.inline
 def prefill_sparse_attn(
     q: pl.Tensor[[T, H, HEAD_DIM], pl.BF16],
-    ori_kv: pl.Tensor[[ORI_MAX_BLOCKS, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
+    ori_kv: pl.Tensor[[ORI_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
     swa_indices: pl.Tensor[[T, WIN], pl.INT32],
-    cmp_kv: pl.Tensor[[CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
+    cmp_kv: pl.Tensor[[SPARSE_CMP_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
     cmp_block_table: pl.Tensor[[CMP_MAX_BLOCKS], pl.INT32],
     cmp_indices: pl.Tensor[[T, IDX_TOPK], pl.INT32],
     attn_sink: pl.Tensor[[H], pl.FP32],
@@ -126,45 +134,45 @@ def prefill_sparse_attn(
     attn_out: pl.Out[pl.Tensor[[T, D], pl.BF16]],
 ):
     """Gather cache-first SWA/compressed rows, then run sparse attention and o-proj."""
-    # RoPE tables, built up front. out[j] = x[j]*cos_il[j] + x[j^1]*sin_signed[j]; precompute
-    # the head-invariant cos_il / sign-folded sin once, then rotate each head's rope segment
-    # in the `rope` stage below (no rope_buf round-trip).
-    #
-    # This only reads freqs_cos/freqs_sin, so it may sit anywhere before `rope` -- but it must
-    # NOT sit next to `rope`, in the merge_norm..rope window where it used to live. Dispatched
-    # from there its two tasks go resident alongside merge_norm, and that pairing trips an
-    # on-device "the address for VEC to access UB is out of bounds" fault (AICore errcode 341)
-    # which stalls the schedule at completed=3/312 with merge_norm + rope_cs both running.
-    # Neither task is individually out of bounds -- every tile fits a5's 245760 B vector
-    # budget (merge_norm 98816, rope_cs 98304) and the fault flips on pure timing (raising
-    # log_level alone makes it pass), so the defect is below pypto-lib. Measured from the old
-    # position: 16 faults / 18 runs. From here: 0 / 13. Hoisting overlaps the tables with
-    # gather_kv instead, which is also strictly better for latency.
+    # RoPE cosine and signed-sine tables are materialized in bounded row tiles.
     rope_cos_il = pl.create_tensor([T, ROPE_DIM], dtype=pl.FP32)
     rope_sin_signed = pl.create_tensor([T, ROPE_DIM], dtype=pl.FP32)
-    for cp in pl.spmd(ROPE_HALF // ROPE_TILE, name_hint="rope_cs"):
+    with pl.spmd(ROPE_HALF // ROPE_TILE, name_hint="rope_cs") as rope_cs_tid:
+        cp = pl.tile.get_block_idx()
         cp_r0 = cp * ROPE_TILE
         cp_c0 = 2 * cp_r0
-        cs_col = pl.col_expand_mul(
-            pl.full([T, ROPE_INTERLEAVE_TILE], dtype=pl.FP32, value=1.0),
-            pl.cast(pl.arange(0, [1, ROPE_INTERLEAVE_TILE], dtype=pl.INT32), target_type=pl.FP32))
-        cs_dup_f = pl.cast(pl.cast(pl.mul(cs_col, 0.5), target_type=pl.INT32, mode="trunc"), target_type=pl.FP32)
-        cs_dup_idx = pl.cast(cs_dup_f, target_type=pl.INT32)                                      # j>>1
-        cs_lane = pl.sub(cs_col, pl.mul(cs_dup_f, 2.0))                                           # j%2
-        cs_sign = pl.neg(pl.sub(pl.mul(cs_lane, 2.0), 1.0))                                       # [+1,-1,...]
-        cs_cos = pl.cast(freqs_cos[0:T, cp_r0 : cp_r0 + ROPE_TILE], target_type=pl.FP32)
-        cs_sin = pl.cast(freqs_sin[0:T, cp_r0 : cp_r0 + ROPE_TILE], target_type=pl.FP32)
-        rope_cos_il[0:T, cp_c0 : cp_c0 + ROPE_INTERLEAVE_TILE] = pl.gather(cs_cos, dim=-1, index=cs_dup_idx)
-        rope_sin_signed[0:T, cp_c0 : cp_c0 + ROPE_INTERLEAVE_TILE] = pl.mul(
-            pl.gather(cs_sin, dim=-1, index=cs_dup_idx), cs_sign)
+        for cs_t0 in pl.range(0, T, ROPE_CS_T_TILE):
+            cs_cos_bf16 = freqs_cos[cs_t0 : cs_t0 + ROPE_CS_T_TILE, cp_r0 : cp_r0 + ROPE_TILE]
+            cs_sin_bf16 = freqs_sin[cs_t0 : cs_t0 + ROPE_CS_T_TILE, cp_r0 : cp_r0 + ROPE_TILE]
+            cs_cos = pl.cast(cs_cos_bf16, target_type=pl.FP32)
+            cs_sin = pl.cast(cs_sin_bf16, target_type=pl.FP32)
+            cs_sin_neg = pl.neg(cs_sin)
+            cs_cos_dup = pl.full([ROPE_CS_T_TILE, ROPE_INTERLEAVE_TILE], dtype=pl.FP32, value=0.0)
+            cs_cos_dup = pl.tensor.scatter(cs_cos, mask_pattern=pl.tile.MaskPattern.P0101, dst=cs_cos_dup)
+            cs_cos_dup = pl.tensor.scatter(cs_cos, mask_pattern=pl.tile.MaskPattern.P1010, dst=cs_cos_dup)
+            cs_sin_signed = pl.full([ROPE_CS_T_TILE, ROPE_INTERLEAVE_TILE], dtype=pl.FP32, value=0.0)
+            cs_sin_signed = pl.tensor.scatter(cs_sin, mask_pattern=pl.tile.MaskPattern.P0101, dst=cs_sin_signed)
+            cs_sin_signed = pl.tensor.scatter(cs_sin_neg, mask_pattern=pl.tile.MaskPattern.P1010, dst=cs_sin_signed)
+            rope_cos_il[cs_t0 : cs_t0 + ROPE_CS_T_TILE, cp_c0 : cp_c0 + ROPE_INTERLEAVE_TILE] = cs_cos_dup
+            rope_sin_signed[cs_t0 : cs_t0 + ROPE_CS_T_TILE, cp_c0 : cp_c0 + ROPE_INTERLEAVE_TILE] = cs_sin_signed
 
     # Gather KV per token: each (token, block) of PREFILL_ATTN_TILE slots is staged into one
     # UB tile (scattered 1-row loads on MTE2, invalid slots stay zero) then flushed with a
     # single wide MTE3 store. Invalid slots are carried by -1 padding.
-    ori_kv_flat = pl.reshape(ori_kv, [ORI_MAX_BLOCKS * BLOCK_SIZE, HEAD_DIM])
-    cmp_kv_flat = pl.reshape(cmp_kv, [CMP_BLOCK_NUM * BLOCK_SIZE, HEAD_DIM])
+    ori_block_num = pl.tensor.dim(ori_kv, 0)
+    ori_cache_rows = ori_block_num * BLOCK_SIZE
+    ori_kv_flat = pl.reshape(ori_kv, [ori_cache_rows, HEAD_DIM])
+    cmp_block_num = pl.tensor.dim(cmp_kv, 0)
+    cmp_cache_rows = cmp_block_num * BLOCK_SIZE
+    cmp_kv_flat = pl.reshape(cmp_kv, [cmp_cache_rows, HEAD_DIM])
     sparse_kv = pl.create_tensor([T * PREFILL_SPARSE_PAD, HEAD_DIM], dtype=pl.BF16)
-    for gather_block in pl.spmd(((T + GATHER_TOKEN_TILE - 1) // GATHER_TOKEN_TILE) * PREFILL_ATTN_BLOCKS, name_hint="gather_kv"):
+    # Serialize sparse preparation behind the RoPE-table producer.
+    with pl.spmd(
+        ((T + GATHER_TOKEN_TILE - 1) // GATHER_TOKEN_TILE) * PREFILL_ATTN_BLOCKS,
+        name_hint="gather_kv",
+        deps=[rope_cs_tid],
+    ) as _gather_tid:
+        gather_block = pl.tile.get_block_idx()
         gather_token_block = gather_block // PREFILL_ATTN_BLOCKS
         gather_sb = gather_block - gather_token_block * PREFILL_ATTN_BLOCKS
         gather_t0 = gather_token_block * GATHER_TOKEN_TILE
@@ -199,7 +207,8 @@ def prefill_sparse_attn(
     # masks invalid slots without rescanning validity per head. A slot is valid when its raw
     # index is >= 0; the [TOPK, PREFILL_SPARSE_PAD) tail is always masked.
     sparse_bias = pl.create_tensor([T, PREFILL_SPARSE_PAD], dtype=pl.FP32)
-    for bias_blk in pl.spmd(T // BIAS_TOKEN_TILE, name_hint="build_bias"):
+    with pl.spmd(T // BIAS_TOKEN_TILE, name_hint="build_bias", deps=[rope_cs_tid]) as _bias_tid:
+        bias_blk = pl.tile.get_block_idx()
         bias_t0 = bias_blk * BIAS_TOKEN_TILE
         bias_win_idx = pl.cast(swa_indices[bias_t0:bias_t0 + BIAS_TOKEN_TILE, 0:WIN], target_type=pl.FP32)
         bias_win_raw_flag = pl.minimum(pl.maximum(pl.add(bias_win_idx, 1.0), 0.0), 1.0)
@@ -312,13 +321,6 @@ def prefill_sparse_attn(
         rp_hg = rp_idx // (T // ROPE_OUT_TOK_TILE)
         rp_tt = rp_idx - rp_hg * (T // ROPE_OUT_TOK_TILE)
         rp_t0 = rp_tt * ROPE_OUT_TOK_TILE
-        # Head-invariant swap index (j^1), built once and reused across the head group.
-        sp_col = pl.col_expand_mul(
-            pl.full([ROPE_OUT_TOK_TILE, ROPE_INTERLEAVE_TILE], dtype=pl.FP32, value=1.0),
-            pl.cast(pl.arange(0, [1, ROPE_INTERLEAVE_TILE], dtype=pl.INT32), target_type=pl.FP32))
-        sp_dup_f = pl.cast(pl.cast(pl.mul(sp_col, 0.5), target_type=pl.INT32, mode="trunc"), target_type=pl.FP32)
-        sp_lane = pl.sub(sp_col, pl.mul(sp_dup_f, 2.0))                                           # j%2
-        sp_swap_idx = pl.cast(pl.sub(pl.add(sp_col, 1.0), pl.mul(sp_lane, 2.0)), target_type=pl.INT32)  # j^1
         for rp_hl in pl.range(0, 4):
             rp_gh = rp_hg * 4 + rp_hl
             rp_g = rp_gh // HEADS_PER_GROUP
@@ -332,7 +334,11 @@ def prefill_sparse_attn(
                     [ROPE_OUT_TOK_TILE, ROPE_INTERLEAVE_TILE])
                 r_cos_il = rope_cos_il[rp_t0 : rp_t0 + ROPE_OUT_TOK_TILE, c0 : c0 + ROPE_INTERLEAVE_TILE]
                 r_sin_signed = rope_sin_signed[rp_t0 : rp_t0 + ROPE_OUT_TOK_TILE, c0 : c0 + ROPE_INTERLEAVE_TILE]
-                r_swapped = pl.gather(r_tile_fp32, dim=-1, index=sp_swap_idx)
+                r_even = pl.gather(r_tile_fp32, mask_pattern=pl.tile.MaskPattern.P0101)
+                r_odd = pl.gather(r_tile_fp32, mask_pattern=pl.tile.MaskPattern.P1010)
+                r_swap_zero = pl.full([ROPE_OUT_TOK_TILE, ROPE_INTERLEAVE_TILE], dtype=pl.FP32, value=0.0)
+                r_swapped = pl.tensor.scatter(r_odd, mask_pattern=pl.tile.MaskPattern.P0101, dst=r_swap_zero)
+                r_swapped = pl.tensor.scatter(r_even, mask_pattern=pl.tile.MaskPattern.P1010, dst=r_swapped)
                 r_rot = pl.add(pl.mul(r_tile_fp32, r_cos_il), pl.mul(r_swapped, r_sin_signed))
                 r_rot = pl.cast(r_rot, target_type=pl.BF16, mode="rint")
                 o_packed[rp_o0 : rp_o0 + ROPE_OUT_TOK_TILE, rp_col + c0 : rp_col + c0 + ROPE_INTERLEAVE_TILE] = r_rot
@@ -424,7 +430,7 @@ def prefill_sparse_attn(
     # per-channel weight scale -> BF16. Explicit deps on all proj_b_mm tasks bridge
     # manual_scope -> the return's auto-dep.
     with pl.spmd(PB_ACT_NREG * PB_ACT_TBLKS, name_hint="proj_b_act",
-                 deps=[proj_b_tids[i] for i in range(PB_DCHUNKS * O_GROUPS)]) as act_tid:
+                 deps=[proj_b_tids[i] for i in range(PB_DCHUNKS * O_GROUPS)]) as _act_tid:
         act_idx = pl.tile.get_block_idx()
         nreg = act_idx // PB_ACT_TBLKS
         tblk = act_idx - nreg * PB_ACT_TBLKS
@@ -445,9 +451,9 @@ def prefill_sparse_attn(
 @pl.jit
 def prefill_sparse_attn_test(
     q: pl.Tensor[[T, H, HEAD_DIM], pl.BF16],
-    ori_kv: pl.Tensor[[ORI_MAX_BLOCKS, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
+    ori_kv: pl.Tensor[[ORI_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
     swa_indices: pl.Tensor[[T, WIN], pl.INT32],
-    cmp_kv: pl.Tensor[[CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
+    cmp_kv: pl.Tensor[[SPARSE_CMP_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
     cmp_block_table: pl.Tensor[[CMP_MAX_BLOCKS], pl.INT32],
     cmp_indices: pl.Tensor[[T, IDX_TOPK], pl.INT32],
     attn_sink: pl.Tensor[[H], pl.FP32],
@@ -498,6 +504,55 @@ def _int8_quant_per_row(x):
     scale_dequant = 1.0 / scale_quant
     return out_i8.reshape_as(x), scale_dequant.reshape(*x.shape[:-1], 1)
 
+
+def _golden_a5_cube_bf16_matmul(lhs, rhs):
+    """Return ``lhs @ rhs.T`` in the A5 BF16 Cube MAD reduction order."""
+    import torch
+
+    m_dim, k_dim = lhs.shape
+    n_dim, rhs_k_dim = rhs.shape
+    assert k_dim == rhs_k_dim and k_dim % A_CUBE_ACC_K == 0
+
+    k_groups = k_dim // A_CUBE_ACC_K
+    k_group_block = 64
+    n_block = 128
+    x_groups = lhs.reshape(m_dim, k_groups, A_CUBE_ACC_K).double()
+    w_groups = rhs.reshape(n_dim, k_groups, A_CUBE_ACC_K).double()
+    out = torch.zeros(m_dim, n_dim, dtype=torch.float32)
+    for n0 in range(0, n_dim, n_block):
+        n1 = min(n0 + n_block, n_dim)
+        acc = torch.zeros(m_dim, n1 - n0, dtype=torch.float32)
+        for group0 in range(0, k_groups, k_group_block):
+            group1 = min(group0 + k_group_block, k_groups)
+            # FP64 prevents Torch from rounding or reassociating within the exact
+            # 16-product BF16 group; it does not model FP64 device arithmetic.
+            group_dots = torch.einsum(
+                "mgk,ngk->mng",
+                x_groups[:, group0:group1],
+                w_groups[n0:n1, group0:group1],
+            )
+            for group in range(group1 - group0):
+                # A5 rounds the updated accumulator once after each K16 group.
+                acc = (acc.double() + group_dots[:, :, group]).float()
+        out[:, n0:n1] = acc
+    return out
+
+
+def _golden_a5_cube_proj_a(o_model, wo_a):
+    """Apply the A5 BF16 Cube reference independently to each proj_a group."""
+    import torch
+
+    t_dim, model_groups, group_in = o_model.shape
+    weight_groups, o_lora, weight_group_in = wo_a.shape
+    assert model_groups == weight_groups and group_in == weight_group_in
+
+    out = torch.zeros(t_dim, model_groups, o_lora, dtype=torch.float32)
+    for model_group in range(model_groups):
+        out[:, model_group] = _golden_a5_cube_bf16_matmul(
+            o_model[:, model_group], wo_a[model_group]
+        )
+    return out
+
 def golden_prefill_sparse_attn(tensors):
     """Self-contained torch reference for the cache-first sparse-attn entry."""
     import torch
@@ -542,7 +597,7 @@ def golden_prefill_sparse_attn(tensors):
         oi = None
         for tile_start in range(0, kv_rows.shape[0], PREFILL_ATTN_TILE):
             kv_tile = kv_rows[tile_start : tile_start + PREFILL_ATTN_TILE]
-            scores = (q[t] @ kv_tile.T) * SOFTMAX_SCALE
+            scores = _golden_a5_cube_bf16_matmul(q[t], kv_tile) * SOFTMAX_SCALE
             cur_mi = scores.max(dim=-1, keepdim=True).values
             exp_scores = torch.exp(scores - cur_mi)
             cur_li = exp_scores.sum(dim=-1, keepdim=True)
@@ -575,7 +630,8 @@ def golden_prefill_sparse_attn(tensors):
     o = torch.cat([o[..., :NOPE_DIM], o_rope], dim=-1).to(torch.bfloat16)
 
     o_model = o.float().view(T, O_GROUPS, O_GROUP_IN)
-    o_r = torch.einsum("tgd,grd->tgr", o_model, wo_a)   # [T, G, O_LORA]
+    o_r = torch.zeros(T, O_GROUPS, O_LORA, dtype=torch.float32)
+    o_r[:num_tokens] = _golden_a5_cube_proj_a(o_model[:num_tokens], wo_a)
     # PER-GROUP INT8 activation quant (one amax per O_LORA group, not per full row) --
     # mirrors the decoupled proj_a[g]->quant[g]->proj_b[g] kernel pipeline. Each group's
     # INT32 partial is dequantized by its OWN per-row act scale (the per-group scale cannot
@@ -668,12 +724,12 @@ def build_tensor_specs(compress_ratio: int = DEFAULT_COMPRESS_RATIO):
         TensorSpec("wo_a", [O_GROUPS, O_LORA, O_GROUP_IN], torch.bfloat16, init_value=init_wo_a),
         TensorSpec("wo_b", [D, O_GROUPS * O_LORA], torch.int8, init_value=lambda: wo_b_i8),
         TensorSpec("wo_b_scale", [D], torch.float32, init_value=lambda: wo_b_scale),
-        TensorSpec("attn_out", [T, D], torch.bfloat16, is_output=True),
+        TensorSpec("attn_out", [T, D], torch.bfloat16),
     ]
 
 if __name__ == "__main__":
     import argparse
-    from golden import ratio_allclose, run_jit
+    from golden import ratio_allclose, run
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--platform", type=str, default="a2a3", choices=["a2a3", "a2a3sim", "a5", "a5sim"])
@@ -681,12 +737,12 @@ if __name__ == "__main__":
     parser.add_argument("--compile-only", action="store_true", default=False)
     parser.add_argument("--compress-ratio", type=int, default=DEFAULT_COMPRESS_RATIO,
                         choices=list(SUPPORTED_COMPRESS_RATIOS))
-    parser.add_argument("--enable-l2-swimlane", nargs="?", const=4, default=0, type=int)
+    parser.add_argument("--enable-chip-swimlane", nargs="?", const=4, default=0, type=int)
     parser.add_argument("--enable-pmu", nargs="?", const=2, default=0, type=int, choices=[0, 1, 2, 4])
     parser.add_argument("--dump-passes", action="store_true", default=False)
     args = parser.parse_args()
 
-    result = run_jit(
+    result = run(
         fn=prefill_sparse_attn_test,
         specs=build_tensor_specs(args.compress_ratio),
         golden_fn=golden_prefill_sparse_attn,
@@ -694,7 +750,7 @@ if __name__ == "__main__":
         runtime_cfg=dict(
             platform=args.platform,
             device_id=args.device,
-            enable_l2_swimlane=args.enable_l2_swimlane,
+            enable_chip_swimlane=args.enable_chip_swimlane,
             enable_pmu=args.enable_pmu,
         ),
         rtol=1e-3,

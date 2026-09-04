@@ -42,10 +42,12 @@ def _configure_golden_threads() -> int:
 _GOLDEN_NUM_THREADS = _configure_golden_threads()
 
 
-from .runner import RunResult, run, run_jit
+from .runner import RunResult, run
 from .spec import ScalarSpec, TensorSpec
 from .validation import (
     error_distribution,
+    mapped_pool_ratio_allclose,
+    mapped_pool_ratio_reldiff,
     ratio_allclose,
     ratio_reldiff,
     topk_pair_compare,
@@ -57,10 +59,11 @@ __all__ = [
     "ScalarSpec",
     "validate_golden",
     "ratio_allclose",
+    "mapped_pool_ratio_allclose",
+    "mapped_pool_ratio_reldiff",
     "ratio_reldiff",
     "error_distribution",
     "topk_pair_compare",
     "RunResult",
     "run",
-    "run_jit",
 ]

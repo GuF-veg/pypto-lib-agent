@@ -633,13 +633,13 @@ def build_tensor_specs(
         TensorSpec("wo_a", [O_GROUPS, O_LORA, O_GROUP_IN], torch.bfloat16, init_value=init_wo_a),
         TensorSpec("wo_b", [D, O_GROUPS * O_LORA], torch.int8, init_value=init_wo_b),
         TensorSpec("wo_b_scale", [D], torch.float32, init_value=init_wo_b_scale),
-        TensorSpec("attn_out", [T, D], torch.bfloat16, is_output=True),
+        TensorSpec("attn_out", [T, D], torch.bfloat16),
     ]
 
 
 if __name__ == "__main__":
     import argparse
-    from golden import ratio_allclose, run_jit
+    from golden import ratio_allclose, run
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--platform", type=str, default="a2a3", choices=["a2a3", "a2a3sim", "a5", "a5sim"])
@@ -649,7 +649,7 @@ if __name__ == "__main__":
     parser.add_argument("--short-window-fixture", action="store_true", default=False,
                         help="Use a short-window topk row with valid prefix + -1 padding.")
     parser.add_argument("--golden-data", type=str, default=None)
-    parser.add_argument("--enable-l2-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2, 4))
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2, 4))
     parser.add_argument("--enable-dep-gen", action="store_true", default=False,
                         help="Capture PTO2 dependency edges (deps.json); the swimlane "
                              "converter draws fanout/fanin arrows from the sibling file.")
@@ -659,7 +659,7 @@ if __name__ == "__main__":
 
     print(f"TOPK={TOPK} SPARSE_BLOCKS={SPARSE_BLOCKS} PADDED_TOPK={PADDED_TOPK}", flush=True)
 
-    result = run_jit(
+    result = run(
         fn=sparse_attn_test,
         specs=build_tensor_specs(
             args.causal_regression_fixture,
@@ -671,7 +671,7 @@ if __name__ == "__main__":
         runtime_cfg=dict(
             platform=args.platform,
             device_id=args.device,
-            enable_l2_swimlane=args.enable_l2_swimlane,
+            enable_chip_swimlane=args.enable_chip_swimlane,
             enable_dep_gen=args.enable_dep_gen,
             enable_pmu=args.enable_pmu,
         ),

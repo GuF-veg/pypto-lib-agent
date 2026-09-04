@@ -50,7 +50,10 @@ def hc_head(
     y: pl.Tensor[[T_DYN, D], pl.BF16],
 ):
     t_dim = pl.tensor.dim(x_hc, 0)
-    t_linear = pl.max(t_dim, LINEAR_T_TILE)
+    # Rounding the row count up to LINEAR_T_TILE would read whole tiles past the end
+    # of x_flat: a harmless GM overread on A2/A3, but a fatal one under CPU_SIM.
+    linear_full_rows = (t_dim // LINEAR_T_TILE) * LINEAR_T_TILE
+    t_linear = ((t_dim + LINEAR_T_TILE - 1) // LINEAR_T_TILE) * LINEAR_T_TILE
     x_flat = pl.reshape(x_hc, [t_dim, HC_DIM])
     y_flat = pl.reshape(y, [t_dim, D])
     # rms: split-K sum-of-squares, fanned over (token-tile x K-slice)
@@ -68,21 +71,74 @@ def hc_head(
         sq_part = pl.assemble(sq_part, sq_sum, [ok, t0])
 
     # linear: split-K head projection, fanned over (row-block x K-slice); each task
-    # atomic-adds its [LINEAR_T_TILE, HC_PAD] FP32 partial into the AICPU-zeroed mixes_raw
-    mixes_raw = pl.create_tensor([t_linear, HC_PAD], dtype=pl.FP32, init_value=0)
-    for task in pl.spmd((t_linear // LINEAR_T_TILE) * LINEAR_OK, name_hint="hc_head_linear"):
-        t0 = (task // LINEAR_OK) * LINEAR_T_TILE
-        k_base = (task % LINEAR_OK) * (HC_DIM // LINEAR_OK)
-        acc = pl.create_tensor([LINEAR_T_TILE, HC_PAD], dtype=pl.FP32)
-        for kb in pl.pipeline(0, HC_DIM // LINEAR_OK // LINEAR_K_TILE, stage=2):
-            k0 = k_base + kb * LINEAR_K_TILE
-            x_lin = x_flat[t0 : t0 + LINEAR_T_TILE, k0 : k0 + LINEAR_K_TILE]
-            w = pl.slice(hc_head_fn, [HC_PAD, LINEAR_K_TILE], [0, k0], valid_shape=[HC_MULT, LINEAR_K_TILE])
-            if kb == 0:
-                acc = pl.matmul(x_lin, w, b_trans=True, out_dtype=pl.FP32)
-            else:
-                acc = pl.matmul_acc(acc, x_lin, w, b_trans=True)
-        mixes_raw = pl.assemble(mixes_raw, acc, [t0, 0], atomic=pl.AtomicType.Add)
+    # atomic-adds its [LINEAR_T_TILE, HC_PAD] FP32 partial into the kernel-zeroed mixes_raw
+    mixes_raw = pl.create_tensor([t_linear, HC_PAD], dtype=pl.FP32)
+    with pl.spmd(t_linear // LINEAR_T_TILE, name_hint="hc_head_linear_seed") as linear_seed_tid:
+        seed_block = pl.tile.get_block_idx()
+        seed_t0 = seed_block * LINEAR_T_TILE
+        zeros = pl.full([LINEAR_T_TILE, HC_PAD], dtype=pl.FP32, value=0.0)
+        mixes_raw[seed_t0 : seed_t0 + LINEAR_T_TILE, 0:HC_PAD] = zeros
+    if linear_full_rows > 0:
+        with pl.spmd(
+            (linear_full_rows // LINEAR_T_TILE) * LINEAR_OK,
+            name_hint="hc_head_linear",
+            deps=[linear_seed_tid],
+        ) as _linear_tid:
+            task = pl.tile.get_block_idx()
+            t0 = (task // LINEAR_OK) * LINEAR_T_TILE
+            k_base = (task % LINEAR_OK) * (HC_DIM // LINEAR_OK)
+            acc_full = pl.create_tensor([LINEAR_T_TILE, HC_PAD], dtype=pl.FP32)
+            for kb in pl.pipeline(0, HC_DIM // LINEAR_OK // LINEAR_K_TILE, stage=2):
+                k0 = k_base + kb * LINEAR_K_TILE
+                x_lin_full = x_flat[t0 : t0 + LINEAR_T_TILE, k0 : k0 + LINEAR_K_TILE]
+                w_full = pl.slice(
+                    hc_head_fn,
+                    [HC_PAD, LINEAR_K_TILE],
+                    [0, k0],
+                    valid_shape=[HC_MULT, LINEAR_K_TILE],
+                )
+                if kb == 0:
+                    acc_full = pl.matmul(x_lin_full, w_full, b_trans=True, out_dtype=pl.FP32)
+                else:
+                    acc_full = pl.matmul_acc(acc_full, x_lin_full, w_full, b_trans=True)
+            mixes_raw = pl.assemble(mixes_raw, acc_full, [t0, 0], atomic=pl.AtomicType.Add)
+
+    # At most one incomplete row block exists. Keep it in a separate conditional
+    # task so every aligned block above retains the original static-M Cube path.
+    if linear_full_rows < t_dim:
+        with pl.spmd(
+            LINEAR_OK,
+            name_hint="hc_head_linear_tail",
+            deps=[linear_seed_tid],
+        ) as _linear_tail_tid:
+            tail_task = pl.tile.get_block_idx()
+            k_base = tail_task * (HC_DIM // LINEAR_OK)
+            tail_rows = t_dim - linear_full_rows
+            acc_tail = pl.create_tensor([LINEAR_T_TILE, HC_PAD], dtype=pl.FP32)
+            for kb in pl.pipeline(0, HC_DIM // LINEAR_OK // LINEAR_K_TILE, stage=2):
+                k0 = k_base + kb * LINEAR_K_TILE
+                x_lin_tail = pl.slice(
+                    x_flat,
+                    [LINEAR_T_TILE, LINEAR_K_TILE],
+                    [linear_full_rows, k0],
+                    valid_shape=[tail_rows, LINEAR_K_TILE],
+                )
+                w_tail = pl.slice(
+                    hc_head_fn,
+                    [HC_PAD, LINEAR_K_TILE],
+                    [0, k0],
+                    valid_shape=[HC_MULT, LINEAR_K_TILE],
+                )
+                if kb == 0:
+                    acc_tail = pl.matmul(x_lin_tail, w_tail, b_trans=True, out_dtype=pl.FP32)
+                else:
+                    acc_tail = pl.matmul_acc(acc_tail, x_lin_tail, w_tail, b_trans=True)
+            mixes_raw = pl.assemble(
+                mixes_raw,
+                acc_tail,
+                [linear_full_rows, 0],
+                atomic=pl.AtomicType.Add,
+            )
 
     # reduce: gate + hc mix, fanned over (token-tile x D-slice). The rsqrt/sigmoid gate is
     # recomputed per task instead of being published by its own scope.
@@ -195,14 +251,14 @@ def build_tensor_specs():
                    init_value=lambda: torch.tensor([0.076099])),
         TensorSpec("hc_head_base", [HC_MULT], torch.float32,
                    init_value=lambda: torch.tensor([5.9166, -3.6223, -2.9324, -3.3124])),
-        TensorSpec("y", [T, D], torch.bfloat16, is_output=True),
+        TensorSpec("y", [T, D], torch.bfloat16),
     ]
 
 
 if __name__ == "__main__":
     import argparse
     import torch
-    from golden import ratio_allclose, run_jit
+    from golden import ratio_allclose, run
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--platform", type=str, default="a2a3",
@@ -210,13 +266,13 @@ if __name__ == "__main__":
     parser.add_argument("-d", "--device", type=int, default=0)
     parser.add_argument("--seed", type=int, default=0)
     # Int mode (0=off; 1=timing only, most accurate; 2=timing + dep graph, two runs).
-    # `nargs="?"` so a bare `--enable-l2-swimlane` -> mode 1 (int, not bool True).
-    parser.add_argument("--enable-l2-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2))
+    # `nargs="?"` so a bare `--enable-chip-swimlane` -> mode 1 (int, not bool True).
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2))
     parser.add_argument("--dump-passes", action="store_true", default=False)
     args = parser.parse_args()
     torch.manual_seed(args.seed)
 
-    result = run_jit(
+    result = run(
         fn=hc_head_test,
         specs=build_tensor_specs(),
         golden_fn=golden_hc_head,
@@ -226,7 +282,7 @@ if __name__ == "__main__":
         runtime_cfg=dict(
             platform=args.platform,
             device_id=args.device,
-            enable_l2_swimlane=args.enable_l2_swimlane,
+            enable_chip_swimlane=args.enable_chip_swimlane,
         ),
         rtol=1e-3,
         atol=1e-3,

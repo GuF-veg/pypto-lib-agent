@@ -14,7 +14,7 @@ import argparse
 
 import pypto.language as pl
 import pypto.language.distributed as pld
-from golden import ratio_allclose, ratio_reldiff, run_jit
+from golden import ratio_allclose, ratio_reldiff, run
 from pypto.ir.distributed_compiled_program import DistributedConfig
 
 import config
@@ -136,8 +136,8 @@ def mtp_prefill_fwd(
     wkv: pl.Tensor[[D, HEAD_DIM], pl.BF16],
     gamma_cq: pl.Tensor[[Q_LORA], pl.BF16],
     gamma_ckv: pl.Tensor[[HEAD_DIM], pl.BF16],
-    freqs_cos: pl.Tensor[[MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16],
-    freqs_sin: pl.Tensor[[MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16],
+    freqs_cos: pl.Tensor[[2, MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16],
+    freqs_sin: pl.Tensor[[2, MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16],
     kv_cache: pl.InOut[pl.Tensor[[BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
     ori_block_table: pl.Tensor[[BLOCK_NUM], pl.INT32],
     ori_slot_mapping: pl.Tensor[[T], pl.INT64],
@@ -184,6 +184,18 @@ def mtp_prefill_fwd(
     num_tokens: pl.Scalar[pl.INT32],
 ) -> pl.Tensor[[T, D], pl.BF16]:
     nt: pl.Scalar[pl.INT32] = num_tokens
+    swa_cos_profile: pl.Tensor[[1, MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16] = pl.slice(
+        freqs_cos, [1, MAX_SEQ_LEN, ROPE_HEAD_DIM], [0, 0, 0]
+    )
+    swa_sin_profile: pl.Tensor[[1, MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16] = pl.slice(
+        freqs_sin, [1, MAX_SEQ_LEN, ROPE_HEAD_DIM], [0, 0, 0]
+    )
+    swa_freqs_cos: pl.Tensor[[MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16] = pl.reshape(
+        swa_cos_profile, [MAX_SEQ_LEN, ROPE_HEAD_DIM]
+    )
+    swa_freqs_sin: pl.Tensor[[MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16] = pl.reshape(
+        swa_sin_profile, [MAX_SEQ_LEN, ROPE_HEAD_DIM]
+    )
     projected = pl.create_tensor([T, HC_MULT, D], dtype=pl.FP32)
     with pl.scope():
         mtp_projection(
@@ -202,7 +214,7 @@ def mtp_prefill_fwd(
             attn_norm_w,
             wq_a, wq_b, wq_b_scale,
             wkv, gamma_cq, gamma_ckv,
-            freqs_cos, freqs_sin,
+            swa_freqs_cos, swa_freqs_sin,
             kv_cache, ori_block_table, ori_slot_mapping,
             position_ids,
             attn_sink, wo_a, wo_b, wo_b_scale,
@@ -255,8 +267,8 @@ def l3_mtp_prefill_fwd(
     wkv: pl.Tensor[[N_RANKS, D, HEAD_DIM], pl.BF16],
     gamma_cq: pl.Tensor[[N_RANKS, Q_LORA], pl.BF16],
     gamma_ckv: pl.Tensor[[N_RANKS, HEAD_DIM], pl.BF16],
-    freqs_cos: pl.Tensor[[N_RANKS, MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16],
-    freqs_sin: pl.Tensor[[N_RANKS, MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16],
+    freqs_cos: pl.Tensor[[N_RANKS, 2, MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16],
+    freqs_sin: pl.Tensor[[N_RANKS, 2, MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16],
     kv_cache: pl.InOut[pl.Tensor[[N_RANKS, BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
     ori_block_table: pl.Tensor[[N_RANKS, BLOCK_NUM], pl.INT32],
     ori_slot_mapping: pl.Tensor[[N_RANKS, T], pl.INT64],
@@ -359,10 +371,10 @@ def l3_mtp_prefill_fwd(
         )
 
 
-def _ranked(spec, torch, is_output=False):
+def _ranked(spec, torch):
     from golden import TensorSpec
 
-    return TensorSpec(spec.name, list(spec.shape), spec.dtype, init_value=spec.init_value, is_output=is_output)
+    return TensorSpec(spec.name, list(spec.shape), spec.dtype, init_value=spec.init_value)
 
 
 def _projection_specs():
@@ -530,7 +542,6 @@ def build_tensor_specs(
             cache_spec = TensorSpec(
                 name, [N_RANKS, ori_block_num, BLOCK_SIZE, 1, HEAD_DIM], cache_dtype,
                 init_value=init_kv_cache,
-                is_output=True,
                 resident="stacked",
             )
             specs.append(cache_spec)
@@ -575,19 +586,16 @@ def build_tensor_specs(
     specs.append(lm_head_spec)
     hidden_out_spec = TensorSpec(
         "hidden_out", [N_RANKS, T, D], torch.bfloat16,
-        is_output=True,
         resident="stacked",
     )
     specs.append(hidden_out_spec)
     pre_hc_hidden_spec = TensorSpec(
         "pre_hc_hidden_out", [N_RANKS, T, HC_MULT, D], torch.float32,
-        is_output=True,
         resident="stacked",
     )
     specs.append(pre_hc_hidden_spec)
     logits_spec = TensorSpec(
         "logits", [N_RANKS, MAX_LOGIT_ROWS, LM_HEAD_VOCAB], torch.float32,
-        is_output=True,
         resident="stacked",
     )
     specs.append(logits_spec)
@@ -675,8 +683,8 @@ def golden_mtp_prefill_fwd(tensors):
             "wkv": tensors["wkv"][rank],
             "gamma_cq": tensors["gamma_cq"][rank],
             "gamma_ckv": tensors["gamma_ckv"][rank],
-            "freqs_cos": tensors["freqs_cos"][rank],
-            "freqs_sin": tensors["freqs_sin"][rank],
+            "freqs_cos": tensors["freqs_cos"][rank, 0],
+            "freqs_sin": tensors["freqs_sin"][rank, 0],
             "kv_cache": tensors["kv_cache"][rank],
             "block_table": tensors["ori_block_table"][rank],
             "ori_slot_mapping": tensors["ori_slot_mapping"][rank],
@@ -738,7 +746,7 @@ def main():
             "device-resident: keep hidden/pre-HC/logits on device and skip golden/readback"
         ),
     )
-    parser.add_argument("--enable-l2-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2))
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2))
     parser.add_argument("--enable-scope-stats", action="store_true", default=False)
     parser.add_argument("--compile-only", action="store_true", default=False)
     parser.add_argument("--dump-passes", action="store_true", default=False)
@@ -750,7 +758,7 @@ def main():
     device_ids = [int(d) for d in args.device.split(",")]
     assert len(device_ids) >= N_RANKS, f"need at least {N_RANKS} devices, got {device_ids}"
 
-    result = run_jit(
+    result = run(
         fn=l3_mtp_prefill_fwd,
         specs=build_tensor_specs(
             start_pos=args.start_pos,
@@ -768,7 +776,7 @@ def main():
         ),
         runtime_cfg=dict(
             platform=args.platform,
-            enable_l2_swimlane=args.enable_l2_swimlane,
+            enable_chip_swimlane=args.enable_chip_swimlane,
             enable_scope_stats=args.enable_scope_stats,
         ),
         rtol=1e-3,

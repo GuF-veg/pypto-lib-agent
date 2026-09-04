@@ -436,11 +436,18 @@ def prefill_cp_swa_core(
             pl.FP32,
         ]
     ],
+    completion_token: pl.Out[
+        pl.Tensor[[NUM_LOCAL_TILES, 1, 8], pl.FP32]
+    ],
     my_rank: pl.Scalar[pl.INT32],
+    tail_epoch: pl.Scalar[pl.INT32],
 ):
     """CP-SWA attention math (inline). Shared by the standalone rank child
     and the layer composition child. Inlining avoids child-in-child nesting
-    (@pl.jit cannot call another @pl.jit)."""
+    (@pl.jit cannot call another @pl.jit).
+
+    ``tail_epoch`` is the cross-layer tail-exchange communication epoch
+    (layer-ordinal for SWA; zero for standalone / single-layer)."""
     q = pl.create_tensor([LOCAL_ROWS, H, HEAD_DIM], dtype=pl.BF16, init_value=0.0)
     post = pl.create_tensor([LOCAL_ROWS, HC_MULT], dtype=pl.FP32)
     comb = pl.create_tensor([LOCAL_ROWS, HC_MULT * HC_MULT], dtype=pl.FP32)
@@ -508,11 +515,14 @@ def prefill_cp_swa_core(
                         src = part * MAX_SEGMENT_TILES * TAIL_ROWS + TAIL_ROWS + tail_offset - TAIL_ROWS
                     local_tail[part * TAIL_ROWS + row:part * TAIL_ROWS + row + 1] = local_kv[src:src + 1]
 
-    with pl.at(level=pl.Level.CORE_GROUP, name_hint="cp_swa_tail_exchange"):
+    with pl.at(
+        level=pl.Level.CORE_GROUP,
+        name_hint="cp_swa_tail_exchange",
+    ) as tail_exchange_tid:
         _prefill_cp_zigzag_kv_tail_exchange_wave(
             local_tail, reverse_index, owner_rank_table,
             kv_tail_window, ready, consumed, logical_tails,
-            my_rank, pl.cast(0, pl.INT32),
+            my_rank, tail_epoch,
         )
     cache_flat = pl.reshape(kv_cache, [ORI_CACHE_ROWS, HEAD_DIM])
     valid_mask = pl.create_tensor([LOCAL_ROWS, VALID_BLOCK_MASK_COLS], dtype=pl.INT32, init_value=0)
@@ -523,7 +533,10 @@ def prefill_cp_swa_core(
         ov_active_flat,
     )
     cache_commit_flat = pl.reshape(kv_cache, [ORI_CACHE_ROWS, HEAD_DIM])
-    with pl.at(level=pl.Level.CORE_GROUP, name_hint="cp_swa_cache_commit"):
+    with pl.at(
+        level=pl.Level.CORE_GROUP,
+        name_hint="cp_swa_cache_commit",
+    ) as raw_commit_tid:
         for row in pl.range(TAIL_ROWS):
             seg = final_win_seg_src[row]
             src_row = final_win_row_src[row]
@@ -531,6 +544,7 @@ def prefill_cp_swa_core(
             if seg >= 0 and src_row >= 0 and dst >= 0:
                 src = seg * TAIL_ROWS + src_row
                 cache_commit_flat[dst:dst + 1] = logical_tails[src:src + 1]
+
     x_flat = pl.reshape(x_hc, [LOCAL_ROWS, HC_MULT, D])
     x_out_flat = pl.reshape(x_out, [LOCAL_ROWS, HC_MULT, D])
     for tile in pl.range(NUM_LOCAL_TILES):
@@ -557,19 +571,32 @@ def prefill_cp_swa_core(
         x_tile = pl.slice(x_flat, [TAIL_ROWS, HC_MULT, D], [t0, 0, 0])
         active = pl.read(overlay_active_lengths, [part, part_tile, 1])
         attn_out_tile = pl.create_tensor([TAIL_ROWS, D], dtype=pl.BF16)
-        y_tile = pl.create_tensor([TAIL_ROWS, HC_MULT, D], dtype=pl.FP32, init_value=0.0)
+        y_tile = pl.slice(
+            x_out_flat, [TAIL_ROWS, HC_MULT, D], [t0, 0, 0]
+        )
         sparse_attn_math(
-            q=q_tile, sparse_kv=sparse_kv_tile, sparse_bias=bias_tile, valid_block_mask=mask_tile,
-            attn_sink=attn_sink, freqs_cos=cos_tile, freqs_sin=sin_tile,
-            wo_a=wo_a, wo_b=wo_b, wo_b_scale=wo_b_scale,
+            q=q_tile, sparse_kv=sparse_kv_tile, sparse_bias=bias_tile,
+            valid_block_mask=mask_tile, attn_sink=attn_sink,
+            freqs_cos=cos_tile, freqs_sin=sin_tile, wo_a=wo_a,
+            wo_b=wo_b, wo_b_scale=wo_b_scale,
             attn_out=attn_out_tile, num_tokens=active,
         )
         hc_post_prefill(
-            attn_out_tile, x_tile,
-            post_tile, comb_tile,
-            y_tile, active,
+            attn_out_tile, x_tile, post_tile, comb_tile, y_tile, active,
         )
-        x_out_flat[t0:t0 + TAIL_ROWS, 0:HC_MULT, 0:D] = y_tile
+
+    resource_done_tid = pl.system.task_dummy(
+        deps=[tail_exchange_tid, raw_commit_tid]
+    )
+    with pl.at(
+        level=pl.Level.CORE_GROUP,
+        name_hint="cp_swa_rank_complete",
+        deps=[resource_done_tid],
+    ):
+        for tile in pl.range(NUM_LOCAL_TILES):
+            completion_token[tile : tile + 1, 0:1, 0:8] = pl.slice(
+                x_out_flat, [1, 1, 8], [tile * TAIL_ROWS, 0, 0]
+            )
     x_out = pl.reshape(x_out_flat, [LOCAL_PARTS, MAX_SEGMENT_TILES, TAIL_ROWS, HC_MULT, D])
     return x_out
 
@@ -635,9 +662,13 @@ def prefill_cp_swa_rank(
         ]
     ],
     my_rank: pl.Scalar[pl.INT32],
+    tail_epoch: pl.Scalar[pl.INT32],
 ):
     """Standalone CP-SWA rank child. Delegates to the inline core so the
     standalone test preserves the original @pl.jit entry point."""
+    completion_token = pl.create_tensor(
+        [NUM_LOCAL_TILES, 1, 8], dtype=pl.FP32, init_value=0.0
+    )
     return prefill_cp_swa_core(
         x_hc,
         hc_attn_fn, hc_attn_scale, hc_attn_base, attn_norm_w,
@@ -651,7 +682,7 @@ def prefill_cp_swa_rank(
         reverse_index, owner_rank_table,
         final_win_seg_src, final_win_row_src, final_slot_mapping,
         kv_tail_window, ready, consumed,
-        x_out, my_rank,
+        x_out, completion_token, my_rank, tail_epoch,
     )
 
 
@@ -722,7 +753,7 @@ def prefill_cp_swa_test(
             reverse_index, owner_rank_table,
             final_win_seg_src, final_win_row_src, final_slot_mapping,
             window, ready, consumed,
-            x_out[rank], rank,
+            x_out[rank], rank, pl.cast(0, pl.INT32),
             device=rank,
         )
 
@@ -774,7 +805,7 @@ def build_tensor_specs(cp_size: int = CP_SIZE):
         "freqs_cos", "freqs_sin",
     ):
         specs.append(TensorSpec(name, list(base[name].shape), base[name].dtype, init_value=base[name]))
-    specs.append(TensorSpec("kv_cache", list(cache.shape), torch.bfloat16, init_value=cache, is_output=True))
+    specs.append(TensorSpec("kv_cache", list(cache.shape), torch.bfloat16, init_value=cache))
     for name in tail_names:
         specs.append(TensorSpec(name, list(base[name].shape), base[name].dtype, init_value=base[name]))
     segment_starts = meta["segment_starts"]
@@ -785,10 +816,14 @@ def build_tensor_specs(cp_size: int = CP_SIZE):
     ):
         value = meta[name]
         specs.append(TensorSpec(name, list(value.shape), value.dtype, init_value=value))
-    for name in ("reverse_index", "final_win_seg_src", "final_win_row_src", "final_slot_mapping"):
-        specs.append(TensorSpec(name, list(meta[name].shape), meta[name].dtype, init_value=meta[name]))
+    # Spec order must match the kernel signature: run binds its dummy compile
+    # args positionally, so owner_rank_table sits between reverse_index and the
+    # final_win_* triple exactly as prefill_cp_swa_test declares them.
+    specs.append(TensorSpec("reverse_index", list(meta["reverse_index"].shape), meta["reverse_index"].dtype, init_value=meta["reverse_index"]))
     specs.append(TensorSpec("owner_rank_table", list(owner_rank.shape), owner_rank.dtype, init_value=owner_rank))
-    specs.append(TensorSpec("x_out", list(x.shape), torch.float32, is_output=True))
+    for name in ("final_win_seg_src", "final_win_row_src", "final_slot_mapping"):
+        specs.append(TensorSpec(name, list(meta[name].shape), meta[name].dtype, init_value=meta[name]))
+    specs.append(TensorSpec("x_out", list(x.shape), torch.float32))
     return specs, ctx
 
 
@@ -930,17 +965,17 @@ if __name__ == "__main__":
     parser.add_argument("--compile-only", action="store_true", default=False)
     parser.add_argument("--cp", type=int, default=CP_SIZE, choices=list(CP_CHOICES))
     parser.add_argument("--dump-passes", action="store_true", default=False)
-    parser.add_argument("--enable-l2-swimlane", action="store_true", default=False)
+    parser.add_argument("--enable-chip-swimlane", action="store_true", default=False)
     args = parser.parse_args()
 
-    from golden import ratio_allclose, ratio_reldiff, run_jit
+    from golden import ratio_allclose, ratio_reldiff, run
 
     device_ids = [int(device) for device in args.device.split(",")]
     if len(device_ids) < args.cp:
         raise SystemExit(f"CP{args.cp} requires {args.cp} devices, got {device_ids}")
     specs, ctx = build_tensor_specs(args.cp)
     golden_prefill_cp_swa._ctx = ctx
-    result = run_jit(
+    result = run(
         fn=prefill_cp_swa_test,
         specs=specs,
         golden_fn=golden_prefill_cp_swa,
@@ -952,7 +987,7 @@ if __name__ == "__main__":
         ),
         runtime_cfg=dict(
             platform=args.platform,
-            enable_l2_swimlane=args.enable_l2_swimlane,
+            enable_chip_swimlane=args.enable_chip_swimlane,
         ),
         rtol=1e-2,
         atol=1e-2,

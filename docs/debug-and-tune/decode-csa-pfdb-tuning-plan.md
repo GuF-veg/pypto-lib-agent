@@ -86,7 +86,7 @@ but they must not be the hypothesis or the primary source of the measured win.
 Before collecting the new baseline, add the minimum reusable CLI wiring to
 `decode_csa.py`:
 
-- `--save-data`, forwarded to `run_jit(save_data=...)`;
+- `--save-data`, forwarded to `run(save_data=...)`;
 - `--enable-pmu`, forwarded to `runtime_cfg["enable_pmu"]`;
 - `--enable-dump-args`, forwarded to
   `runtime_cfg["enable_dump_args"]`; and

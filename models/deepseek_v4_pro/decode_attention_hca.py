@@ -16,8 +16,10 @@ Companion files: attention_swa.py (ratio=0)
 
 import pypto.language as pl
 
+from golden import mapped_pool_ratio_allclose
+
 from config import (
-    PRO_KERNEL as M,
+    ACTIVE as M,
     DECODE_BATCH,
     DECODE_SEQ,
     BLOCK_SIZE,
@@ -255,10 +257,10 @@ def attention_hca_test(
     cmp_wgate: pl.Tensor[[MAIN_OUT_DIM, D], pl.BF16],
     cmp_ape: pl.Tensor[[COMPRESS_RATIO, MAIN_OUT_DIM], pl.FP32],
     cmp_norm_w: pl.Tensor[[HEAD_DIM], pl.BF16],
-    compress_state: pl.Tensor[[COMPRESS_STATE_BLOCK_NUM, COMPRESS_STATE_BLOCK_SIZE, COMPRESS_STATE_DIM], pl.FP32],
+    compress_state: pl.InOut[pl.Tensor[[COMPRESS_STATE_BLOCK_NUM, COMPRESS_STATE_BLOCK_SIZE, COMPRESS_STATE_DIM], pl.FP32]],
     compress_state_block_table: pl.Tensor[[B, COMPRESS_STATE_MAX_BLOCKS], pl.INT32],
     kv_cache: pl.InOut[pl.Tensor[[ORI_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
-    cmp_kv: pl.Tensor[[CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
+    cmp_kv: pl.InOut[pl.Tensor[[CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
     cmp_block_table: pl.Tensor[[B, CMP_MAX_BLOCKS], pl.INT32],
     ori_slot_mapping: pl.Tensor[[T], pl.INT64],
     window_swa_indices: pl.Tensor[[T, WIN], pl.INT32],
@@ -288,7 +290,7 @@ def attention_hca_test(
         wo_a, wo_b, wo_b_scale,
         x_out,
     )
-    return x_out
+    return kv_cache, cmp_kv, compress_state, x_out
 
 
 def golden_attention_hca(tensors):
@@ -627,7 +629,7 @@ def build_tensor_specs(start_pos=None):
         TensorSpec("cmp_norm_w", [HEAD_DIM], torch.bfloat16, init_value=init_cmp_norm_w),
         TensorSpec("compress_state", [COMPRESS_STATE_BLOCK_NUM, COMPRESS_STATE_BLOCK_SIZE, COMPRESS_STATE_DIM], torch.float32, init_value=init_compress_state),
         TensorSpec("compress_state_block_table", [B, COMPRESS_STATE_MAX_BLOCKS], torch.int32, init_value=init_compress_state_block_table),
-        TensorSpec("kv_cache", [ORI_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], torch.bfloat16, init_value=init_kv_cache, is_output=True),
+        TensorSpec("kv_cache", [ORI_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], torch.bfloat16, init_value=init_kv_cache),
         TensorSpec("cmp_kv", [CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], torch.bfloat16, init_value=init_cmp_kv),
         TensorSpec("cmp_block_table", [B, CMP_MAX_BLOCKS], torch.int32, init_value=init_cmp_block_table),
         TensorSpec("ori_slot_mapping", [T], torch.int64, init_value=init_ori_slot_mapping),
@@ -641,13 +643,13 @@ def build_tensor_specs(start_pos=None):
         TensorSpec("wo_a", [O_GROUPS, O_LORA, O_GROUP_IN], torch.bfloat16, init_value=init_wo_a),
         TensorSpec("wo_b", [D, O_GROUPS * O_LORA], torch.int8, init_value=lambda: wo_b_i8),
         TensorSpec("wo_b_scale", [D], torch.float32, init_value=lambda: wo_b_scale),
-        TensorSpec("x_out", [T, HC_MULT, D], torch.float32, is_output=True),
+        TensorSpec("x_out", [T, HC_MULT, D], torch.float32),
     ]
 
 
 if __name__ == "__main__":
     import argparse
-    from golden import ratio_allclose, ratio_reldiff, run_jit
+    from golden import ratio_reldiff, run
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--platform", type=str, default="a2a3",
@@ -656,13 +658,13 @@ if __name__ == "__main__":
     parser.add_argument("--start-pos", type=int, default=None,
                         help="Uniform fixture-only start_pos override for all batches; "
                              "default (unset) uses the canonical per-batch HCA set that includes the 8k point.")
-    parser.add_argument("--enable-l2-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2))
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2))
     parser.add_argument("--runtime-dir", type=str, default=None)
     parser.add_argument("--golden-data", type=str, default=None)
     parser.add_argument("--dump-passes", action="store_true", default=False)
     args = parser.parse_args()
 
-    result = run_jit(
+    result = run(
         fn=attention_hca_test,
         specs=build_tensor_specs(args.start_pos),
         golden_fn=golden_attention_hca,
@@ -672,14 +674,40 @@ if __name__ == "__main__":
         runtime_cfg=dict(
             platform=args.platform,
             device_id=args.device,
-            enable_l2_swimlane=args.enable_l2_swimlane,
+            enable_chip_swimlane=args.enable_chip_swimlane,
         ),
         atol=1e-2,
         compare_fn={
             # Tightened from CANN's 1e-2 bar: the realistic layer-9 hc_attn gates keep
             # x_out well-conditioned, so it holds 0% over 3e-3 (worst rdiff well under 1).
             "x_out": ratio_reldiff(diff_thd=3e-3, pct_thd=0.008, max_diff_hd=1),
-            "kv_cache": ratio_allclose(atol=1e-4, rtol=1.0 / 128),
+            "kv_cache": mapped_pool_ratio_allclose(
+                "ori_slot_mapping",
+                mapping_shape=(T,),
+                block_size=BLOCK_SIZE,
+                pool_name="KV cache",
+                atol=1e-4,
+                rtol=1.0 / 128,
+                max_error_ratio=0.005,
+            ),
+            "cmp_kv": mapped_pool_ratio_allclose(
+                "cmp_slot_mapping",
+                mapping_shape=(T,),
+                block_size=BLOCK_SIZE,
+                pool_name="compressed KV cache",
+                atol=1e-4,
+                rtol=1.0 / 128,
+                max_error_ratio=0.0,
+            ),
+            "compress_state": mapped_pool_ratio_allclose(
+                "state_slot_mapping",
+                mapping_shape=(T,),
+                block_size=COMPRESS_STATE_BLOCK_SIZE,
+                pool_name="compressor state",
+                atol=1e-3,
+                rtol=1e-3,
+                max_error_ratio=0.0,
+            ),
         },
         rtol=1e-2,
     )

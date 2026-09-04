@@ -25,6 +25,7 @@ from config import (
     PREFILL_ORI_MAX_BLOCKS,
 )
 from prefill_compressor_ratio128 import (
+    CMP_STORAGE_BLOCK_SIZE,
     COMPRESS_RATIO,
     COMPRESS_STATE_DIM,
     HCA_CMP_BLOCK_NUM,
@@ -109,7 +110,9 @@ MAX_COMPRESS_LEAVES = 1 + MAX_SEGMENT_TILES
 LOCAL_ROWS = NUM_LOCAL_TILES * TAIL_ROWS
 LOCAL_SPARSE_ROWS = LOCAL_ROWS * PREFILL_SPARSE_PAD
 LEAF_CMP_BLOCKS = HCA_CMP_BLOCK_NUM
-LEAF_CMP_ROWS = LOCAL_PARTS * MAX_COMPRESS_LEAVES * LEAF_CMP_BLOCKS * BLOCK_SIZE
+LEAF_CMP_ROWS = (
+    LOCAL_PARTS * MAX_COMPRESS_LEAVES * LEAF_CMP_BLOCKS * CMP_STORAGE_BLOCK_SIZE
+)
 STATE_ROWS = HCA_STATE_BLOCK_NUM * HCA_STATE_BLOCK_SIZE
 
 def active_tile(segment_len: int, tile: int) -> int:
@@ -503,7 +506,7 @@ def prefill_cp_hca_core(
     ],
     cmp_kv: pl.InOut[
         pl.Tensor[
-            [PREFILL_CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16
+            [PREFILL_CMP_BLOCK_NUM, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], pl.BF16
         ]
     ],
     cmp_block_table: pl.Tensor[[PREFILL_CMP_MAX_BLOCKS], pl.INT32],
@@ -577,10 +580,18 @@ def prefill_cp_hca_core(
         ]
     ],
     my_rank: pl.Scalar[pl.INT32],
+    tail_comm_epoch: pl.Scalar[pl.INT32],
+    compact_comm_epoch_base: pl.Scalar[pl.INT32],
 ):
     """CP-HCA attention math (inline). Shared by the standalone rank child
     and the layer composition child. Inlining avoids child-in-child nesting
-    (@pl.jit cannot call another @pl.jit)."""
+    (@pl.jit cannot call another @pl.jit).
+
+    ``tail_comm_epoch`` and ``compact_comm_epoch_base`` drive the shared
+    cross-layer ready/consumed counters of the dual-tail and HCA compact
+    domains respectively; local payload rows stay at 0 (``EPOCHS == 1``).
+    Standalone/single-layer callers pass 0 for both, preserving behavior.
+    """
     q = pl.create_tensor([LOCAL_ROWS, H, HEAD_DIM], dtype=pl.BF16, init_value=0.0)
     post = pl.create_tensor([LOCAL_ROWS, HC_MULT], dtype=pl.FP32)
     comb = pl.create_tensor([LOCAL_ROWS, HC_MULT * HC_MULT], dtype=pl.FP32)
@@ -671,7 +682,7 @@ def prefill_cp_hca_core(
             reverse_index, owner_rank_table,
             hidden_tail_window, kv_tail_window, tail_ready, tail_consumed,
             logical_hidden, logical_kv,
-            my_rank, pl.cast(0, pl.INT32),
+            my_rank, pl.cast(0, pl.INT32), tail_comm_epoch,
         )
 
     effective_x = pl.create_tensor(
@@ -791,7 +802,7 @@ def prefill_cp_hca_core(
     leaf_cmp = pl.create_tensor(
         [
             LOCAL_PARTS * MAX_COMPRESS_LEAVES * LEAF_CMP_BLOCKS,
-            BLOCK_SIZE,
+            CMP_STORAGE_BLOCK_SIZE,
             1,
             HEAD_DIM,
         ],
@@ -819,7 +830,7 @@ def prefill_cp_hca_core(
             state_slots_leaf = pl.slice(leaf_state_slots, [TAIL_ROWS], [token0])
             cmp_leaf = pl.slice(
                 leaf_cmp,
-                [LEAF_CMP_BLOCKS, BLOCK_SIZE, 1, HEAD_DIM],
+                [LEAF_CMP_BLOCKS, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM],
                 [cmp_block0, 0, 0, 0],
             )
             active = pl.read(leaf_num_tokens, [part, leaf])
@@ -857,7 +868,9 @@ def prefill_cp_hca_core(
                                 part * MAX_COMPRESS_LEAVES + 1 + tile
                             )
                             source = (
-                                leaf_index * LEAF_CMP_BLOCKS * BLOCK_SIZE
+                                leaf_index
+                                * LEAF_CMP_BLOCKS
+                                * CMP_STORAGE_BLOCK_SIZE
                             )
                             local_cmp_payload[
                                 destination:destination + 1, :
@@ -916,7 +929,8 @@ def prefill_cp_hca_core(
                             ] = scratch_state_flat[source:source + 1, :]
 
     cmp_kv_flat = pl.reshape(
-        cmp_kv, [PREFILL_CMP_BLOCK_NUM * BLOCK_SIZE, HEAD_DIM]
+        cmp_kv,
+        [PREFILL_CMP_BLOCK_NUM * CMP_STORAGE_BLOCK_SIZE, HEAD_DIM],
     )
     compress_state_flat = pl.reshape(
         compress_state, [STATE_ROWS, COMPRESS_STATE_DIM]
@@ -944,6 +958,7 @@ def prefill_cp_hca_core(
             compress_state_flat,
             my_rank,
             pl.cast(0, pl.INT32),
+            compact_comm_epoch_base,
         )
 
     cache_flat = pl.reshape(kv_cache, [ORI_CACHE_ROWS, HEAD_DIM])
@@ -952,7 +967,9 @@ def prefill_cp_hca_core(
     valid_mask = pl.create_tensor([LOCAL_ROWS, VALID_BLOCK_MASK_COLS], dtype=pl.INT32, init_value=0)
     _prefill_cp_sparse_stage(
         cache_flat, local_kv, logical_kv,
-        cmp_kv_flat, cmp_block_table,
+        cmp_kv,
+        cmp_block_table,
+        pl.cast(CMP_STORAGE_BLOCK_SIZE, pl.INT32),
         query_positions_flat, query_requests_flat,
         overlay_positions_flat, overlay_requests_flat,
         predecessor_segments, segment_starts_t,
@@ -1050,7 +1067,7 @@ def prefill_cp_hca_rank(
     ],
     cmp_kv: pl.InOut[
         pl.Tensor[
-            [PREFILL_CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16
+            [PREFILL_CMP_BLOCK_NUM, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], pl.BF16
         ]
     ],
     cmp_block_table: pl.Tensor[[PREFILL_CMP_MAX_BLOCKS], pl.INT32],
@@ -1151,6 +1168,7 @@ def prefill_cp_hca_rank(
         compact_ready, compact_consumed,
         attn_sink, wo_a, wo_b, wo_b_scale,
         x_out, my_rank,
+        pl.cast(0, pl.INT32), pl.cast(0, pl.INT32),
     )
 
 
@@ -1207,7 +1225,7 @@ def prefill_cp_hca_test(
             [
                 CP_SIZE,
                 PREFILL_CMP_BLOCK_NUM,
-                BLOCK_SIZE,
+                CMP_STORAGE_BLOCK_SIZE,
                 1,
                 HEAD_DIM,
             ],
@@ -1470,13 +1488,16 @@ def _state_physical_row(table, absolute_position: int) -> int:
 def _cmp_physical_row(table, logical_slot: int) -> int:
     if logical_slot < 0:
         return -1
-    logical_block = logical_slot // BLOCK_SIZE
+    logical_block = logical_slot // CMP_STORAGE_BLOCK_SIZE
     if logical_block >= table.numel():
         return -1
     physical_block = int(table[logical_block].item())
     if physical_block < 0:
         return -1
-    return physical_block * BLOCK_SIZE + logical_slot % BLOCK_SIZE
+    return (
+        physical_block * CMP_STORAGE_BLOCK_SIZE
+        + logical_slot % CMP_STORAGE_BLOCK_SIZE
+    )
 
 
 def build_tensor_specs(cp_size: int = CP_SIZE):
@@ -1621,7 +1642,7 @@ def build_tensor_specs(cp_size: int = CP_SIZE):
     cmp_cache = torch.zeros(
         cp_size,
         PREFILL_CMP_BLOCK_NUM,
-        BLOCK_SIZE,
+        CMP_STORAGE_BLOCK_SIZE,
         1,
         HEAD_DIM,
         dtype=torch.bfloat16,
@@ -1647,7 +1668,6 @@ def build_tensor_specs(cp_size: int = CP_SIZE):
                 list(state.shape),
                 state.dtype,
                 init_value=state,
-                is_output=True,
             ),
             TensorSpec(
                 "compress_state_block_table",
@@ -1660,14 +1680,12 @@ def build_tensor_specs(cp_size: int = CP_SIZE):
                 list(kv_cache.shape),
                 kv_cache.dtype,
                 init_value=kv_cache,
-                is_output=True,
             ),
             TensorSpec(
                 "cmp_kv",
                 list(cmp_cache.shape),
                 cmp_cache.dtype,
                 init_value=cmp_cache,
-                is_output=True,
             ),
             TensorSpec(
                 "cmp_block_table",
@@ -1719,7 +1737,6 @@ def build_tensor_specs(cp_size: int = CP_SIZE):
             "x_out",
             list(x_hc.shape),
             torch.float32,
-            is_output=True,
         )
     )
 
@@ -1939,7 +1956,7 @@ def golden_prefill_cp_hca(tensors):
                     logical_slot = (position + 1) // COMPRESS_RATIO - 1
             leaf_cmp = torch.zeros(
                 LEAF_CMP_BLOCKS,
-                BLOCK_SIZE,
+                CMP_STORAGE_BLOCK_SIZE,
                 1,
                 HEAD_DIM,
                 dtype=torch.bfloat16,
@@ -2053,6 +2070,7 @@ def golden_prefill_cp_hca(tensors):
                         ],
                         "cmp_kv": cmp_result[rank],
                         "cmp_block_table": tensors["cmp_block_table"][rank],
+                        "cmp_storage_block_size": CMP_STORAGE_BLOCK_SIZE,
                         "cmp_indices": tensors["cmp_indices"][
                             rank, part, tile
                         ],
@@ -2104,15 +2122,15 @@ if __name__ == "__main__":
     parser.add_argument("--cp", type=int, default=CP_SIZE, choices=list(CP_CHOICES))
     parser.add_argument("--compile-only", action="store_true")
     parser.add_argument("--dump-passes", action="store_true")
-    parser.add_argument("--enable-l2-swimlane", action="store_true")
+    parser.add_argument("--enable-chip-swimlane", action="store_true")
     args = parser.parse_args()
 
-    from golden import ratio_allclose, ratio_reldiff, run_jit
+    from golden import ratio_allclose, ratio_reldiff, run
 
     device_ids = [int(device) for device in args.device.split(",")]
     if len(device_ids) < args.cp:
         raise SystemExit(f"CP{args.cp} requires {args.cp} devices, got {device_ids}")
-    result = run_jit(
+    result = run(
         fn=prefill_cp_hca_test,
         specs=build_tensor_specs(args.cp),
         golden_fn=golden_prefill_cp_hca,
@@ -2125,7 +2143,7 @@ if __name__ == "__main__":
         ),
         runtime_cfg=dict(
             platform=args.platform,
-            enable_l2_swimlane=args.enable_l2_swimlane,
+            enable_chip_swimlane=args.enable_chip_swimlane,
         ),
         rtol=1e-2,
         atol=1e-2,

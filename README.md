@@ -13,7 +13,7 @@ examples/        Self-contained kernels for learning the DSL
 models/          End-to-end LLM kernels, one flat directory per model build
   qwen3_14b/                   Qwen3-14B prefill + decode, BF16, serving contract
   deepseek_v4_flash_mtp/       DeepSeek V4-Flash, INT8 W8A8, MTP=1, serving contract
-  deepseek_v4_pro/             DeepSeek V4-Pro, Hybrid MXFP8-MXFP4, A5 variant
+  deepseek_v4_pro/             DeepSeek V4-Pro with an optional Flash preset, A5 variant
   (other directories are kernel harnesses — see the model pages)
 golden/          Test harness — compile, run on device, validate against torch
 tests/           Lint checks and golden-fn unit tests
@@ -47,9 +47,12 @@ flow (compile → input generation → golden → runtime → validation).
 
 Read [docs/pypto-coding/pypto-coding-style.md](docs/pypto-coding/pypto-coding-style.md) — it covers
 the two kernel forms (`@pl.jit` / `@pl.jit.inline` and `@pl.program` /
-`@pl.function`), `pl.at` scopes, the four loop constructs (`pl.range`,
-`pl.parallel`, `pl.pipeline`, `pl.spmd`), and the vector / cube / mte op
-set.
+`@pl.function`), `pl.at` scopes, the five loop constructs (`pl.range`,
+`pl.unroll`, `pl.parallel`, `pl.pipeline`, `pl.spmd`), runtime scopes
+(`pl.scope`), scalar access (`pl.read` / `pl.write`), and the vector / cube /
+mte op set. For a multi-card kernel, add
+[docs/pypto-coding/distributed-programming.md](docs/pypto-coding/distributed-programming.md)
+— window buffers, cross-rank data movement, and notify / wait.
 
 Existing kernels under `examples/intermediate/` are the best reference for
 single-stage patterns; `models/qwen3_14b/decode_fwd.py` shows a
@@ -65,7 +68,7 @@ the args-dump / dep-gen DFX flags.
 ## Performance tuning
 
 See [docs/debug-and-tune/performance-tuning.md](docs/debug-and-tune/performance-tuning.md) for the L2
-(inter-kernel) and L1/L0 (intra-kernel) tuning workflow — L2 swimlane in
+(inter-kernel) and L1/L0 (intra-kernel) tuning workflow — chip swimlane in
 Perfetto, PMU counters, and the per-kernel insight swimlane.
 
 ## Precision tuning

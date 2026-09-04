@@ -257,17 +257,13 @@ def dispatch(
                     op=pld.NotifyOp.AtomicAdd,
                 )
 
-    # Wait only (the notify rides inside dispatch_push). The indices read is an
-    # anchor, not data: it deps this task on gate's route tasks, so the wait starts
-    # with dispatch_push instead of trailing dispatch_meta's spin. Anchor it to
-    # something -- an unanchored wait is dispatched immediately and spins holding a
-    # core group, so pipelined layers stack up spinners.
     with pl.at(
         level=pl.Level.CORE_GROUP,
         name_hint="dispatch_wait",
         deps=[_push_tid],
         allow_early_resolve=True,
     ) as _wait_tid:
+        # Anchor the blocking wait to the local routing producer.
         _idx_anchor = pl.read(indices, [0, 0])
         for src in pl.range(N_RANKS):
             if src != my_rank:
@@ -332,9 +328,7 @@ def combine(
     # Rows are src-major, so the per-(e, src) base is a loop-carried prefix sum over
     # src inside the block (same shape as dispatch_gather). Each route maps to a
     # unique (dst, loc_e) and r_route, so the blocks' puts are write-disjoint.
-    # allow_early_resolve: shared_routed pre-stages only when every producer of its
-    # fanin is flagged, and combine_wait already is.
-    with pl.spmd(N_LOCAL, name_hint="combine", allow_early_resolve=True) as _combine_tid:
+    with pl.spmd(N_LOCAL, name_hint="combine") as _combine_tid:
         e = pl.tile.get_block_idx()
         e_base_row = e * RECV_MAX
         b = pl.cast(0, pl.INDEX)
@@ -353,11 +347,12 @@ def combine(
                 )
             b = b + n
 
-        # Payload-arrival notify folded into the scatter (mirrors dispatch_push):
-        # each block signals every peer after its own puts, so the wait below expects
-        # N_LOCAL * moe_epoch. Saves a task launch on the cross-rank critical path.
-        # The [1, D] puts above are single-shot TPUTs, which drain themselves before
-        # this notify issues.
+    # Publish one completion after the complete local scatter grid.
+    with pl.at(
+        level=pl.Level.CORE_GROUP,
+        name_hint="combine_wait",
+        deps=[_combine_tid, dispatch_push_tid],
+    ) as _cwait_tid:
         for peer in pl.range(N_RANKS):
             if peer != my_rank:
                 pld.system.notify(
@@ -368,25 +363,12 @@ def combine(
                     op=pld.NotifyOp.AtomicAdd,
                 )
 
-    # Wait only (the notify rides inside the scatter), so it spins on the peers'
-    # counters while our own scatter runs. The recv_y_flat read is an anchor, not
-    # data: it auto-deps this task on exp_w2_act, starting the wait when the scatter
-    # starts. Anchor it to something -- a wait with no dep at all is dispatched the
-    # moment the scheduler reaches it and spins holding a core group, so pipelined
-    # layers stack up spinners that starve the scatters they wait on.
-    with pl.at(
-        level=pl.Level.CORE_GROUP,
-        name_hint="combine_wait",
-        deps=[_combine_tid, dispatch_push_tid],
-        allow_early_resolve=True,
-    ) as _cwait_tid:
-        _recv_y_anchor = pl.read(recv_y_flat, [0, 0])
         for src in pl.range(N_RANKS):
             if src != my_rank:
                 pld.system.wait(
                     signal=combine_arrived,
                     offsets=[src, 0],
-                    expected=pl.cast(moe_epoch * N_LOCAL, pl.INT32),
+                    expected=moe_epoch,
                     cmp=pld.WaitCmp.Ge,
                 )
 
@@ -402,7 +384,6 @@ def combine(
         T,
         name_hint="shared_routed",
         deps=[_cwait_tid],
-        allow_early_resolve=True,
     ) as _reduce_tid:
         t = pl.tile.get_block_idx()
         if t < active_tokens:
@@ -957,7 +938,7 @@ def build_tensor_specs(layer_id=0, num_tokens=T, balanced_routing=False):
         TensorSpec("shared_w3_scale",  [N_RANKS, MOE_INTER],             torch.float32, init_value=lambda: sw3_s),
         TensorSpec("shared_w2",        [N_RANKS, D, MOE_INTER],          torch.int8,    init_value=lambda: sw2_i8),
         TensorSpec("shared_w2_scale",  [N_RANKS, D],                     torch.float32, init_value=lambda: sw2_s),
-        TensorSpec("x_next",           [N_RANKS, T, HC_MULT, D],      torch.float32, is_output=True),
+        TensorSpec("x_next",           [N_RANKS, T, HC_MULT, D],      torch.float32),
         ScalarSpec("layer_id",         torch.int32,                      layer_id),
         ScalarSpec("num_tokens",       torch.int32,                      num_tokens),
     ]
@@ -969,7 +950,7 @@ def build_tensor_specs(layer_id=0, num_tokens=T, balanced_routing=False):
     # H2D/D2H. Covers the routed/shared expert weights and their scales, the gate,
     # the HC-FFN constants, the RMSNorm gamma, and the static tid2eid route table —
     # but NOT the per-step activation (x_hc), per-step input_ids, or the output.
-    # All resident names are inputs (is_output=False), so the flag is always valid.
+    # All resident names are pure inputs, so the flag is always valid.
     RESIDENT_WEIGHT_NAMES = frozenset([
         "hc_ffn_fn", "hc_ffn_scale", "hc_ffn_base", "norm_w",
         "gate_w", "gate_bias", "tid2eid",
@@ -988,7 +969,7 @@ def build_tensor_specs(layer_id=0, num_tokens=T, balanced_routing=False):
 if __name__ == "__main__":
     import argparse
 
-    from golden import ratio_reldiff, run_jit
+    from golden import ratio_reldiff, run
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--platform", type=str, default="a2a3",
@@ -1002,7 +983,7 @@ if __name__ == "__main__":
                         help=f"active token count for MoE dispatch/combine (0..{T})")
     parser.add_argument("--balanced-routing", action="store_true", default=False,
                         help="use deterministic hash routes balanced evenly across all experts")
-    parser.add_argument("--enable-l2-swimlane", type=int, nargs="?", const=1, default=0, choices=range(5))
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=range(5))
     parser.add_argument("--compile-only", action="store_true", default=False)
     parser.add_argument("--runtime-dir", type=str, default=None)
     parser.add_argument("--save-data", action="store_true", default=False)
@@ -1019,7 +1000,7 @@ if __name__ == "__main__":
 
     golden_data = args.golden_data
 
-    result = run_jit(
+    result = run(
         fn=l3_moe,
         specs=build_tensor_specs(
             layer_id=args.layer_id,
@@ -1040,7 +1021,7 @@ if __name__ == "__main__":
         ),
         runtime_cfg=dict(
             platform=args.platform,
-            enable_l2_swimlane=args.enable_l2_swimlane,
+            enable_chip_swimlane=args.enable_chip_swimlane,
             log_level=args.log_level,
         ),
         rtol=1e-3,

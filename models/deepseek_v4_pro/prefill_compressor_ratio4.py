@@ -13,10 +13,16 @@ import pypto.language as pl
 from config import (
     BLOCK_SIZE,
     CSA_STATE_PHYSICAL_BLOCKS,
-    PRO_KERNEL as M,
+    ACTIVE as M,
     FP32_NEG_INF,
     PREFILL_CMP_BLOCK_NUM,
 )
+
+# Runtime-sized global state pool.  The serving allocator owns the physical
+# block ids carried by ``compress_state_block_table``; the kernel must not bake
+# the standalone fixture capacity into its ABI.
+STATE_BLOCK_NUM_DYN = pl.dynamic("PREFILL_CSA_STATE_BLOCK_NUM_DYN")
+CMP_BLOCK_NUM_DYN = pl.dynamic("PREFILL_CMP_BLOCK_NUM_DYN")
 
 # model config (mirrors decode_compressor_ratio4)
 EPS = M.rms_norm_eps
@@ -61,7 +67,7 @@ PACKED_RMS_TILE = 16
 @pl.jit.inline
 def prefill_compressor_ratio4(
     x: pl.Tensor[[T, D], pl.BF16],
-    compress_state: pl.Tensor[[CSA_STATE_BLOCK_NUM, CSA_STATE_BLOCK_SIZE, COMPRESS_STATE_DIM], pl.FP32],
+    compress_state: pl.Tensor[[STATE_BLOCK_NUM_DYN, CSA_STATE_BLOCK_SIZE, COMPRESS_STATE_DIM], pl.FP32],
     compress_state_block_table: pl.Tensor[[CSA_STATE_MAX_BLOCKS], pl.INT32],
     wkv: pl.Tensor[[OUT_DIM, D], pl.BF16],
     wgate: pl.Tensor[[OUT_DIM, D], pl.BF16],
@@ -69,19 +75,22 @@ def prefill_compressor_ratio4(
     norm_w: pl.Tensor[[HEAD_DIM], pl.BF16],
     freqs_cos: pl.Tensor[[MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16],
     freqs_sin: pl.Tensor[[MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16],
-    cmp_kv: pl.Tensor[[PREFILL_CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
+    cmp_kv: pl.Tensor[[CMP_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
     position_ids: pl.Tensor[[T], pl.INT32],
     num_tokens: pl.Scalar[pl.INT32],
     cmp_slot_mapping: pl.Tensor[[T], pl.INT64],
     state_slot_mapping: pl.Tensor[[T], pl.INT64],
+    completion: pl.Array[1, pl.TASK_ID],
 ):
+    state_block_num = pl.tensor.dim(compress_state, 0)
+    cmp_block_num = pl.tensor.dim(cmp_kv, 0)
     cmp4_kv_proj_scratch = pl.create_tensor([T, OUT_DIM], dtype=pl.FP32)
     cmp4_score_proj_scratch = pl.create_tensor([T, OUT_DIM], dtype=pl.FP32)
     compress_state_flat = pl.reshape(
         compress_state,
-        [CSA_STATE_BLOCK_NUM * CSA_STATE_BLOCK_SIZE, COMPRESS_STATE_DIM],
+        [state_block_num * CSA_STATE_BLOCK_SIZE, COMPRESS_STATE_DIM],
     )
-    cmp_kv_flat = pl.reshape(cmp_kv, [PREFILL_CMP_BLOCK_NUM * BLOCK_SIZE, HEAD_DIM])
+    cmp_kv_flat = pl.reshape(cmp_kv, [cmp_block_num * BLOCK_SIZE, HEAD_DIM])
     pooled_kv = pl.create_tensor([MAX_CMP_WRITES, HEAD_DIM], dtype=pl.FP32)
     normed_kv = pl.create_tensor([MAX_CMP_WRITES, HEAD_DIM], dtype=pl.FP32)
 
@@ -127,7 +136,8 @@ def prefill_compressor_ratio4(
     # A contiguous active prefix can close at most ceil(num_tokens / ratio)
     # compressed rows, regardless of the absolute start-position alignment.
     active_pool_blocks = ((num_tokens + COMPRESS_RATIO - 1) // COMPRESS_RATIO) * HEAD_BLOCKS
-    for pool_idx in pl.spmd(active_pool_blocks, name_hint="prefill_c4_softmax_pool"):
+    with pl.spmd(active_pool_blocks, name_hint="prefill_c4_softmax_pool") as pool_tid:
+        pool_idx = pl.tile.get_block_idx()
         write_i = pool_idx // HEAD_BLOCKS
         hb = pool_idx - write_i * HEAD_BLOCKS
         h0 = hb * HEAD_CHUNK
@@ -281,27 +291,31 @@ def prefill_compressor_ratio4(
         kv_rope_norm = pooled_kv[final_base : final_base + PACKED_RMS_TILE, NOPE_HEAD_DIM : HEAD_DIM]
         gamma_rope = pl.cast(norm_w_2d[:, NOPE_HEAD_DIM : HEAD_DIM], pl.FP32)
         rope_normed = pl.col_expand_mul(pl.row_expand_mul(kv_rope_norm, inv_rms), gamma_rope)
-        # A5 gather indices stay row-sized because wider TCI tiles can overrun UB.
-        rope_ones = pl.full([1, ROPE_HEAD_DIM], dtype=pl.FP32, value=1.0)
-        rope_col = pl.col_expand_mul(rope_ones, pl.cast(pl.arange(0, [1, ROPE_HEAD_DIM], dtype=pl.INT32), target_type=pl.FP32))
-        rope_dup_f = pl.cast(pl.cast(pl.mul(rope_col, 0.5), target_type=pl.INT32, mode="trunc"), target_type=pl.FP32)
-        rope_dup_idx = pl.cast(rope_dup_f, target_type=pl.INT32)                                       # j>>1
-        rope_lane = pl.sub(rope_col, pl.mul(rope_dup_f, 2.0))                                          # j%2
-        rope_swap_idx = pl.cast(pl.sub(pl.add(rope_col, 1.0), pl.mul(rope_lane, 2.0)), target_type=pl.INT32)  # j^1
-        rope_sign = pl.sub(pl.mul(rope_lane, 2.0), 1.0)                                                # [-1,+1,...]
+        # De-interleave and re-interleave adjacent RoPE lanes.
         for rope_row in pl.range(PACKED_RMS_TILE):
-            cos_il = pl.gather(cos_b[rope_row : rope_row + 1, :], dim=-1, index=rope_dup_idx)
-            sin_il = pl.gather(sin_b[rope_row : rope_row + 1, :], dim=-1, index=rope_dup_idx)
             rope_normed_row = rope_normed[rope_row : rope_row + 1, :]
-            swapped = pl.gather(rope_normed_row, dim=-1, index=rope_swap_idx)
-            rope_base = pl.mul(rope_normed_row, cos_il)
-            rope_signed = pl.mul(swapped, rope_sign)
-            rope_delta = pl.mul(rope_signed, sin_il)
-            rope_rot = pl.add(rope_base, rope_delta)
+            rope_even = pl.gather(rope_normed_row, mask_pattern=pl.tile.MaskPattern.P0101)
+            rope_odd = pl.gather(rope_normed_row, mask_pattern=pl.tile.MaskPattern.P1010)
+            rope_cos_row = cos_b[rope_row : rope_row + 1, :]
+            rope_sin_row = sin_b[rope_row : rope_row + 1, :]
+            rope_even_base = pl.mul(rope_even, rope_cos_row)
+            rope_even_signed = pl.neg(rope_odd)
+            rope_even_delta = pl.mul(rope_even_signed, rope_sin_row)
+            rope_even_rot = pl.add(rope_even_base, rope_even_delta)
+            rope_odd_base = pl.mul(rope_odd, rope_cos_row)
+            rope_odd_delta = pl.mul(rope_even, rope_sin_row)
+            rope_odd_rot = pl.add(rope_odd_base, rope_odd_delta)
+            rope_rot_zero = pl.full([1, ROPE_HEAD_DIM], dtype=pl.FP32, value=0.0)
+            rope_rot_even = pl.tensor.scatter(rope_even_rot, mask_pattern=pl.tile.MaskPattern.P0101, dst=rope_rot_zero)
+            rope_rot = pl.tensor.scatter(rope_odd_rot, mask_pattern=pl.tile.MaskPattern.P1010, dst=rope_rot_even)
             rope_out_row = final_base + rope_row
             normed_kv[rope_out_row : rope_out_row + 1, NOPE_HEAD_DIM : HEAD_DIM] = rope_rot
 
-    for final_block in pl.spmd(MAX_CMP_WRITES // PACKED_RMS_TILE, name_hint="prefill_c4_cache_write"):
+    with pl.spmd(
+        MAX_CMP_WRITES // PACKED_RMS_TILE,
+        name_hint="prefill_c4_cache_write",
+    ) as cache_write_tid:
+        final_block = pl.tile.get_block_idx()
         final_base = final_block * PACKED_RMS_TILE
         for final_dt in pl.range(PACKED_RMS_TILE):
             final_i = final_base + final_dt
@@ -313,53 +327,39 @@ def prefill_compressor_ratio4(
                     target_type=pl.BF16,
                     mode="rint",
                 )
-            else:
-                keepalive_row = PREFILL_CMP_BLOCK_NUM * BLOCK_SIZE - MAX_CMP_WRITES + final_i
-                cmp_kv_flat[keepalive_row : keepalive_row + 1, 0:HEAD_DIM] = cmp_kv_flat[
-                    keepalive_row : keepalive_row + 1,
-                    0:HEAD_DIM,
-                ]
 
-    # State writeback: one SPMD task per token (was per token x out-block =
-    # T*PACKED_PROJ_BLOCKS tiny tasks). The per-token guard is checked
-    # once so a skipped token costs one empty task instead of PACKED_PROJ_BLOCKS
-    # of them; out-blocks are looped inside the task at the OUT_TILE width.
-    # pool_dep keeps the (zero-weighted) ordering after the pool and is hoisted
-    # to once per token.
-    for update_t in pl.spmd(T, name_hint="prefill_c4_state_update"):
+    # State writeback must start after every pool task has finished reading the old
+    # state.  Keep this ordering explicit: a zero-weighted pooled value is not a
+    # reliable fence (and NaN * 0 remains NaN).
+    with pl.spmd(T, name_hint="prefill_c4_state_update", deps=[pool_tid]) as state_update_tid:
+        update_t = pl.tile.get_block_idx()
         if update_t < num_tokens:
             state_row_raw = pl.read(state_slot_mapping, [update_t])
             if state_row_raw >= 0:
                 state_row = pl.cast(state_row_raw, pl.INDEX)
                 update_pos = pl.read(position_ids, [update_t])
                 ape_slot = pl.cast(update_pos % COMPRESS_RATIO, pl.INDEX)
-                pool_dep = pl.mul(pooled_kv[0:1, 0:OUT_TILE], 0.0)
                 for update_ob in pl.range(PACKED_PROJ_BLOCKS):
                     update_o0 = update_ob * OUT_TILE
                     ape_row = ape[ape_slot : ape_slot + 1, update_o0 : update_o0 + OUT_TILE]
-                    compress_state_flat[state_row : state_row + 1, update_o0 : update_o0 + OUT_TILE] = pl.add(
+                    compress_state_flat[state_row : state_row + 1, update_o0 : update_o0 + OUT_TILE] = (
                         cmp4_kv_proj_scratch[
                             update_t : update_t + 1,
                             update_o0 : update_o0 + OUT_TILE,
-                        ],
-                        pool_dep,
+                        ]
                     )
                     compress_state_flat[
                         state_row : state_row + 1,
                         OUT_DIM + update_o0 : OUT_DIM + update_o0 + OUT_TILE,
                     ] = pl.add(
-                        pl.add(
-                            cmp4_score_proj_scratch[update_t : update_t + 1, update_o0 : update_o0 + OUT_TILE],
-                            ape_row,
-                        ),
-                        pool_dep,
+                        cmp4_score_proj_scratch[update_t : update_t + 1, update_o0 : update_o0 + OUT_TILE],
+                        ape_row,
                     )
 
-    cmp_kv = pl.reshape(cmp_kv_flat, [PREFILL_CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM])
-    compress_state = pl.reshape(
-        compress_state_flat,
-        [CSA_STATE_BLOCK_NUM, CSA_STATE_BLOCK_SIZE, COMPRESS_STATE_DIM],
-    )
+    completion[0] = pl.system.task_dummy(deps=[cache_write_tid, state_update_tid])
+
+    # The flattened view writes through to the caller-owned root. Returning the
+    # root preserves its runtime-sized global-pool metadata in nested callers.
     return cmp_kv, compress_state
 
 
@@ -369,7 +369,7 @@ def golden_prefill_compressor_ratio4(tensors):
 
     x = tensors["x"].view(T, D).float()
     compress_state_flat = tensors["compress_state"].view(
-        CSA_STATE_BLOCK_NUM * CSA_STATE_BLOCK_SIZE,
+        tensors["compress_state"].shape[0] * CSA_STATE_BLOCK_SIZE,
         COMPRESS_STATE_DIM,
     )
     kv_state_flat = compress_state_flat[:, :OUT_DIM]
@@ -478,7 +478,7 @@ def golden_prefill_compressor_ratio4(tensors):
 def prefill_compressor_ratio4_test(
     x: pl.Tensor[[T, D], pl.BF16],
     compress_state: pl.InOut[
-        pl.Tensor[[CSA_STATE_BLOCK_NUM, CSA_STATE_BLOCK_SIZE, COMPRESS_STATE_DIM], pl.FP32]
+        pl.Tensor[[STATE_BLOCK_NUM_DYN, CSA_STATE_BLOCK_SIZE, COMPRESS_STATE_DIM], pl.FP32]
     ],
     compress_state_block_table: pl.Tensor[[CSA_STATE_MAX_BLOCKS], pl.INT32],
     wkv: pl.Tensor[[OUT_DIM, D], pl.BF16],
@@ -487,15 +487,16 @@ def prefill_compressor_ratio4_test(
     norm_w: pl.Tensor[[HEAD_DIM], pl.BF16],
     freqs_cos: pl.Tensor[[MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16],
     freqs_sin: pl.Tensor[[MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16],
-    cmp_kv: pl.InOut[pl.Tensor[[PREFILL_CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
+    cmp_kv: pl.InOut[pl.Tensor[[CMP_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
     position_ids: pl.Tensor[[T], pl.INT32],
     num_tokens: pl.Scalar[pl.INT32],
     cmp_slot_mapping: pl.Tensor[[T], pl.INT64],
     state_slot_mapping: pl.Tensor[[T], pl.INT64],
 ):
+    completion = pl.array.create(1, pl.TASK_ID)
     return prefill_compressor_ratio4(
         x, compress_state, compress_state_block_table, wkv, wgate, ape, norm_w, freqs_cos, freqs_sin,
-        cmp_kv, position_ids, num_tokens, cmp_slot_mapping, state_slot_mapping,
+        cmp_kv, position_ids, num_tokens, cmp_slot_mapping, state_slot_mapping, completion,
     )
 
 
@@ -568,7 +569,7 @@ def build_tensor_specs(start_pos: int = START_POS):
 
     return [
         TensorSpec("x", [T, D], torch.bfloat16, init_value=init_x),
-        TensorSpec("compress_state", [CSA_STATE_BLOCK_NUM, CSA_STATE_BLOCK_SIZE, COMPRESS_STATE_DIM], torch.float32, init_value=init_compress_state, is_output=True),
+        TensorSpec("compress_state", [CSA_STATE_BLOCK_NUM, CSA_STATE_BLOCK_SIZE, COMPRESS_STATE_DIM], torch.float32, init_value=init_compress_state),
         TensorSpec("compress_state_block_table", [CSA_STATE_MAX_BLOCKS], torch.int32, init_value=init_compress_state_block_table),
         TensorSpec("wkv", [OUT_DIM, D], torch.bfloat16, init_value=init_wkv),
         TensorSpec("wgate", [OUT_DIM, D], torch.bfloat16, init_value=init_wgate),
@@ -576,7 +577,7 @@ def build_tensor_specs(start_pos: int = START_POS):
         TensorSpec("norm_w", [HEAD_DIM], torch.bfloat16, init_value=init_norm_w),
         TensorSpec("freqs_cos", [MAX_SEQ_LEN, ROPE_HEAD_DIM], torch.bfloat16, init_value=init_freqs_cos),
         TensorSpec("freqs_sin", [MAX_SEQ_LEN, ROPE_HEAD_DIM], torch.bfloat16, init_value=init_freqs_sin),
-        TensorSpec("cmp_kv", [PREFILL_CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], torch.bfloat16, init_value=init_cmp_kv, is_output=True),
+        TensorSpec("cmp_kv", [PREFILL_CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], torch.bfloat16, init_value=init_cmp_kv),
         TensorSpec("position_ids", [T], torch.int32, init_value=init_position_ids),
         ScalarSpec("num_tokens", torch.int32, T),
         TensorSpec("cmp_slot_mapping", [T], torch.int64, init_value=init_cmp_slot_mapping),
@@ -586,7 +587,7 @@ def build_tensor_specs(start_pos: int = START_POS):
 
 if __name__ == "__main__":
     import argparse
-    from golden import ratio_allclose, run_jit
+    from golden import ratio_allclose, run
 
     parser = argparse.ArgumentParser(description="Standalone token-major DeepSeek V4 prefill compressor ratio4 validation.")
     parser.add_argument("-p", "--platform", type=str, default="a2a3",
@@ -600,16 +601,16 @@ if __name__ == "__main__":
     )
     parser.add_argument("--start-pos", type=int, default=START_POS,
                         help="Fixture-only absolute position for token 0; lowered into position_ids and dense cmp_slot_mapping.")
-    parser.add_argument("--enable-l2-swimlane", action="store_true", default=False)
+    parser.add_argument("--enable-chip-swimlane", action="store_true", default=False)
     parser.add_argument("--dump-passes", action="store_true", default=False)
     args = parser.parse_args()
 
-    result = run_jit(
+    result = run(
         fn=prefill_compressor_ratio4_test,
         specs=build_tensor_specs(args.start_pos),
         golden_fn=golden_prefill_compressor_ratio4,
         compile_cfg=dict(dump_passes=args.dump_passes),
-        runtime_cfg=dict(platform=args.platform, device_id=args.device, enable_l2_swimlane=args.enable_l2_swimlane),
+        runtime_cfg=dict(platform=args.platform, device_id=args.device, enable_chip_swimlane=args.enable_chip_swimlane),
         compile_only=args.compile_only,
         compare_fn={
             "compress_state": ratio_allclose(atol=1e-3, rtol=1e-3, max_error_ratio=0.0),

@@ -30,6 +30,7 @@ from config import (
 from hc_post import golden_hc_post_prefill, hc_post_prefill
 from hc_pre import golden_hc_pre, hc_pre
 from prefill_compressor_ratio4 import (
+    CMP_STORAGE_BLOCK_SIZE,
     HEAD_DIM,
     OUT_DIM as MAIN_OUT_DIM,
     build_tensor_specs as build_compressor_tensor_specs,
@@ -133,15 +134,21 @@ CP_CANDIDATE_CAPACITY = 1024
 SPARSE_SELECTED_WIDTH = 256
 
 NUM_LOCAL_TILES = LOCAL_PARTS * MAX_SEGMENT_TILES
+# §8.17.8e.2 leaf-capture completion token: number of x_out tile producers
+# (== NUM_LOCAL_TILES here) and also the row count of the rank-local
+# completion_token published by the terminal cp_csa_rank_complete task. Each
+# tile producer writes a distinct token row so no write is dead-store-
+# eliminated. Mirrors prefill_cp_fwd.py:NUM_MOE_WAVES / prefill_cp_layer.py.
+NUM_MOE_WAVES = NUM_LOCAL_TILES
 LOCAL_ROWS = NUM_LOCAL_TILES * T
 LOCAL_SPARSE_ROWS = LOCAL_ROWS * PREFILL_SPARSE_PAD
 MAX_COMPRESS_LEAVES = 1 + MAX_SEGMENT_TILES
 MAIN_LEAF_CACHE_BLOCKS = PREFILL_CMP_BLOCK_NUM
-MAIN_LEAF_CACHE_ROWS = MAIN_LEAF_CACHE_BLOCKS * BLOCK_SIZE
+MAIN_LEAF_CACHE_ROWS = MAIN_LEAF_CACHE_BLOCKS * CMP_STORAGE_BLOCK_SIZE
 IDX_LEAF_CACHE_BLOCKS = PREFILL_IDX_BLOCK_NUM
-IDX_LEAF_CACHE_ROWS = IDX_LEAF_CACHE_BLOCKS * BLOCK_SIZE
+IDX_LEAF_CACHE_ROWS = IDX_LEAF_CACHE_BLOCKS * CMP_STORAGE_BLOCK_SIZE
 LOCAL_LEAVES = LOCAL_PARTS * MAX_COMPRESS_LEAVES
-IDX_CACHE_ROWS = PREFILL_IDX_BLOCK_NUM * BLOCK_SIZE
+IDX_CACHE_ROWS = PREFILL_IDX_BLOCK_NUM * CMP_STORAGE_BLOCK_SIZE
 QK_ROPE_HALF = ROPE_HEAD_DIM // 2
 
 def owner_segments(cp_size: int) -> list[list[int]]:
@@ -353,10 +360,10 @@ def _build_metadata_tensors(
                 logical_main = int(main_logical_slots[segment, row].item())
                 logical_idx = int(idx_logical_slots[segment, row].item())
                 main_slot_mapping[rank, segment, row] = _lower_row(
-                    cmp_table, logical_main, BLOCK_SIZE
+                    cmp_table, logical_main, CMP_STORAGE_BLOCK_SIZE
                 )
                 idx_slot_mapping[rank, segment, row] = _lower_row(
-                    idx_table, logical_idx, BLOCK_SIZE
+                    idx_table, logical_idx, CMP_STORAGE_BLOCK_SIZE
                 )
 
     segment_active_lengths = torch.zeros(
@@ -431,10 +438,14 @@ def _build_metadata_tensors(
     for rank in range(cp_size):
         for logical_slot in range(candidate_history):
             dense_idx_prefix[rank, logical_slot] = _lower_row(
-                tables["idx_block_table"][rank], logical_slot, BLOCK_SIZE
+                tables["idx_block_table"][rank],
+                logical_slot,
+                CMP_STORAGE_BLOCK_SIZE,
             )
             dense_cmp_prefix[rank, logical_slot] = _lower_row(
-                tables["cmp_block_table"][rank], logical_slot, BLOCK_SIZE
+                tables["cmp_block_table"][rank],
+                logical_slot,
+                CMP_STORAGE_BLOCK_SIZE,
             )
 
     tensors = {
@@ -806,7 +817,7 @@ def build_tensor_specs(cp_size: int = CP_SIZE):
     cmp_cache = torch.zeros(
         cp_size,
         PREFILL_CMP_BLOCK_NUM,
-        BLOCK_SIZE,
+        CMP_STORAGE_BLOCK_SIZE,
         1,
         HEAD_DIM,
         dtype=torch.bfloat16,
@@ -814,7 +825,7 @@ def build_tensor_specs(cp_size: int = CP_SIZE):
     idx_cache = torch.zeros(
         cp_size,
         PREFILL_IDX_BLOCK_NUM,
-        BLOCK_SIZE,
+        CMP_STORAGE_BLOCK_SIZE,
         1,
         IDX_HEAD_DIM,
         dtype=torch.int8,
@@ -822,7 +833,7 @@ def build_tensor_specs(cp_size: int = CP_SIZE):
     idx_scale = torch.zeros(
         cp_size,
         PREFILL_IDX_BLOCK_NUM,
-        BLOCK_SIZE,
+        CMP_STORAGE_BLOCK_SIZE,
         1,
         1,
         dtype=torch.float32,
@@ -847,10 +858,14 @@ def build_tensor_specs(cp_size: int = CP_SIZE):
         scale_flat = idx_scale[rank].view(-1, 1)
         for logical_slot in range(completed):
             cmp_row = _lower_row(
-                metadata["cmp_block_table"][rank], logical_slot, BLOCK_SIZE
+                metadata["cmp_block_table"][rank],
+                logical_slot,
+                CMP_STORAGE_BLOCK_SIZE,
             )
             idx_row = _lower_row(
-                metadata["idx_block_table"][rank], logical_slot, BLOCK_SIZE
+                metadata["idx_block_table"][rank],
+                logical_slot,
+                CMP_STORAGE_BLOCK_SIZE,
             )
             if cmp_row >= 0:
                 cmp_flat[cmp_row] = logical_cmp[logical_slot]
@@ -881,15 +896,6 @@ def build_tensor_specs(cp_size: int = CP_SIZE):
                 list(value.shape),
                 value.dtype,
                 init_value=value,
-                is_output=name
-                in {
-                    "compress_state",
-                    "inner_compress_state",
-                    "kv_cache",
-                    "cmp_kv",
-                    "idx_kv_cache",
-                    "idx_kv_scale",
-                },
             )
         )
     for name, value in raw.items():
@@ -952,10 +958,10 @@ def build_tensor_specs(cp_size: int = CP_SIZE):
                     if (position + 1) % COMPRESS_RATIO == 0:
                         logical_slot = (position + 1) // COMPRESS_RATIO - 1
                         leaf_main_slots_input[rank, part, leaf, row] = _lower_row(
-                            cmp_table, logical_slot, BLOCK_SIZE
+                            cmp_table, logical_slot, CMP_STORAGE_BLOCK_SIZE
                         )
                         leaf_idx_slots_input[rank, part, leaf, row] = _lower_row(
-                            idx_table, logical_slot, BLOCK_SIZE
+                            idx_table, logical_slot, CMP_STORAGE_BLOCK_SIZE
                         )
     for name, value in {
         "leaf_positions_input": leaf_positions_input,
@@ -1005,7 +1011,7 @@ def build_tensor_specs(cp_size: int = CP_SIZE):
         )
     specs.append(
         TensorSpec(
-            "x_out", list(x_hc.shape), torch.float32, is_output=True
+            "x_out", list(x_hc.shape), torch.float32
         )
     )
     golden_prefill_cp_csa._ctx = {
@@ -1055,9 +1061,21 @@ def _cp_csa_compress_pack_part(
     # Receiver-local compressed cache and state roots.
     payload_rows = EPOCHS * MAX_COMPRESSED_ROWS_PER_SEGMENT
     state_payload_rows = EPOCHS * STATE_ROWS_PER_RANK
-    main_cache = pl.create_tensor([PREFILL_CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], dtype=pl.BF16, init_value=0.0)
-    idx_cache = pl.create_tensor([PREFILL_IDX_BLOCK_NUM, BLOCK_SIZE, 1, IDX_HEAD_DIM], dtype=pl.INT8, init_value=0)
-    idx_scale = pl.create_tensor([PREFILL_IDX_BLOCK_NUM, BLOCK_SIZE, 1, 1], dtype=pl.FP32, init_value=0.0)
+    main_cache = pl.create_tensor(
+        [PREFILL_CMP_BLOCK_NUM, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM],
+        dtype=pl.BF16,
+        init_value=0.0,
+    )
+    idx_cache = pl.create_tensor(
+        [PREFILL_IDX_BLOCK_NUM, CMP_STORAGE_BLOCK_SIZE, 1, IDX_HEAD_DIM],
+        dtype=pl.INT8,
+        init_value=0,
+    )
+    idx_scale = pl.create_tensor(
+        [PREFILL_IDX_BLOCK_NUM, CMP_STORAGE_BLOCK_SIZE, 1, 1],
+        dtype=pl.FP32,
+        init_value=0.0,
+    )
     main_payload = pl.create_tensor([payload_rows, HEAD_DIM], dtype=pl.BF16, init_value=0.0)
     idx_payload = pl.create_tensor([payload_rows, IDX_HEAD_DIM], dtype=pl.INT8, init_value=0)
     idx_scale_payload = pl.create_tensor([payload_rows, SCALE_TILE_COLS], dtype=pl.FP32, init_value=0.0)
@@ -1333,14 +1351,22 @@ def prefill_cp_csa_core(
         pl.Tensor[[ORI_MAX_BLOCKS, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]
     ],
     cmp_kv: pl.InOut[
-        pl.Tensor[[PREFILL_CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]
+        pl.Tensor[
+            [PREFILL_CMP_BLOCK_NUM, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM],
+            pl.BF16,
+        ]
     ],
     cmp_block_table: pl.Tensor[[PREFILL_CMP_MAX_BLOCKS], pl.INT32],
     idx_kv_cache: pl.InOut[
-        pl.Tensor[[PREFILL_IDX_BLOCK_NUM, BLOCK_SIZE, 1, IDX_HEAD_DIM], pl.INT8]
+        pl.Tensor[
+            [PREFILL_IDX_BLOCK_NUM, CMP_STORAGE_BLOCK_SIZE, 1, IDX_HEAD_DIM],
+            pl.INT8,
+        ]
     ],
     idx_kv_scale: pl.InOut[
-        pl.Tensor[[PREFILL_IDX_BLOCK_NUM, BLOCK_SIZE, 1, 1], pl.FP32]
+        pl.Tensor[
+            [PREFILL_IDX_BLOCK_NUM, CMP_STORAGE_BLOCK_SIZE, 1, 1], pl.FP32
+        ]
     ],
     idx_block_table: pl.Tensor[[IDX_CACHE_MAX_BLOCKS], pl.INT32],
     segment_starts_t: pl.Tensor[[NUM_SEGMENTS], pl.INT32],
@@ -1434,9 +1460,30 @@ def prefill_cp_csa_core(
             [LOCAL_PARTS, MAX_SEGMENT_TILES, T, HC_MULT, D], pl.FP32
         ]
     ],
+    # §8.17.8e.2 leaf-capture completion token. Published atomically by the
+    # terminal cp_csa_rank_complete task (deps=[resource_done_tid]), which fans
+    # the four leaf-internal commit/transport TIDs via a pl.system.task_dummy.
+    # [NUM_MOE_WAVES, 1, 8] = 4 rows x 32B; one row per x_out tile producer so
+    # no row write is dead-store-eliminated. Consumed downstream by
+    # _attention_stage_barrier (copies row 0 into stage_token). The token's
+    # payload value is irrelevant -- only its producer/consumer edges matter.
+    # Placed before the scalars (Scalars-last rule: no tensor arg after a
+    # scalar arg in runtime TaskArgs).
+    completion_token: pl.Out[
+        pl.Tensor[[NUM_MOE_WAVES, 1, 8], pl.FP32]
+    ],
     my_rank: pl.Scalar[pl.INT32],
+    tail_comm_epoch: pl.Scalar[pl.INT32],
+    compact_comm_epoch_base: pl.Scalar[pl.INT32],
 ):
-    """Run inline CP-CSA attention for one rank."""
+    """Run inline CP-CSA attention for one rank.
+
+    ``tail_comm_epoch`` drives the shared cross-layer tail ready/consumed
+    counters; ``compact_comm_epoch_base`` is the base for the CSA compact
+    counters (``compact_comm_epoch_base + local_epoch`` per local wave).
+    Local payload rows stay at ``local_epoch`` (``EPOCHS == 1`` in this
+    phase). Standalone/single-layer callers pass 0 for both.
+    """
     q = pl.create_tensor([LOCAL_ROWS, H, HEAD_DIM], dtype=pl.BF16, init_value=0.0)
     post = pl.create_tensor([LOCAL_ROWS, HC_MULT], dtype=pl.FP32)
     comb = pl.create_tensor([LOCAL_ROWS, HC_MULT * HC_MULT], dtype=pl.FP32)
@@ -1505,13 +1552,13 @@ def prefill_cp_csa_core(
 
     logical_hidden = pl.create_tensor([EPOCHS * CP_TAIL_WINDOW_ROWS, D], dtype=pl.BF16)
     logical_kv = pl.create_tensor([EPOCHS * CP_TAIL_WINDOW_ROWS, HEAD_DIM], dtype=pl.BF16)
-    with pl.at(level=pl.Level.CORE_GROUP, name_hint="cp_csa_tail_exchange"):
+    with pl.at(level=pl.Level.CORE_GROUP, name_hint="cp_csa_tail_exchange") as tail_exchange_tid:
         _prefill_cp_dual_tail_exchange_wave(
             local_hidden_tail, local_kv_tail,
             reverse_index, owner_rank_table,
             hidden_tail_window, kv_tail_window, tail_ready, tail_consumed,
             logical_hidden, logical_kv,
-            my_rank, pl.cast(0, pl.INT32),
+            my_rank, pl.cast(0, pl.INT32), tail_comm_epoch,
         )
 
     effective_x = effective_x_workspace
@@ -1842,11 +1889,19 @@ def prefill_cp_csa_core(
     inner_state_flat = pl.reshape(
         inner_compress_state, [INNER_STATE_ROWS, INNER_STATE_DIM]
     )
+    # §8.17.8e.2 leaf-capture completion token: collect the TaskId of every
+    # leaf-internal commit/transport task so the terminal cp_csa_rank_complete
+    # task can fan them in via pl.system.task_dummy(deps=[...]). With EPOCHS==1
+    # each array holds one entry; the array form keeps the epoch loop's existing
+    # per-epoch structure (idiom: prefill_cp_csa.py:1084 pl.array.create(1, ...) +
+    # :1125 deps=[main_completion[0], inner_completion[0]]).
+    compact_transport_tids = pl.array.create(EPOCHS, pl.TASK_ID)
+    receiver_commit_tids = pl.array.create(EPOCHS, pl.TASK_ID)
     for epoch in pl.range(EPOCHS):
         with pl.at(
             level=pl.Level.CORE_GROUP,
             name_hint="cp_csa_compact_transport",
-        ):
+        ) as compact_transport_tid:
             _prefill_cp_csa_compact_transport_wave(
                 packed_main_payload,
                 packed_idx_payload,
@@ -1868,11 +1923,15 @@ def prefill_cp_csa_core(
                 compact_consumed,
                 my_rank,
                 pl.cast(epoch, pl.INT32),
+                pl.cast(compact_comm_epoch_base + epoch, pl.INT32),
             )
+        # Store the captured TaskId for this epoch (idiom:
+        # prefill_sparse_attn.py:300 proj_a_tids[...] = pa_tid).
+        compact_transport_tids[epoch] = compact_transport_tid
         with pl.at(
             level=pl.Level.CORE_GROUP,
             name_hint="cp_csa_receiver_commit",
-        ):
+        ) as receiver_commit_tid:
             for source_rank in pl.range(CP_SIZE):
                 source_row = source_rank * ROWS_PER_RANK
                 source_state_row = source_rank * STATE_ROWS_PER_RANK
@@ -1885,7 +1944,7 @@ def prefill_cp_csa_core(
                         main_valid = pl.read(record_window, [meta_row, 4])
                         main_slot = pl.read(record_window, [meta_row, 5])
                         if main_valid > 0 and main_slot >= 0:
-                            logical_block = main_slot // BLOCK_SIZE
+                            logical_block = main_slot // CMP_STORAGE_BLOCK_SIZE
                             if logical_block < PREFILL_CMP_MAX_BLOCKS:
                                 physical_block = pl.read(
                                     cmp_block_table, [logical_block]
@@ -1893,15 +1952,15 @@ def prefill_cp_csa_core(
                                 if physical_block >= 0:
                                     destination = (
                                         pl.cast(physical_block, pl.INDEX)
-                                        * BLOCK_SIZE
-                                        + main_slot % BLOCK_SIZE
+                                        * CMP_STORAGE_BLOCK_SIZE
+                                        + main_slot % CMP_STORAGE_BLOCK_SIZE
                                     )
                                     received_main_tile = main_window[meta_row : meta_row + 1, 0:HEAD_DIM]
                                     cmp_flat[destination : destination + 1, 0:HEAD_DIM] = received_main_tile
                         idx_valid = pl.read(record_window, [meta_row, 6])
                         idx_slot = pl.read(record_window, [meta_row, 7])
                         if idx_valid > 0 and idx_slot >= 0:
-                            logical_block = idx_slot // BLOCK_SIZE
+                            logical_block = idx_slot // CMP_STORAGE_BLOCK_SIZE
                             if logical_block < IDX_CACHE_MAX_BLOCKS:
                                 physical_block = pl.read(
                                     idx_block_table, [logical_block]
@@ -1909,8 +1968,8 @@ def prefill_cp_csa_core(
                                 if physical_block >= 0:
                                     destination = (
                                         pl.cast(physical_block, pl.INDEX)
-                                        * BLOCK_SIZE
-                                        + idx_slot % BLOCK_SIZE
+                                        * CMP_STORAGE_BLOCK_SIZE
+                                        + idx_slot % CMP_STORAGE_BLOCK_SIZE
                                     )
                                     received_idx_tile = idx_window[meta_row : meta_row + 1, 0:IDX_HEAD_DIM]
                                     idx_flat[destination : destination + 1, 0:IDX_HEAD_DIM] = received_idx_tile
@@ -1964,6 +2023,9 @@ def prefill_cp_csa_core(
                                 inner_destination_end = destination + 1
                                 inner_state_flat[destination:inner_destination_end, :] = received_inner_state
             _prefill_cp_csa_compact_finish_wave(compact_consumed, my_rank)
+        # Store the captured receiver-commit TaskId for this epoch (idiom:
+        # prefill_sparse_attn.py:300 proj_a_tids[...] = pa_tid).
+        receiver_commit_tids[epoch] = receiver_commit_tid
 
     cmp_indices = pl.create_tensor([LOCAL_ROWS, IDX_TOPK], dtype=pl.INT32, init_value=-1)
     for tile in pl.range(NUM_LOCAL_TILES):
@@ -2002,7 +2064,9 @@ def prefill_cp_csa_core(
     valid_mask = pl.create_tensor([LOCAL_ROWS, VALID_BLOCK_MASK_COLS], dtype=pl.INT32, init_value=0)
     _prefill_cp_sparse_stage(
         cache_flat, local_kv, logical_kv,
-        cmp_flat, cmp_block_table,
+        cmp_kv,
+        cmp_block_table,
+        pl.cast(CMP_STORAGE_BLOCK_SIZE, pl.INT32),
         query_positions_flat, query_requests_flat,
         overlay_positions_flat, overlay_requests_flat,
         predecessor_segments_local, segment_starts_local,
@@ -2010,7 +2074,7 @@ def prefill_cp_csa_core(
         sparse_kv, sparse_bias, valid_mask, overlay_active_flat,
     )
 
-    with pl.at(level=pl.Level.CORE_GROUP, name_hint="cp_csa_raw_commit"):
+    with pl.at(level=pl.Level.CORE_GROUP, name_hint="cp_csa_raw_commit") as raw_commit_tid:
         for row in pl.range(T):
             raw_segment = pl.read(final_win_seg_src, [row])
             raw_source_row = pl.read(final_win_row_src, [row])
@@ -2055,6 +2119,41 @@ def prefill_cp_csa_core(
             y_tile, active,
         )
         x_out_flat[row0 : row0 + T, 0:HC_MULT, 0:D] = y_tile
+
+    # §8.17.8e.2 leaf-capture completion token. Fan the four leaf-internal
+    # commit/transport TaskIds into a single resource_done_tid via
+    # pl.system.task_dummy (a no-op task that only waits -- idiom:
+    # prefill_compressor_ratio4.py:338 completion[0] = pl.system.task_dummy(...)).
+    # Only these four paths are waited; they are NOT serialized against each
+    # other, no new dep is added into any existing internal task, and no dep is
+    # added into the MoE. compact_transport_tids / receiver_commit_tids are
+    # pl.array.create(EPOCHS, pl.TASK_ID); with EPOCHS==1 each contributes one
+    # entry via [0]. tail_exchange_tid and raw_commit_tid are scalar TaskIds
+    # captured by the `as <tid>:` form (idiom: prefill_sparse_attn.py:289
+    # `with pl.at(..., deps=[merge_tid]) as pa_tid`).
+    resource_done_tid = pl.system.task_dummy(
+        deps=[
+            tail_exchange_tid,
+            compact_transport_tids[0],
+            receiver_commit_tids[0],
+            raw_commit_tid,
+        ]
+    )
+    # Terminal rank-complete task: deps=[resource_done_tid] (the four-path
+    # fan-in) AND an AUTO dep on the four x_out tile producers established by
+    # the slice-copy reads of x_out_flat below. Writes one tile slice per
+    # distinct token row --禁止反复覆盖同一个 [0:1, 0:1, 0:8]，否则前面三次写可能
+    # 被 dead-store elimination 消除 (user design requirement). Each row is
+    # 8 × FP32 = 32B, satisfying the pto.alloc_tile 32-byte column alignment.
+    with pl.at(
+        level=pl.Level.CORE_GROUP,
+        name_hint="cp_csa_rank_complete",
+        deps=[resource_done_tid],
+    ):
+        for tile in pl.range(NUM_MOE_WAVES):
+            completion_token[tile : tile + 1, 0:1, 0:8] = pl.slice(
+                x_out_flat, [1, 1, 8], [tile * T, 0, 0]
+            )
 
     return pl.reshape(x_out_flat, [LOCAL_PARTS, MAX_SEGMENT_TILES, T, HC_MULT, D])
 
@@ -2123,14 +2222,22 @@ def prefill_cp_csa_rank(
         pl.Tensor[[ORI_MAX_BLOCKS, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]
     ],
     cmp_kv: pl.InOut[
-        pl.Tensor[[PREFILL_CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]
+        pl.Tensor[
+            [PREFILL_CMP_BLOCK_NUM, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM],
+            pl.BF16,
+        ]
     ],
     cmp_block_table: pl.Tensor[[PREFILL_CMP_MAX_BLOCKS], pl.INT32],
     idx_kv_cache: pl.InOut[
-        pl.Tensor[[PREFILL_IDX_BLOCK_NUM, BLOCK_SIZE, 1, IDX_HEAD_DIM], pl.INT8]
+        pl.Tensor[
+            [PREFILL_IDX_BLOCK_NUM, CMP_STORAGE_BLOCK_SIZE, 1, IDX_HEAD_DIM],
+            pl.INT8,
+        ]
     ],
     idx_kv_scale: pl.InOut[
-        pl.Tensor[[PREFILL_IDX_BLOCK_NUM, BLOCK_SIZE, 1, 1], pl.FP32]
+        pl.Tensor[
+            [PREFILL_IDX_BLOCK_NUM, CMP_STORAGE_BLOCK_SIZE, 1, 1], pl.FP32
+        ]
     ],
     idx_block_table: pl.Tensor[[IDX_CACHE_MAX_BLOCKS], pl.INT32],
     segment_starts_t: pl.Tensor[[NUM_SEGMENTS], pl.INT32],
@@ -2227,6 +2334,16 @@ def prefill_cp_csa_rank(
     my_rank: pl.Scalar[pl.INT32],
 ):
     """Run standalone CP-CSA attention for one rank."""
+    # §8.17.8e.2 leaf-capture completion token: child-local, allocated here and
+    # passed into prefill_cp_csa_core (which publishes it via its terminal
+    # cp_csa_rank_complete task). The standalone test does not consume the
+    # token -- it only certifies, within this rank's graph, that the
+    # leaf-internal commit/transport tasks retired before x_out is published.
+    # Keeping it child-local avoids changing the standalone test's host
+    # interface / build_tensor_specs (the token is not a host-visible output).
+    completion_token = pl.create_tensor(
+        [NUM_MOE_WAVES, 1, 8], dtype=pl.FP32, init_value=0.0
+    )
     return prefill_cp_csa_core(
         x_hc, hc_attn_fn, hc_attn_scale, hc_attn_base, attn_norm_w, wq_a, wq_b, wq_b_scale,
         wkv, gamma_cq, gamma_ckv, freqs_cos, freqs_sin, cmp_wkv, cmp_wgate, cmp_ape,
@@ -2238,7 +2355,8 @@ def prefill_cp_csa_rank(
         leaf_positions_input, leaf_main_slots_input, leaf_idx_slots_input, leaf_main_state_slots_input, leaf_inner_state_slots_input, leaf_num_tokens_input, effective_x_workspace, hidden_tail_window,
         kv_tail_window, tail_ready, tail_consumed, main_window, idx_window, scale_window, record_window, main_state_window,
         main_state_meta_window, inner_state_window, inner_state_meta_window, compact_ready, compact_consumed, attn_sink, wo_a, wo_b,
-        wo_b_scale, x_out, my_rank,
+        wo_b_scale, x_out, completion_token, my_rank,
+        pl.cast(0, pl.INT32), pl.cast(0, pl.INT32),
     )
 
 @pl.jit.host
@@ -2299,7 +2417,14 @@ def prefill_cp_csa_test(
     ],
     cmp_kv: pl.InOut[
         pl.Tensor[
-            [CP_SIZE, PREFILL_CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16
+            [
+                CP_SIZE,
+                PREFILL_CMP_BLOCK_NUM,
+                CMP_STORAGE_BLOCK_SIZE,
+                1,
+                HEAD_DIM,
+            ],
+            pl.BF16,
         ]
     ],
     cmp_block_table: pl.Tensor[
@@ -2307,12 +2432,20 @@ def prefill_cp_csa_test(
     ],
     idx_kv_cache: pl.InOut[
         pl.Tensor[
-            [CP_SIZE, PREFILL_IDX_BLOCK_NUM, BLOCK_SIZE, 1, IDX_HEAD_DIM], pl.INT8
+            [
+                CP_SIZE,
+                PREFILL_IDX_BLOCK_NUM,
+                CMP_STORAGE_BLOCK_SIZE,
+                1,
+                IDX_HEAD_DIM,
+            ],
+            pl.INT8,
         ]
     ],
     idx_kv_scale: pl.InOut[
         pl.Tensor[
-            [CP_SIZE, PREFILL_IDX_BLOCK_NUM, BLOCK_SIZE, 1, 1], pl.FP32
+            [CP_SIZE, PREFILL_IDX_BLOCK_NUM, CMP_STORAGE_BLOCK_SIZE, 1, 1],
+            pl.FP32,
         ]
     ],
     idx_block_table: pl.Tensor[[CP_SIZE, IDX_CACHE_MAX_BLOCKS], pl.INT32],
@@ -2765,20 +2898,20 @@ def golden_prefill_cp_csa(tensors):
                 continue
             main_cache = torch.zeros(
                 MAIN_LEAF_CACHE_BLOCKS,
-                BLOCK_SIZE,
+                CMP_STORAGE_BLOCK_SIZE,
                 1,
                 HEAD_DIM,
                 dtype=torch.bfloat16,
             )
             idx_cache = torch.zeros(
                 IDX_LEAF_CACHE_BLOCKS,
-                BLOCK_SIZE,
+                CMP_STORAGE_BLOCK_SIZE,
                 1,
                 IDX_HEAD_DIM,
                 dtype=torch.int8,
             )
             idx_scale = torch.zeros(
-                IDX_LEAF_CACHE_BLOCKS, BLOCK_SIZE, 1, 1
+                IDX_LEAF_CACHE_BLOCKS, CMP_STORAGE_BLOCK_SIZE, 1, 1
             )
             main_map = torch.full((T,), -1, dtype=torch.int64)
             idx_map = torch.full((T,), -1, dtype=torch.int64)
@@ -2877,13 +3010,17 @@ def golden_prefill_cp_csa(tensors):
         scale_flat = scale_out[rank].view(-1, 1)
         for logical_slot, value in cmp_published.items():
             row = _lower_row(
-                tensors["cmp_block_table"][rank], logical_slot, BLOCK_SIZE
+                tensors["cmp_block_table"][rank],
+                logical_slot,
+                CMP_STORAGE_BLOCK_SIZE,
             )
             if row >= 0:
                 cmp_flat[row] = value
         for logical_slot, value in idx_published.items():
             row = _lower_row(
-                tensors["idx_block_table"][rank], logical_slot, BLOCK_SIZE
+                tensors["idx_block_table"][rank],
+                logical_slot,
+                CMP_STORAGE_BLOCK_SIZE,
             )
             if row >= 0:
                 idx_flat[row] = value
@@ -2979,7 +3116,9 @@ def golden_prefill_cp_csa(tensors):
         scale_flat = scale_out[rank].view(-1)
         for logical_slot in range(max_visible):
             row = _lower_row(
-                tensors["idx_block_table"][rank], logical_slot, BLOCK_SIZE
+                tensors["idx_block_table"][rank],
+                logical_slot,
+                CMP_STORAGE_BLOCK_SIZE,
             )
             cache_rows.append(
                 idx_flat[row]
@@ -3069,6 +3208,7 @@ def golden_prefill_cp_csa(tensors):
                         "swa_indices": tensors["swa_indices"][rank, part, tile],
                         "cmp_kv": cmp_out[rank],
                         "cmp_block_table": tensors["cmp_block_table"][rank],
+                        "cmp_storage_block_size": CMP_STORAGE_BLOCK_SIZE,
                         "cmp_indices": topk[part, tile],
                         "attn_sink": tensors["attn_sink"],
                         "num_tokens": active,
@@ -3137,16 +3277,16 @@ if __name__ == "__main__":
     parser.add_argument("--cp", type=int, default=CP_SIZE, choices=CP_CHOICES)
     parser.add_argument("--compile-only", action="store_true")
     parser.add_argument("--dump-passes", action="store_true")
-    parser.add_argument("--enable-l2-swimlane", action="store_true")
+    parser.add_argument("--enable-chip-swimlane", action="store_true")
     args = parser.parse_args()
-    from golden import ratio_allclose, ratio_reldiff, run_jit
+    from golden import ratio_allclose, ratio_reldiff, run
 
     if args.cp != CP_SIZE:
         raise SystemExit(f"--cp={args.cp} does not match import-time CP_SIZE={CP_SIZE}")
     device_ids = [int(device) for device in args.device.split(",")]
     if len(device_ids) < args.cp:
         raise SystemExit(f"CP{args.cp} requires {args.cp} devices, got {device_ids}")
-    result = run_jit(
+    result = run(
         fn=prefill_cp_csa_test,
         specs=build_tensor_specs(args.cp),
         golden_fn=golden_prefill_cp_csa,
@@ -3159,7 +3299,7 @@ if __name__ == "__main__":
         ),
         runtime_cfg=dict(
             platform=args.platform,
-            enable_l2_swimlane=args.enable_l2_swimlane,
+            enable_chip_swimlane=args.enable_chip_swimlane,
         ),
         rtol=1e-2,
         atol=1e-2,

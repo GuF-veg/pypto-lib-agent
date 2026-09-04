@@ -52,6 +52,7 @@ HEADS_PER_GROUP = H // O_GROUPS
 O_GROUP_IN = HEADS_PER_GROUP * HEAD_DIM
 
 COMPRESS_RATIO = 128
+CMP_STORAGE_BLOCK_SIZE = BLOCK_SIZE // COMPRESS_RATIO
 NEG_INF = -1.0e20
 
 # paged KV cache
@@ -116,7 +117,7 @@ def sparse_attn_hca(
     q: pl.Tensor[[T, H, HEAD_DIM], pl.BF16],
     ori_kv: pl.Tensor[[ORI_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
     window_swa_indices: pl.Tensor[[T, WIN], pl.INT32],
-    cmp_kv: pl.Tensor[[CMP_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
+    cmp_kv: pl.Tensor[[CMP_BLOCK_NUM_DYN, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
     cmp_block_table: pl.Tensor[[B, CMP_MAX_BLOCKS], pl.INT32],
     cmp_sparse_indices: pl.Tensor[[T, CMP_TOPK], pl.INT32],
     attn_sink: pl.Tensor[[H], pl.FP32],
@@ -135,7 +136,7 @@ def sparse_attn_hca(
     ori_block_num = pl.tensor.dim(ori_kv, 0)
     cmp_block_num = pl.tensor.dim(cmp_kv, 0)
     ori_kv_flat = pl.reshape(ori_kv, [ori_block_num * BLOCK_SIZE, HEAD_DIM])
-    cmp_kv_flat = pl.reshape(cmp_kv, [cmp_block_num * BLOCK_SIZE, HEAD_DIM])
+    cmp_kv_flat = pl.reshape(cmp_kv, [cmp_block_num * CMP_STORAGE_BLOCK_SIZE, HEAD_DIM])
     sparse_bias = pl.create_tensor([T, PADDED_TOPK], dtype=pl.FP32)
 
     # Additive softmax bias (0 valid / NEG_INF invalid) that qk_pv adds onto the
@@ -205,8 +206,7 @@ def sparse_attn_hca(
             if g_cmp_k < CMP_TOPK:
                 g_ridx = pl.read(cmp_sparse_indices, [g_t, g_cmp_k])
                 if g_ridx >= 0:
-                    g_cblk = pl.cast(pl.read(cmp_block_table, [g_b, g_ridx // BLOCK_SIZE]), pl.INDEX)
-                    g_csrc = g_cblk * BLOCK_SIZE + g_ridx % BLOCK_SIZE
+                    g_csrc = pl.cast(pl.read(cmp_block_table, [g_b, g_ridx]), pl.INDEX)
                     hca_kv_flat[g_dst : g_dst + 1, 0:HEAD_DIM] = cmp_kv_flat[g_csrc : g_csrc + 1, 0:HEAD_DIM]
                 else:
                     hca_kv_flat[g_dst : g_dst + 1, 0:HEAD_DIM] = pl.full([1, HEAD_DIM], dtype=pl.BF16, value=0.0)
@@ -480,7 +480,7 @@ def sparse_attn_test(
     q: pl.Tensor[[T, H, HEAD_DIM], pl.BF16],
     ori_kv: pl.Tensor[[ORI_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
     window_swa_indices: pl.Tensor[[T, WIN], pl.INT32],
-    cmp_kv: pl.Tensor[[CMP_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
+    cmp_kv: pl.Tensor[[CMP_BLOCK_NUM_DYN, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
     cmp_block_table: pl.Tensor[[B, CMP_MAX_BLOCKS], pl.INT32],
     cmp_sparse_indices: pl.Tensor[[T, CMP_TOPK], pl.INT32],
     attn_sink: pl.Tensor[[H], pl.FP32],
@@ -552,9 +552,8 @@ def golden_sparse_attn(tensors):
                 valid.append(False)
                 continue
             cmp_slot = int(raw)
-            blk_id = int(cmp_block_table[b, cmp_slot // BLOCK_SIZE].item())
-            intra = cmp_slot % BLOCK_SIZE
-            kv_rows.append(cmp_kv[blk_id, intra, 0])
+            row = int(cmp_block_table[b, cmp_slot].item())
+            kv_rows.append(cmp_kv.reshape(-1, HEAD_DIM)[row])
             valid.append(True)
 
         if not any(valid):
@@ -675,7 +674,7 @@ def build_tensor_specs(
 
     def init_cmp_kv():
         """Initialize the compressed-cache KV pages."""
-        return torch.rand(CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM) - 0.5
+        return torch.rand(CMP_BLOCK_NUM, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM) - 0.5
 
     def init_attn_sink():
         """Initialize the per-head sink logits to zero."""
@@ -687,7 +686,11 @@ def build_tensor_specs(
 
     def init_cmp_block_table():
         """Build the demo block table for the compressed-cache pages."""
-        return block_table(batch=B, table_blocks=CMP_MAX_BLOCKS, physical_blocks=CMP_BLOCK_NUM)
+        return block_table(
+            batch=B,
+            table_blocks=CMP_MAX_BLOCKS,
+            physical_blocks=CMP_BLOCK_NUM,
+        )
 
     def init_cmp_sparse_indices():
         """Build the sparse index list with a full window prefix and padded compressed tail.
@@ -743,7 +746,7 @@ def build_tensor_specs(
         TensorSpec("q", [T, H, HEAD_DIM], torch.bfloat16, init_value=init_q),
         TensorSpec("ori_kv", [ORI_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], torch.bfloat16, init_value=init_ori_kv),
         TensorSpec("window_swa_indices", [T, WIN], torch.int32, init_value=init_window_swa_indices),
-        TensorSpec("cmp_kv", [CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], torch.bfloat16, init_value=init_cmp_kv),
+        TensorSpec("cmp_kv", [CMP_BLOCK_NUM, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], torch.bfloat16, init_value=init_cmp_kv),
         TensorSpec("cmp_block_table", [B, CMP_MAX_BLOCKS], torch.int32, init_value=init_cmp_block_table),
         TensorSpec("cmp_sparse_indices", [T, CMP_TOPK], torch.int32, init_value=init_cmp_sparse_indices),
         TensorSpec("attn_sink", [H], torch.float32, init_value=init_attn_sink),
@@ -752,13 +755,13 @@ def build_tensor_specs(
         TensorSpec("wo_a", [O_GROUPS, O_LORA, O_GROUP_IN], torch.bfloat16, init_value=init_wo_a),
         TensorSpec("wo_b", [D, O_GROUPS * O_LORA], torch.int8, init_value=init_wo_b),
         TensorSpec("wo_b_scale", [D], torch.float32, init_value=init_wo_b_scale),
-        TensorSpec("attn_out", [T, D], torch.bfloat16, is_output=True),
+        TensorSpec("attn_out", [T, D], torch.bfloat16),
     ]
 
 
 if __name__ == "__main__":
     import argparse
-    from golden import ratio_allclose, run_jit
+    from golden import ratio_allclose, run
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--platform", type=str, default="a2a3", choices=["a2a3", "a2a3sim", "a5", "a5sim"])
@@ -772,7 +775,7 @@ if __name__ == "__main__":
     parser.add_argument("--cache-window-replacement-fixture", action="store_true", default=False,
                         help="Place a sentinel row inside the cache window prefix.")
     parser.add_argument("--golden-data", type=str, default=None)
-    parser.add_argument("--enable-l2-swimlane", action="store_true", default=False)
+    parser.add_argument("--enable-chip-swimlane", action="store_true", default=False)
     parser.add_argument("--enable-dep-gen", action="store_true", default=False,
                         help="Capture PTO2 dependency edges (deps.json); the swimlane "
                              "converter draws fanout/fanin arrows from the sibling file.")
@@ -782,7 +785,7 @@ if __name__ == "__main__":
 
     print(f"compress_ratio={COMPRESS_RATIO} -> TOPK={TOPK} SPARSE_BLOCKS={SPARSE_BLOCKS} PADDED_TOPK={PADDED_TOPK}", flush=True)
 
-    result = run_jit(
+    result = run(
         fn=sparse_attn_test,
         specs=build_tensor_specs(
             args.causal_regression_fixture,
@@ -796,7 +799,7 @@ if __name__ == "__main__":
         runtime_cfg=dict(
             platform=args.platform,
             device_id=args.device,
-            enable_l2_swimlane=args.enable_l2_swimlane,
+            enable_chip_swimlane=args.enable_chip_swimlane,
             enable_dep_gen=args.enable_dep_gen,
             enable_pmu=args.enable_pmu,
         ),

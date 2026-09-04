@@ -53,6 +53,7 @@ O_GROUPS = M.o_groups
 HEADS_PER_GROUP = H // O_GROUPS
 O_GROUP_IN = HEADS_PER_GROUP * HEAD_DIM
 COMPRESS_RATIO = 4
+CMP_STORAGE_BLOCK_SIZE = BLOCK_SIZE // COMPRESS_RATIO
 COMPRESS_RATIO_INV = 1.0 / COMPRESS_RATIO
 INDEXER_SCORE_LEN = MAX_SEQ_LEN // 4
 CSA_CMP_GE_BIAS = 1.0  # raw + 1, folded for the ge clamp
@@ -89,11 +90,8 @@ TOPK = WIN + CMP_TOPK
 SPARSE_BLOCKS = max(2, (TOPK + ATTN_K_TILE - 1) // ATTN_K_TILE)
 PADDED_TOPK = SPARSE_BLOCKS * ATTN_K_TILE
 QK_ITEMS = T * SPARSE_BLOCKS   # qk_pv work items: one per (token, sparse block)
-# Page-contiguous runs one sliding-window K tile spans. WIN, not the K tile size,
-# caps how many window rows a tile can hold; BLOCK_SIZE only sets where the cuts
-# fall, being where physical contiguity breaks. So: those rows plus a worst-case
-# BLOCK_SIZE - 1 head offset, rounded up to pages -- 2 whenever WIN <= BLOCK_SIZE,
-# whatever ATTN_K_TILE is, and it grows on its own if either outgrows a page.
+# Page-contiguous runs one sliding-window K tile spans: WIN rows capped by the tile,
+# plus a worst-case BLOCK_SIZE - 1 head offset, rounded up to pages.
 SWA_TILE_WIN_ROWS = min(ATTN_K_TILE, WIN)
 SWA_RUNS = (SWA_TILE_WIN_ROWS + 2 * (BLOCK_SIZE - 1)) // BLOCK_SIZE
 
@@ -103,7 +101,7 @@ def sparse_attn_csa(
     q: pl.Tensor[[T, H, HEAD_DIM], pl.BF16],
     ori_kv: pl.Tensor[[ORI_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
     window_swa_indices: pl.Tensor[[T, WIN], pl.INT32],
-    cmp_kv: pl.Tensor[[CMP_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
+    cmp_kv: pl.Tensor[[CMP_BLOCK_NUM_DYN, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
     cmp_block_table: pl.Tensor[[B, CMP_MAX_BLOCKS], pl.INT32],
     idx_topk: pl.Tensor[[T, INDEXER_SCORE_LEN], pl.INT32],
     position_ids: pl.Tensor[[T, 1], pl.INT32],
@@ -121,18 +119,13 @@ def sparse_attn_csa(
     ori_kv_flat = pl.reshape(ori_kv, [ori_block_num * BLOCK_SIZE, HEAD_DIM])
 
     # WAR marker (pypto-lib#481): a scalar-driven gather_row does not mark ori_kv
-    # add_inout by itself, so the enclosing layer's in-place KV-cache writeback would
-    # lose its WAR edge against the qk_pv gather read. add_inout is a param-level
-    # property, so this one no-op tile self-copy suffices.
+    # add_inout, so the layer's KV writeback would lose its WAR edge against the
+    # qk_pv gather read. add_inout is param-level, so this no-op self-copy suffices.
     with pl.at(level=pl.Level.CORE_GROUP, name_hint="kv_touch", allow_early_resolve=True):
         ori_kv_flat[0:T, 0:HEAD_DIM] = ori_kv_flat[0:T, 0:HEAD_DIM]
 
-    # qk_plan compacts the T*SPARSE_BLOCKS (token, sparse-block) work items into
-    # qk_order[] -- non-empty tiles (valid_block_mask > 0) first, empty tiles
-    # appended -- through one running write cursor, so qk_pv's NUM_QK_CORES lanes
-    # take the heavy tiles one-per-lane before any lane takes a second. The
-    # T/SPARSE_BLOCKS scan loops are trace-time unrolled so the cursor
-    # read-modify-write is an explicit sequential chain.
+    # qk_plan compacts the T*SPARSE_BLOCKS work items into qk_order[], non-empty
+    # tiles (valid_block_mask > 0) first, so qk_pv's lanes take the heavy tiles first.
     sparse_bias = pl.create_tensor([T, PADDED_TOPK], dtype=pl.FP32)
     cmp_sparse_indices = pl.create_tensor([T, CMP_TOPK], dtype=pl.INT32)
     valid_block_mask = pl.create_tensor([T, SPARSE_BLOCKS], dtype=pl.INT32)
@@ -196,7 +189,7 @@ def sparse_attn_csa(
     # window/compressed KV rows into one L1 matmul operand; invalid lanes gather a
     # finite row and are zeroed by the NEG_INF softmax bias.
     cmp_block_num = pl.tensor.dim(cmp_kv, 0)
-    cmp_kv_flat = pl.reshape(cmp_kv, [cmp_block_num * BLOCK_SIZE, HEAD_DIM])
+    cmp_kv_flat = pl.reshape(cmp_kv, [cmp_block_num * CMP_STORAGE_BLOCK_SIZE, HEAD_DIM])
     q_flat = pl.reshape(q, [T * H, HEAD_DIM])
     sparse_blk_mi = pl.create_tensor([T * (H // H_TILE) * SPARSE_BLOCKS * H_TILE, 1], dtype=pl.FP32)
     sparse_blk_li = pl.create_tensor([T * (H // H_TILE) * SPARSE_BLOCKS * H_TILE, 1], dtype=pl.FP32)
@@ -224,21 +217,17 @@ def sparse_attn_csa(
                 # WIN == ATTN_K_TILE, none for a compressed tile.
                 qk_win_rows = pl.min(pl.max(WIN - qk_s0, 0), ATTN_K_TILE)
                 if qk_win_rows > 0:
-                    # The window is consecutive absolute positions and paged KV keeps one
-                    # page's positions in consecutive rows, so these rows are SWA_RUNS
-                    # page-contiguous runs -- one multi-row gather each (row count carried
-                    # by valid_shape) instead of a single-row DMA per row. Visible length
-                    # and start mirror the metadata producers
-                    # (decode_metadata.build_swa_metadata / utils.swa_indices_and_lens).
+                    # Window rows are consecutive absolute positions and paged KV keeps a
+                    # page's positions consecutive, so they form SWA_RUNS page-contiguous
+                    # runs -- one multi-row gather each, row count via valid_shape. Mirrors
+                    # decode_prepare.build_swa_metadata / utils.swa_indices_and_lens.
                     qk_pos = pl.cast(pl.read(position_ids, [qk_t, 0]), pl.INDEX)
                     qk_win_len = pl.min(qk_pos + 1, WIN)
                     qk_win_start = qk_pos - qk_win_len + 1
                     qk_run_rows = pl.min(pl.max(qk_win_len - qk_s0, 0), qk_win_rows)
-                    # qk_head is how far into its page this tile's first window row sits,
-                    # so run i holds the rows landing in the i-th page the tile touches:
-                    # [i * BLOCK_SIZE - qk_head, (i + 1) * BLOCK_SIZE - qk_head) clipped to
-                    # [0, qk_run_rows). Run 0 is the short one, every later run is page
-                    # aligned, and runs past the end clip empty -- no carried cursor.
+                    # qk_head is how far into its page the tile's first window row sits, so
+                    # run i holds [i * BLOCK_SIZE - qk_head, (i + 1) * BLOCK_SIZE - qk_head)
+                    # clipped to [0, qk_run_rows). Run 0 is short, later runs are page aligned.
                     qk_head = (qk_win_start + qk_s0) % BLOCK_SIZE
                     for qk_run in pl.unroll(SWA_RUNS):
                         qk_run_lo = pl.max(qk_run * BLOCK_SIZE - qk_head, 0)
@@ -264,33 +253,35 @@ def sparse_attn_csa(
                         qk_ridx = pl.read(cmp_sparse_indices, [qk_t, qk_cmp_k])
                         if qk_ridx >= 0:
                             qk_slot = qk_ridx
-                            qk_cblk = pl.cast(pl.read(cmp_block_table, [qk_b, qk_slot // BLOCK_SIZE]), pl.INDEX)
-                            qk_csrc = qk_cblk * BLOCK_SIZE + qk_slot % BLOCK_SIZE
+                            qk_cblk = pl.cast(
+                                pl.read(
+                                    cmp_block_table,
+                                    [qk_b, qk_slot // CMP_STORAGE_BLOCK_SIZE],
+                                ),
+                                pl.INDEX,
+                            )
+                            qk_csrc = qk_cblk * CMP_STORAGE_BLOCK_SIZE + qk_slot % CMP_STORAGE_BLOCK_SIZE
                             qk_kv = pl.gather_row(qk_kv, cmp_kv_flat, [qk_r, 0], [qk_csrc, 0], [1, HEAD_DIM])
                         else:
                             qk_kv = pl.gather_row(qk_kv, ori_kv_flat, [qk_r, 0], [0, 0], [1, HEAD_DIM])
                     else:
                         qk_kv = pl.gather_row(qk_kv, ori_kv_flat, [qk_r, 0], [0, 0], [1, HEAD_DIM])
 
-                # Cube-batch QK_M_TILE head rows per QK/PV matmul so the shared KV
-                # tile is extracted L1->L0 once per QK_M_TILE/H_TILE head-tiles
-                # (2x reuse at QK_M_TILE=32) instead of per head-tile. The
-                # [QK_M_TILE, ...] softmax result is sliced back into H_TILE-row
-                # stores at the SAME offsets as the per-head-tile path
-                # (qk_h_idx == qk_hb * (QK_M_TILE // H_TILE) + qk_sub), so the
-                # sparse_blk_* layout and merge_norm are bit-identical.
+                # Cube-batch QK_M_TILE head rows per QK/PV matmul so the shared KV tile
+                # is extracted L1->L0 once per QK_M_TILE/H_TILE head-tiles. The softmax
+                # result slices back into H_TILE-row stores at the same offsets as the
+                # per-head-tile path, keeping sparse_blk_* and merge_norm identical.
                 for qk_hb in pl.pipeline(H // QK_M_TILE, stage=2):
                     qk_h0 = qk_hb * QK_M_TILE
                     qk_head_row = qk_t * H + qk_h0
                     qk_q_tile = q_flat[qk_head_row : qk_head_row + QK_M_TILE, 0 : HEAD_DIM]
                     qk_raw = pl.matmul(qk_q_tile, qk_kv, b_trans=True, out_dtype=pl.FP32)
                     qk_scaled = pl.mul(qk_raw, SOFTMAX_SCALE)
-                    # Broadcast-add the per-block bias directly (col_expand_add) instead
-                    # of col_expand into a dead pl.full(0) base + a separate add.
+                    # Per-block bias broadcast-added in one op.
                     qk_scores = pl.col_expand_add(qk_scaled, qk_bias_row)
                     qk_mi = pl.row_max(qk_scores)
-                    # Invalid lanes (NEG_INF bias, zero kv rows) exp to ~0; all-invalid
-                    # blocks die in the merge alpha/beta -- no mask multiply needed.
+                    # Invalid lanes (NEG_INF bias) exp to ~0; all-invalid blocks die in
+                    # the merge alpha/beta, so no mask multiply is needed.
                     qk_exp = pl.exp(pl.row_expand_sub(qk_scores, qk_mi))
                     qk_li = pl.row_sum(qk_exp)
                     qk_exp_bf16 = pl.cast(qk_exp, target_type=pl.BF16, mode="rint")
@@ -379,9 +370,8 @@ def sparse_attn_csa(
 
         # Inverse RoPE on this head-tile's fp32 rope segment. cos_il / sign*sin are
         # head-invariant for token m_t, so col_expand them over the H_TILE head rows;
-        # rope_swap_idx (j^1, prebuilt above) pairs the interleaved real/imag lanes.
-        # Rounded to bf16 (golden also rounds inverse-RoPE to bf16) and packed into
-        # o_packed's rope columns.
+        # rope_swap_idx (j^1) pairs the interleaved real/imag lanes. Rounded to bf16
+        # to match the golden.
         m_rope = n_full[0 : H_TILE, NOPE_DIM : HEAD_DIM]
         m_cos_il = rope_cos_il[m_t : m_t + 1, 0 : ROPE_DIM]
         m_sin_signed = rope_sin_signed[m_t : m_t + 1, 0 : ROPE_DIM]
@@ -393,16 +383,13 @@ def sparse_attn_csa(
         for n_hi in pl.unroll(H_TILE):
             n_pack_row = ((m_h0 + n_hi) // HEADS_PER_GROUP) * T + m_t
             n_col = ((m_h0 + n_hi) % HEADS_PER_GROUP) * HEAD_DIM
-            # one HEAD_DIM-wide store per head row instead of two: concat the nope and
-            # inverse-RoPE halves on chip so o_packed takes a single contiguous write.
+            # Nope and inverse-RoPE halves concatenated on chip: one contiguous store.
             o_packed[n_pack_row : n_pack_row + 1, n_col : n_col + HEAD_DIM] = n_full_bf16[n_hi : n_hi + 1, :]
 
-    # Back-to-back grouped output projection: proj_a[g] -> quant[g] -> proj_b[g]
-    # pipelines per group, because the PER-GROUP amax keeps the quant reduction
-    # inside one O_LORA group instead of barriering the whole row. manual_scope
-    # suppresses auto-dep, so every edge is explicit: proj_a waits on merge_norm,
-    # quant[g] on proj_a[g], proj_b[g] on quant[g]. proj_b_act combines the group
-    # partials with their row scales and is the consolidated attn_out writer.
+    # Grouped output projection pipelined per group as proj_a[g] -> quant[g] ->
+    # proj_b[g]; the per-group amax keeps the quant reduction inside one O_LORA
+    # group. manual_scope suppresses auto-dep, so every edge is explicit.
+    # proj_b_act combines the group partials and is the sole attn_out writer.
     o_r_pad = pl.create_tensor([T_PAD, O_GROUPS * O_LORA], dtype=pl.FP32)
     o_r_i8_pad = pl.create_tensor([T_PAD, O_GROUPS * O_LORA], dtype=pl.INT8)
     act_scale_dq = pl.create_tensor([O_GROUPS, T], dtype=pl.FP32)
@@ -507,7 +494,7 @@ def sparse_attn_test(
     q: pl.Tensor[[T, H, HEAD_DIM], pl.BF16],
     ori_kv: pl.Tensor[[ORI_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
     window_swa_indices: pl.Tensor[[T, WIN], pl.INT32],
-    cmp_kv: pl.Tensor[[CMP_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
+    cmp_kv: pl.Tensor[[CMP_BLOCK_NUM_DYN, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
     cmp_block_table: pl.Tensor[[B, CMP_MAX_BLOCKS], pl.INT32],
     idx_topk: pl.Tensor[[T, INDEXER_SCORE_LEN], pl.INT32],
     position_ids: pl.Tensor[[T, 1], pl.INT32],
@@ -578,9 +565,8 @@ def golden_sparse_attn(tensors):
                 valid.append(False)
                 continue
             cmp_slot = int(raw)
-            blk_id = int(cmp_block_table[b, cmp_slot // BLOCK_SIZE].item())
-            intra = cmp_slot % BLOCK_SIZE
-            kv_rows.append(cmp_kv[blk_id, intra, 0])
+            block_id = int(cmp_block_table[b, cmp_slot // CMP_STORAGE_BLOCK_SIZE].item())
+            kv_rows.append(cmp_kv[block_id, cmp_slot % CMP_STORAGE_BLOCK_SIZE, 0])
             valid.append(True)
 
         if not any(valid):
@@ -708,7 +694,7 @@ def build_tensor_specs(
 
     def init_cmp_kv():
         """Initialize the compressed-cache KV pages."""
-        return torch.rand(CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM) - 0.5
+        return torch.rand(CMP_BLOCK_NUM, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM) - 0.5
 
     def init_attn_sink():
         """Initialize the per-head sink logits to zero."""
@@ -720,7 +706,8 @@ def build_tensor_specs(
 
     def init_cmp_block_table():
         """Build the demo block table for the compressed-cache pages."""
-        return block_table(batch=B, table_blocks=CMP_MAX_BLOCKS, physical_blocks=CMP_BLOCK_NUM)
+        rows = torch.arange(CMP_MAX_BLOCKS, dtype=torch.int32) % CMP_BLOCK_NUM
+        return rows.unsqueeze(0).expand(B, -1).clone()
 
     def init_cmp_sparse_indices():
         """Build the compressed sparse index list."""
@@ -780,7 +767,7 @@ def build_tensor_specs(
         TensorSpec("q", [T, H, HEAD_DIM], torch.bfloat16, init_value=init_q),
         TensorSpec("ori_kv", [ORI_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], torch.bfloat16, init_value=init_ori_kv),
         TensorSpec("window_swa_indices", [T, WIN], torch.int32, init_value=init_window_swa_indices),
-        TensorSpec("cmp_kv", [CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], torch.bfloat16, init_value=init_cmp_kv),
+        TensorSpec("cmp_kv", [CMP_BLOCK_NUM, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], torch.bfloat16, init_value=init_cmp_kv),
         TensorSpec("cmp_block_table", [B, CMP_MAX_BLOCKS], torch.int32, init_value=init_cmp_block_table),
         TensorSpec("idx_topk", [T, INDEXER_SCORE_LEN], torch.int32, init_value=init_idx_topk),
         TensorSpec("position_ids", [T, 1], torch.int32, init_value=init_position_ids),
@@ -790,13 +777,13 @@ def build_tensor_specs(
         TensorSpec("wo_a", [O_GROUPS, O_LORA, O_GROUP_IN], torch.bfloat16, init_value=init_wo_a),
         TensorSpec("wo_b", [D, O_GROUPS * O_LORA], torch.int8, init_value=init_wo_b),
         TensorSpec("wo_b_scale", [D], torch.float32, init_value=init_wo_b_scale),
-        TensorSpec("attn_out", [T, D], torch.bfloat16, is_output=True),
+        TensorSpec("attn_out", [T, D], torch.bfloat16),
     ]
 
 
 if __name__ == "__main__":
     import argparse
-    from golden import ratio_allclose, run_jit
+    from golden import ratio_allclose, run
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--platform", type=str, default="a2a3", choices=["a2a3", "a2a3sim", "a5", "a5sim"])
@@ -810,7 +797,7 @@ if __name__ == "__main__":
     parser.add_argument("--cache-window-replacement-fixture", action="store_true", default=False,
                         help="Place a sentinel row inside the cache window prefix.")
     parser.add_argument("--golden-data", type=str, default=None)
-    parser.add_argument("--enable-l2-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2))
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2))
     parser.add_argument("--enable-dep-gen", action="store_true", default=False,
                         help="Capture PTO2 dependency edges (deps.json) for the swimlane converter.")
     parser.add_argument("--enable-pmu", nargs="?", const=2, default=0, type=int, choices=[0, 1, 2, 4])
@@ -819,7 +806,7 @@ if __name__ == "__main__":
 
     print(f"compress_ratio={COMPRESS_RATIO} -> TOPK={TOPK} SPARSE_BLOCKS={SPARSE_BLOCKS} PADDED_TOPK={PADDED_TOPK}", flush=True)
 
-    result = run_jit(
+    result = run(
         fn=sparse_attn_test,
         specs=build_tensor_specs(
             args.causal_regression_fixture,
@@ -833,7 +820,7 @@ if __name__ == "__main__":
         runtime_cfg=dict(
             platform=args.platform,
             device_id=args.device,
-            enable_l2_swimlane=args.enable_l2_swimlane,
+            enable_chip_swimlane=args.enable_chip_swimlane,
             enable_dep_gen=args.enable_dep_gen,
             enable_pmu=args.enable_pmu,
         ),

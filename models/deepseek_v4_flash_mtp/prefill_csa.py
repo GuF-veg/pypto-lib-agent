@@ -84,6 +84,7 @@ Q_LORA = M.q_lora_rank
 MAX_SEQ_LEN = M.max_position_embeddings
 WIN = M.sliding_window
 COMPRESS_RATIO = 4
+CMP_STORAGE_BLOCK_SIZE = BLOCK_SIZE // COMPRESS_RATIO
 START_POS = 0
 IDX_HEAD_DIM = M.index_head_dim
 IDX_N_HEADS = M.index_n_heads
@@ -118,7 +119,7 @@ CSA_TOPK_TOKEN_TILE = 2
 assert S == WIN, "packed CSA prefill currently assumes one static window page"
 assert COMPRESS_RATIO == INDEXER_COMPRESS_RATIO
 assert PREFILL_ATTN_BLOCKS <= VALID_BLOCK_MASK_COLS
-assert INDEXER_TOPK_CAP <= SPARSE_CMP_MAX_BLOCKS * BLOCK_SIZE
+assert INDEXER_TOPK_CAP <= SPARSE_CMP_MAX_BLOCKS * CMP_STORAGE_BLOCK_SIZE
 
 
 @pl.jit.inline
@@ -159,10 +160,10 @@ def prefill_attention_csa(
     kv_cache: pl.InOut[pl.Tensor[[ORI_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
     ori_block_table: pl.Tensor[[SPARSE_ORI_MAX_BLOCKS], pl.INT32],
     ori_slot_mapping: pl.Tensor[[T], pl.INT64],
-    cmp_kv: pl.Out[pl.Tensor[[CMP_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
+    cmp_kv: pl.InOut[pl.Tensor[[CMP_BLOCK_NUM_DYN, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
     cmp_block_table: pl.Tensor[[SPARSE_CMP_MAX_BLOCKS], pl.INT32],
-    idx_kv_cache: pl.Out[pl.Tensor[[IDX_BLOCK_NUM_DYN, BLOCK_SIZE, 1, IDX_HEAD_DIM], pl.INT8]],
-    idx_kv_scale: pl.Out[pl.Tensor[[IDX_BLOCK_NUM_DYN, BLOCK_SIZE, 1, 1], pl.FP32]],
+    idx_kv_cache: pl.Out[pl.Tensor[[IDX_BLOCK_NUM_DYN, CMP_STORAGE_BLOCK_SIZE, 1, IDX_HEAD_DIM], pl.INT8]],
+    idx_kv_scale: pl.Out[pl.Tensor[[IDX_BLOCK_NUM_DYN, CMP_STORAGE_BLOCK_SIZE, 1, 1], pl.FP32]],
     idx_block_table: pl.Tensor[[IDX_CACHE_MAX_BLOCKS], pl.INT32],
     position_ids: pl.Tensor[[T], pl.INT32],
     cmp_slot_mapping: pl.Tensor[[T], pl.INT64],
@@ -309,7 +310,7 @@ def prefill_attention_csa(
     attn_out = pl.create_tensor([T, D], dtype=pl.BF16)
     sparse_attn(
         q, kv_cache, swa_indices,
-        cmp_kv, cmp_block_table,
+        cmp_kv, cmp_block_table, pl.cast(CMP_STORAGE_BLOCK_SIZE, pl.INT32),
         cmp_topk_indices,
         valid_block_mask,
         attn_sink, num_tokens,
@@ -367,10 +368,10 @@ def prefill_attention_csa_test(
     kv_cache: pl.InOut[pl.Tensor[[ORI_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
     ori_block_table: pl.Tensor[[SPARSE_ORI_MAX_BLOCKS], pl.INT32],
     ori_slot_mapping: pl.Tensor[[T], pl.INT64],
-    cmp_kv: pl.Out[pl.Tensor[[CMP_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
+    cmp_kv: pl.InOut[pl.Tensor[[CMP_BLOCK_NUM_DYN, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
     cmp_block_table: pl.Tensor[[SPARSE_CMP_MAX_BLOCKS], pl.INT32],
-    idx_kv_cache: pl.InOut[pl.Tensor[[IDX_BLOCK_NUM_DYN, BLOCK_SIZE, 1, IDX_HEAD_DIM], pl.INT8]],
-    idx_kv_scale: pl.InOut[pl.Tensor[[IDX_BLOCK_NUM_DYN, BLOCK_SIZE, 1, 1], pl.FP32]],
+    idx_kv_cache: pl.InOut[pl.Tensor[[IDX_BLOCK_NUM_DYN, CMP_STORAGE_BLOCK_SIZE, 1, IDX_HEAD_DIM], pl.INT8]],
+    idx_kv_scale: pl.InOut[pl.Tensor[[IDX_BLOCK_NUM_DYN, CMP_STORAGE_BLOCK_SIZE, 1, 1], pl.FP32]],
     idx_block_table: pl.Tensor[[IDX_CACHE_MAX_BLOCKS], pl.INT32],
     position_ids: pl.Tensor[[T], pl.INT32],
     cmp_slot_mapping: pl.Tensor[[T], pl.INT64],
@@ -542,6 +543,7 @@ def golden_prefill_attention_csa(tensors):
         "swa_indices": swa_indices,
         "cmp_kv": tensors["cmp_kv"],
         "cmp_block_table": tensors["cmp_block_table"],
+        "cmp_storage_block_size": CMP_STORAGE_BLOCK_SIZE,
         "cmp_indices": cmp_indices,
         "attn_sink": tensors["attn_sink"],
         "num_tokens": tensors["num_tokens"],
@@ -607,10 +609,10 @@ def build_tensor_specs(
         raise ValueError(
             f"needs {max_sparse_rows} sparse rows; current packed sparse CSA cap is {SPARSE_PREFILL_SPARSE_PAD}"
         )
-    if max_visible_cmp > SPARSE_CMP_MAX_BLOCKS * BLOCK_SIZE:
+    if max_visible_cmp > SPARSE_CMP_MAX_BLOCKS * CMP_STORAGE_BLOCK_SIZE:
         raise ValueError(
             f"needs {max_visible_cmp} compressed slots; current cmp cache cap is "
-            f"{SPARSE_CMP_MAX_BLOCKS * BLOCK_SIZE}"
+            f"{SPARSE_CMP_MAX_BLOCKS * CMP_STORAGE_BLOCK_SIZE}"
         )
     def token_pos():
         # Single-request absolute positions: pos[t] = context_len + local_idx
@@ -739,16 +741,18 @@ def build_tensor_specs(
     def _build_idx_hist():
         if "cache" in _idx_hist:
             return
-        cache_i8 = torch.zeros(PREFILL_IDX_BLOCK_NUM, BLOCK_SIZE, 1, IDX_HEAD_DIM, dtype=torch.int8)
-        scale = torch.zeros(PREFILL_IDX_BLOCK_NUM, BLOCK_SIZE, 1, 1)
-        c_flat = cache_i8.view(PREFILL_IDX_BLOCK_NUM * BLOCK_SIZE, IDX_HEAD_DIM)
-        s_flat = scale.view(PREFILL_IDX_BLOCK_NUM * BLOCK_SIZE, 1)
+        cache_i8 = torch.zeros(
+            PREFILL_IDX_BLOCK_NUM, CMP_STORAGE_BLOCK_SIZE, 1, IDX_HEAD_DIM, dtype=torch.int8
+        )
+        scale = torch.zeros(PREFILL_IDX_BLOCK_NUM, CMP_STORAGE_BLOCK_SIZE, 1, 1)
+        c_flat = cache_i8.view(PREFILL_IDX_BLOCK_NUM * CMP_STORAGE_BLOCK_SIZE, IDX_HEAD_DIM)
+        s_flat = scale.view(PREFILL_IDX_BLOCK_NUM * CMP_STORAGE_BLOCK_SIZE, 1)
         table = init_idx_block_table()
         completed = context_len // COMPRESS_RATIO
         for cmp_slot in range(completed):
-            if cmp_slot >= SPARSE_CMP_MAX_BLOCKS * BLOCK_SIZE:
+            if cmp_slot >= SPARSE_CMP_MAX_BLOCKS * CMP_STORAGE_BLOCK_SIZE:
                 break
-            row = cache_row_from_table(table, cmp_slot)
+            row = cache_row_from_table(table, cmp_slot, block_size=CMP_STORAGE_BLOCK_SIZE)
             if row >= 0:
                 hist_bf16 = ((torch.rand(IDX_HEAD_DIM,) - 0.5) * 0.05).to(torch.bfloat16)
                 hi8, hsc = int8_quant_per_row(hist_bf16.float().view(1, IDX_HEAD_DIM))
@@ -786,14 +790,14 @@ def build_tensor_specs(
             mapping[t] = cache_row_from_table(table, int(pos[t].item()))
         return mapping
     def init_cmp_kv():
-        cache = torch.zeros(CSA_CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM)
-        cache_flat = cache.view(CSA_CMP_BLOCK_NUM * BLOCK_SIZE, HEAD_DIM)
+        cache = torch.zeros(CSA_CMP_BLOCK_NUM, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM)
+        cache_flat = cache.view(CSA_CMP_BLOCK_NUM * CMP_STORAGE_BLOCK_SIZE, HEAD_DIM)
         table = init_cmp_block_table()
         completed = context_len // COMPRESS_RATIO
         for cmp_slot in range(completed):
-            if cmp_slot >= SPARSE_CMP_MAX_BLOCKS * BLOCK_SIZE:
+            if cmp_slot >= SPARSE_CMP_MAX_BLOCKS * CMP_STORAGE_BLOCK_SIZE:
                 break
-            row = cache_row_from_table(table, cmp_slot)
+            row = cache_row_from_table(table, cmp_slot, block_size=CMP_STORAGE_BLOCK_SIZE)
             value = (torch.rand(HEAD_DIM,) - 0.5) * 0.1
             if row >= 0:
                 cache_flat[row] = value.to(torch.bfloat16)
@@ -815,14 +819,18 @@ def build_tensor_specs(
         table = init_cmp_block_table()
         records = cmp_write_records()
         for token_id, cmp_slot in records:
-            mapping[token_id] = cache_row_from_table(table, cmp_slot)
+            mapping[token_id] = cache_row_from_table(
+                table, cmp_slot, block_size=CMP_STORAGE_BLOCK_SIZE
+            )
         return mapping
     def init_idx_slot_mapping():
         mapping = torch.full((T,), -1, dtype=torch.int64)
         table = init_idx_block_table()
         records = cmp_write_records()
         for token_id, cmp_slot in records:
-            mapping[token_id] = cache_row_from_table(table, cmp_slot)
+            mapping[token_id] = cache_row_from_table(
+                table, cmp_slot, block_size=CMP_STORAGE_BLOCK_SIZE
+            )
         return mapping
     def init_state_slot_mapping():
         mapping = torch.full((T,), -1, dtype=torch.int64)
@@ -892,7 +900,7 @@ def build_tensor_specs(
         ),
         TensorSpec("inner_compress_state_block_table", [INNER_STATE_MAX_BLOCKS], torch.int32, init_value=init_inner_compress_state_block_table),
         TensorSpec("kv_cache", [CSA_ORI_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], torch.bfloat16,
-                   init_value=init_kv_cache, is_output=True),
+                   init_value=init_kv_cache),
         TensorSpec("ori_block_table", [SPARSE_ORI_MAX_BLOCKS], torch.int32, init_value=init_ori_block_table),
         TensorSpec("ori_slot_mapping", [T], torch.int64, init_value=init_ori_slot_mapping),
         # Compressor / indexer caches are written in-place but not validated here
@@ -900,20 +908,20 @@ def build_tensor_specs(
         # prefill_indexer tests cover them.
         TensorSpec(
             "cmp_kv",
-            [CSA_CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM],
+            [CSA_CMP_BLOCK_NUM, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM],
             torch.bfloat16,
             init_value=init_cmp_kv,
         ),
         TensorSpec("cmp_block_table", [SPARSE_CMP_MAX_BLOCKS], torch.int32, init_value=init_cmp_block_table),
         TensorSpec(
             "idx_kv_cache",
-            [PREFILL_IDX_BLOCK_NUM, BLOCK_SIZE, 1, IDX_HEAD_DIM],
+            [PREFILL_IDX_BLOCK_NUM, CMP_STORAGE_BLOCK_SIZE, 1, IDX_HEAD_DIM],
             torch.int8,
             init_value=init_idx_kv_cache,
         ),
         TensorSpec(
             "idx_kv_scale",
-            [PREFILL_IDX_BLOCK_NUM, BLOCK_SIZE, 1, 1],
+            [PREFILL_IDX_BLOCK_NUM, CMP_STORAGE_BLOCK_SIZE, 1, 1],
             torch.float32,
             init_value=init_idx_kv_scale,
         ),
@@ -927,7 +935,7 @@ def build_tensor_specs(
         TensorSpec("wo_a", [O_GROUPS, O_LORA, O_GROUP_IN], torch.bfloat16, init_value=init_wo_a),
         TensorSpec("wo_b", [D, O_GROUPS * O_LORA], torch.int8, init_value=lambda: wo_b_i8),
         TensorSpec("wo_b_scale", [D], torch.float32, init_value=lambda: wo_b_scale),
-        TensorSpec("x_out", [T, HC_MULT, D], torch.float32, is_output=True),
+        TensorSpec("x_out", [T, HC_MULT, D], torch.float32),
         ScalarSpec("num_tokens", torch.int32, num_tokens),
     ]
 
@@ -945,7 +953,7 @@ def _quant_w_per_output_channel_local(w):
 
 if __name__ == "__main__":
     import argparse
-    from golden import ratio_allclose, ratio_reldiff, run_jit
+    from golden import ratio_allclose, ratio_reldiff, run
 
     parser = argparse.ArgumentParser(description="Standalone DeepSeek V4 packed prefill CSA correctness test.")
     parser.add_argument("-p", "--platform", type=str, default="a2a3", choices=["a2a3", "a2a3sim", "a5", "a5sim"])
@@ -955,7 +963,7 @@ if __name__ == "__main__":
                         help="context_len (multiple of S=WIN); fixture-only, lowered into token metadata.")
     parser.add_argument("--num-tokens", type=int, default=T,
                         help="Active token count (q_len), capped by T; passed to the kernel as num_tokens.")
-    parser.add_argument("--enable-l2-swimlane", action="store_true", default=False)
+    parser.add_argument("--enable-chip-swimlane", action="store_true", default=False)
     parser.add_argument("--enable-dep-gen", action="store_true", default=False)
     parser.add_argument("--dump-passes", action="store_true", default=False)
     args = parser.parse_args()
@@ -969,7 +977,7 @@ if __name__ == "__main__":
     # elements), but keep the 0.5% fraction bar identical to full prefill.
     x_out_diff_thd, x_out_max_diff = (8e-3, 2) if args.start_pos else (5e-3, 1)
 
-    result = run_jit(
+    result = run(
         fn=prefill_attention_csa_test,
         specs=build_tensor_specs(
             args.start_pos,
@@ -980,7 +988,7 @@ if __name__ == "__main__":
         runtime_cfg=dict(
             platform=args.platform,
             device_id=args.device,
-            enable_l2_swimlane=args.enable_l2_swimlane,
+            enable_chip_swimlane=args.enable_chip_swimlane,
             enable_dep_gen=args.enable_dep_gen,
         ),
         rtol=1e-2,
@@ -990,6 +998,7 @@ if __name__ == "__main__":
             "x_out": ratio_reldiff(diff_thd=x_out_diff_thd, pct_thd=0.005, max_diff_hd=x_out_max_diff,
                                    valid_rows=compare_tokens, zero_tail=True),
             "kv_cache": ratio_allclose(atol=1e-4, rtol=1.0 / 128),
+            "idx_kv_cache": ratio_allclose(atol=1, rtol=0.0, max_error_ratio=0.0),
         },
     )
     if not result.passed:

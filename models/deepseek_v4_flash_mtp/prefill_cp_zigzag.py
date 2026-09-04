@@ -380,14 +380,14 @@ def build_tensor_specs():
         TensorSpec("owner_rank_table", [NUM_SEGMENTS], torch.int32, init_value=owner_rank),
         TensorSpec("final_win_seg_src", [TAIL_ROWS], torch.int32, init_value=final_segment.to(torch.int32)),
         TensorSpec("final_win_row_src", [TAIL_ROWS], torch.int32, init_value=final_row.to(torch.int32)),
-        TensorSpec("logical_tails_out", [CP_SIZE, CP_TAIL_WINDOW_ROWS, HEAD_DIM], torch.bfloat16, is_output=True),
-        TensorSpec("decode_raw_window_out", [CP_SIZE, TAIL_ROWS, HEAD_DIM], torch.bfloat16, is_output=True),
+        TensorSpec("logical_tails_out", [CP_SIZE, CP_TAIL_WINDOW_ROWS, HEAD_DIM], torch.bfloat16),
+        TensorSpec("decode_raw_window_out", [CP_SIZE, TAIL_ROWS, HEAD_DIM], torch.bfloat16),
     ]
 
 
 if __name__ == "__main__":
     import argparse
-    from golden import run_jit
+    from golden import run
 
     parser = argparse.ArgumentParser(description="Standalone context-parallel zigzag exchange test.")
     parser.add_argument("-p", "--platform", default="a2a3", choices=["a2a3", "a2a3sim", "a5", "a5sim"])
@@ -402,7 +402,7 @@ if __name__ == "__main__":
     if len(device_ids) < args.cp:
         raise SystemExit(f"CP{args.cp} requires {args.cp} devices, got {device_ids}")
 
-    result = run_jit(
+    result = run(
         fn=prefill_cp_zigzag_kv_tail_exchange_test,
         specs=build_tensor_specs(),
         golden_fn=golden_prefill_cp_zigzag_kv_tail_exchange,

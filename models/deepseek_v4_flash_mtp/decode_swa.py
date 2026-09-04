@@ -124,6 +124,19 @@ def attention_swa(
 
     x_normed_t = pl.create_tensor([T, D], dtype=pl.BF16)
     rms_tid = rms_norm(x_mixed, attn_norm_w, x_normed_t)
+    # SDMA CMO L2 warm of this layer's attention weights, in deadline order.
+    wq_a_flat = pl.reshape(wq_a, [D * Q_LORA])
+    wkv_flat = pl.reshape(wkv, [D * HEAD_DIM])
+    wq_b_flat = pl.reshape(wq_b, [Q_LORA * H * HEAD_DIM])
+    wo_a_flat = pl.reshape(wo_a, [O_GROUPS * O_LORA * O_GROUP_IN])
+    wo_b_flat = pl.reshape(wo_b, [D * O_GROUPS * O_LORA])
+    with pl.at(level=pl.Level.CORE_GROUP, name_hint="prefetch_attn_w", deps=[rms_tid]):
+        warm_ctx = pl.prefetch.make_context()
+        pl.prefetch.async_prefetch(wq_a_flat, warm_ctx)
+        pl.prefetch.async_prefetch(wkv_flat, warm_ctx)
+        pl.prefetch.async_prefetch(wq_b_flat, warm_ctx)
+        pl.prefetch.async_prefetch(wo_a_flat, warm_ctx)
+        pl.prefetch.async_prefetch(wo_b_flat, warm_ctx)
     # Defers kv_proj_matmul one hop behind rms_norm so qr_proj_matmul dispatches first.
     late_dep = pl.system.task_dummy(deps=[rms_tid])
     q = pl.create_tensor([T, H, HEAD_DIM], dtype=pl.BF16)
@@ -449,7 +462,7 @@ def build_tensor_specs(start_pos=None):
         TensorSpec("gamma_ckv", [HEAD_DIM], torch.bfloat16, init_value=init_gamma_ckv),
         TensorSpec("freqs_cos", [MAX_SEQ_LEN, ROPE_HEAD_DIM], torch.bfloat16, init_value=init_freqs_cos),
         TensorSpec("freqs_sin", [MAX_SEQ_LEN, ROPE_HEAD_DIM], torch.bfloat16, init_value=init_freqs_sin),
-        TensorSpec("kv_cache", [ORI_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], torch.bfloat16, init_value=init_kv_cache, is_output=True),
+        TensorSpec("kv_cache", [ORI_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], torch.bfloat16, init_value=init_kv_cache),
         TensorSpec("swa_slot_mapping", [T], torch.int64, init_value=init_swa_slot_mapping),
         TensorSpec("swa_indices", [T, WIN], torch.int32, init_value=init_swa_indices),
         TensorSpec("swa_lens", [T], torch.int32, init_value=init_swa_lens),
@@ -458,13 +471,13 @@ def build_tensor_specs(start_pos=None):
         TensorSpec("wo_a", [O_GROUPS, O_LORA, O_GROUP_IN], torch.bfloat16, init_value=init_wo_a),
         TensorSpec("wo_b", [D, O_GROUPS * O_LORA], torch.int8, init_value=lambda: wo_b_i8),
         TensorSpec("wo_b_scale", [D], torch.float32, init_value=lambda: wo_b_scale),
-        TensorSpec("x_out", [T, HC_MULT, D], torch.float32, is_output=True),
+        TensorSpec("x_out", [T, HC_MULT, D], torch.float32),
     ]
 
 
 if __name__ == "__main__":
     import argparse
-    from golden import ratio_allclose, ratio_reldiff, run_jit
+    from golden import ratio_allclose, ratio_reldiff, run
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--platform", type=str, default="a2a3",
@@ -473,13 +486,13 @@ if __name__ == "__main__":
     parser.add_argument("--start-pos", type=int, default=None,
                         help="Uniform fixture-only start_pos override for all batches; "
                              "default (unset) uses the canonical per-batch SWA set that includes the 8k point.")
-    parser.add_argument("--enable-l2-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2, 4))
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2, 4))
     parser.add_argument("--runtime-dir", type=str, default=None)
     parser.add_argument("--golden-data", type=str, default=None)
     parser.add_argument("--dump-passes", action="store_true", default=False)
     args = parser.parse_args()
 
-    result = run_jit(
+    result = run(
         fn=attention_swa_test,
         specs=build_tensor_specs(args.start_pos),
         golden_fn=golden_attention_swa,
@@ -489,7 +502,7 @@ if __name__ == "__main__":
         runtime_cfg=dict(
             platform=args.platform,
             device_id=args.device,
-            enable_l2_swimlane=args.enable_l2_swimlane,
+            enable_chip_swimlane=args.enable_chip_swimlane,
         ),
         rtol=1e-2,
         atol=1e-2,

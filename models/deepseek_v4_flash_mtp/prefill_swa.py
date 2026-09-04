@@ -180,15 +180,24 @@ def prefill_attention_swa(
                 valid_block_mask, mask_row, [idx_t, 0]
             )
 
-    cmp_block_table_dummy = pl.create_tensor(
-        [SPARSE_CMP_MAX_BLOCKS], dtype=pl.INT32, init_value=0
-    )
+    cmp_block_table_dummy = pl.create_tensor([SPARSE_CMP_MAX_BLOCKS], dtype=pl.INT32)
     cmp_kv_dummy = pl.create_tensor([CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], dtype=pl.BF16)
-    cmp_indices_dummy = pl.create_tensor([T, IDX_TOPK], dtype=pl.INT32, init_value=-1)
+    cmp_indices_dummy = pl.create_tensor([T, IDX_TOPK], dtype=pl.INT32)
+    cmp_block_table_dummy_2d = pl.reshape(
+        cmp_block_table_dummy, [1, SPARSE_CMP_MAX_BLOCKS]
+    )
+    with pl.at(level=pl.Level.CORE_GROUP, name_hint="prefill_swa_cmp_dummy_init"):
+        cmp_block_table_dummy_2d[:, :] = pl.full(
+            [1, SPARSE_CMP_MAX_BLOCKS], dtype=pl.INT32, value=0
+        )
+    for dummy_t in pl.spmd(T, name_hint="prefill_swa_cmp_indices_dummy_init"):
+        cmp_indices_dummy[dummy_t : dummy_t + 1, :] = pl.full(
+            [1, IDX_TOPK], dtype=pl.INT32, value=-1
+        )
     attn_out = pl.create_tensor([T, D], dtype=pl.BF16)
     sparse_attn(
         q, kv_cache, swa_indices,
-        cmp_kv_dummy, cmp_block_table_dummy,
+        cmp_kv_dummy, cmp_block_table_dummy, pl.cast(BLOCK_SIZE, pl.INT32),
         cmp_indices_dummy,
         valid_block_mask,
         attn_sink, num_tokens,
@@ -473,7 +482,7 @@ def build_tensor_specs(
         TensorSpec("freqs_cos", [MAX_SEQ_LEN, ROPE_HEAD_DIM], torch.bfloat16, init_value=init_freqs_cos),
         TensorSpec("freqs_sin", [MAX_SEQ_LEN, ROPE_HEAD_DIM], torch.bfloat16, init_value=init_freqs_sin),
         TensorSpec("kv_cache", [BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], torch.bfloat16,
-                   init_value=init_kv_cache, is_output=True),
+                   init_value=init_kv_cache),
         TensorSpec("block_table", [BLOCK_NUM], torch.int32, init_value=init_block_table),
         TensorSpec("ori_slot_mapping", [T], torch.int64, init_value=init_ori_slot_mapping),
         TensorSpec("position_ids", [T], torch.int32, init_value=init_position_ids),
@@ -481,14 +490,14 @@ def build_tensor_specs(
         TensorSpec("wo_a", [O_GROUPS, O_LORA, O_GROUP_IN], torch.bfloat16, init_value=init_wo_a),
         TensorSpec("wo_b", [D, O_GROUPS * O_LORA], torch.int8, init_value=lambda: wo_b_i8),
         TensorSpec("wo_b_scale", [D], torch.float32, init_value=lambda: wo_b_scale),
-        TensorSpec("x_out", [T, HC_MULT, D], torch.float32, is_output=True),
+        TensorSpec("x_out", [T, HC_MULT, D], torch.float32),
         ScalarSpec("num_tokens", torch.int32, num_tokens),
     ]
 
 
 if __name__ == "__main__":
     import argparse
-    from golden import ratio_allclose, ratio_reldiff, run_jit
+    from golden import ratio_allclose, ratio_reldiff, run
 
     parser = argparse.ArgumentParser(description="Standalone DeepSeek V4 packed prefill SWA correctness test.")
     parser.add_argument("-p", "--platform", type=str, default="a2a3",
@@ -499,13 +508,13 @@ if __name__ == "__main__":
                         help="context_len (multiple of S=WIN); fixture-only, lowered into token metadata.")
     parser.add_argument("--num-tokens", type=int, default=T,
                         help="Active token count (q_len), capped by T; passed to the kernel as num_tokens.")
-    parser.add_argument("--enable-l2-swimlane", action="store_true", default=False)
+    parser.add_argument("--enable-chip-swimlane", action="store_true", default=False)
     parser.add_argument("--enable-dep-gen", action="store_true", default=False)
     parser.add_argument("--dump-passes", action="store_true", default=False)
     args = parser.parse_args()
     compare_tokens = args.num_tokens
 
-    result = run_jit(
+    result = run(
         fn=prefill_attention_swa_test,
         specs=build_tensor_specs(
             args.start_pos,
@@ -516,7 +525,7 @@ if __name__ == "__main__":
         runtime_cfg=dict(
             platform=args.platform,
             device_id=args.device,
-            enable_l2_swimlane=args.enable_l2_swimlane,
+            enable_chip_swimlane=args.enable_chip_swimlane,
             enable_dep_gen=args.enable_dep_gen,
         ),
         compile_only=args.compile_only,

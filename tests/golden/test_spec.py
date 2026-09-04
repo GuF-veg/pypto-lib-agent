@@ -65,12 +65,31 @@ class TestTensorSpecCreateTensor:
         with pytest.raises(TypeError, match="Unsupported init_value type"):
             spec.create_tensor()
 
-    def test_is_output_flag(self):
-        """is_output flag is stored correctly and defaults to False."""
-        spec_in = TensorSpec("a", [4], torch.float32)
-        spec_out = TensorSpec("b", [4], torch.float32, is_output=True)
-        assert spec_in.is_output is False
-        assert spec_out.is_output is True
+    def test_direction_is_not_an_init_argument(self):
+        """The kernel signature owns direction; a spec cannot declare one."""
+        with pytest.raises(TypeError):
+            TensorSpec("a", [4], torch.float32, direction="out")
+        with pytest.raises(TypeError):
+            TensorSpec("a", [4], torch.float32, is_output=True)
+
+    def test_direction_derives_is_output_and_is_input(self):
+        """Both flags read off the stamped direction, covering all three kinds."""
+        cases = {"in": (False, True), "out": (True, False), "inout": (True, True)}
+        for direction, (is_output, is_input) in cases.items():
+            spec = TensorSpec("a", [4], torch.float32)
+            spec.direction = direction
+            assert spec.is_output is is_output
+            assert spec.is_input is is_input
+
+    def test_unstamped_direction_raises(self):
+        """Reading either flag before the harness stamps the artifact's direction
+        is a harness bug, not a silent False."""
+        spec = TensorSpec("a", [4], torch.float32)
+        assert spec.direction is None
+        with pytest.raises(RuntimeError, match="direction not stamped"):
+            spec.is_output
+        with pytest.raises(RuntimeError, match="direction not stamped"):
+            spec.is_input
 
     def test_resident_defaults_off(self):
         """resident defaults to None (off) and is_resident is False."""
@@ -111,13 +130,15 @@ class TestTensorSpecCreateTensor:
             TensorSpec("w", [4], torch.float32, resident=-1)
 
     def test_resident_output_accepted(self):
-        """resident + is_output is a read-write resident state buffer (e.g. KV cache)."""
-        spec = TensorSpec("kv", [4], torch.float32, is_output=True, resident=0)
+        """A resident output is a read-write resident state buffer (e.g. KV cache)."""
+        spec = TensorSpec("kv", [4], torch.float32, resident=0)
+        spec.direction = "inout"
         assert spec.resident == 0 and spec.is_resident is True and spec.is_output is True
 
     def test_resident_stacked_output_accepted(self):
-        """resident="stacked" + is_output is a per-rank read-write state buffer."""
-        spec = TensorSpec("kv", [2, 4], torch.float32, is_output=True, resident="stacked")
+        """resident="stacked" output is a per-rank read-write state buffer."""
+        spec = TensorSpec("kv", [2, 4], torch.float32, resident="stacked")
+        spec.direction = "inout"
         assert spec.resident == "stacked" and spec.is_resident is True and spec.is_output is True
 
     def test_tensor_init_ignores_spec_shape(self):
@@ -186,6 +207,45 @@ class TestScalarSpecConstruction:
         assert set(SUPPORTED_SCALAR_DTYPES) == set(sample_value)
         for dtype, value in sample_value.items():
             ScalarSpec("x", dtype, value)
+
+    def test_compile_runtime_is_explicit_and_defaults_off(self):
+        assert ScalarSpec("constant", torch.int32, 7).compile_runtime is False
+        assert (
+            ScalarSpec("epoch", torch.int32, 0, compile_runtime=True).compile_runtime
+            is True
+        )
+
+    @pytest.mark.parametrize("value", [1, None, "yes"])
+    def test_compile_runtime_requires_bool(self, value):
+        with pytest.raises(ValueError, match="compile_runtime must be a bool"):
+            ScalarSpec("epoch", torch.int32, 0, compile_runtime=value)
+
+    def test_benchmark_step_advances_from_initial_value(self):
+        spec = ScalarSpec("epoch", torch.int32, 2, benchmark_step=43)
+        assert spec.has_benchmark_step
+        assert spec.value_for_benchmark_dispatch(0) is spec.value
+        assert spec.value_for_benchmark_dispatch(1).item() == 45
+        assert spec.value_for_benchmark_dispatch(4).item() == 174
+
+    def test_zero_benchmark_step_is_constant(self):
+        spec = ScalarSpec("epoch", torch.int32, 7, benchmark_step=0)
+        assert not spec.has_benchmark_step
+        assert spec.value_for_benchmark_dispatch(9) is spec.value
+
+    def test_bool_benchmark_step_rejected(self):
+        with pytest.raises(ValueError, match="benchmark_step is unsupported"):
+            ScalarSpec("flag", torch.bool, False, benchmark_step=1)
+
+    @pytest.mark.parametrize("dispatch_index", [-1, True, 1.5])
+    def test_benchmark_dispatch_index_rejected(self, dispatch_index):
+        spec = ScalarSpec("epoch", torch.int32, 0, benchmark_step=43)
+        with pytest.raises(ValueError, match="dispatch_index"):
+            spec.value_for_benchmark_dispatch(dispatch_index)
+
+    def test_benchmark_step_overflow_rejected_at_dispatch(self):
+        spec = ScalarSpec("epoch", torch.int8, 120, benchmark_step=10)
+        with pytest.raises(ValueError, match="out of range"):
+            spec.value_for_benchmark_dispatch(1)
 
 
 class TestScalarSpecToCtypes:

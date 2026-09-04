@@ -973,7 +973,7 @@ def build_tensor_specs(
                    init_value=init_final_norm_weight),
         TensorSpec("lm_head_weight", [vocab, hidden_size], torch.bfloat16,
                    init_value=init_lm_head_weight),
-        TensorSpec("out", [batch, vocab], torch.float32, is_output=True),
+        TensorSpec("out", [batch, vocab], torch.float32),
     ]
 
 
@@ -1319,7 +1319,7 @@ def golden_qwen3_14b_prefill_tq(tensors):
 
 if __name__ == "__main__":
     import argparse
-    from golden import run_jit
+    from golden import run
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -1336,7 +1336,7 @@ if __name__ == "__main__":
               "program serves any batch <= host KV-cache "
               "capacity. Default: %(default)s"),
     )
-    parser.add_argument("--enable-l2-swimlane", action="store_true", default=False)
+    parser.add_argument("--enable-chip-swimlane", action="store_true", default=False)
     parser.add_argument("--max-seq", action="store_true", default=False,
                         help="set all seq_lens to MAX_SEQ")
     parser.add_argument("--num-layers", type=int, default=2)
@@ -1347,7 +1347,7 @@ if __name__ == "__main__":
 
     torch.manual_seed(args.seed)
 
-    result = run_jit(
+    result = run(
         fn=prefill_fwd_tq,
         specs=build_tensor_specs(
             batch=args.batch, num_layers=args.num_layers,
@@ -1357,7 +1357,7 @@ if __name__ == "__main__":
         runtime_cfg=dict(
             platform=args.platform,
             device_id=args.device,
-            enable_l2_swimlane=args.enable_l2_swimlane,
+            enable_chip_swimlane=args.enable_chip_swimlane,
         ),
         rtol=5e-3,
         atol=5e-3,

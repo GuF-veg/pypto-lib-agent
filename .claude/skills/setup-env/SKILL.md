@@ -31,11 +31,11 @@ this skill.
 4. Follow the installation guide and derive every dependency from the selected
    PyPTO revision:
    - initialize PyPTO submodules;
-   - derive the PTOAS version/checksum and PTO ISA commit from that exact PyPTO
-     revision;
-   - check out PTO ISA at the pin;
-   - install PyPTO;
-   - verify the PTOAS checksum before extraction.
+   - take `PTOAS_VERSION` from that revision's `toolchain/versions.env`, never
+     from a log or a previous session;
+   - install PyPTO, then unpack that PTOAS release under `PTOAS_ROOT`;
+   - leave PTO ISA alone — simpler clones and pins the one managed checkout
+     on first use, and `PTO_ISA_ROOT` cannot redirect it.
 5. For a device environment, source the selected CANN `set_env.sh` and run
    `npu-smi info` before installing simpler. Simpler detects `ccec` and the
    cross-compiler during installation and only prebuilds the platforms whose
@@ -49,12 +49,15 @@ this skill.
 8. For a device environment, use only a device allocated to the user.
 9. Verify:
    - `import pypto`, `import torch`, and imports from `golden`;
-   - one supported PTOAS executable (`ptoas` or `bin/ptoas`) is a regular
-     executable file;
+   - `<root>/ptoas`, `<root>/ptoas.sh`, or `<root>/bin/ptoas` under `PTOAS_ROOT`
+     answers `--version` — probe in that order, as pypto's
+     `backend/_ptoas_locate.py` does, because a v0.55+ release runs only
+     through its own `ptoas.sh`;
    - the simpler submodule revision belongs to the selected PyPTO checkout;
-   - PTO ISA `HEAD` matches `runtime/pto_isa.pin`;
-   - `PTOAS_ROOT`, `PTO_ISA_ROOT`, and the repository `PYTHONPATH` are usable in
-     the shell that will run the case.
+   - the commit at the checkout `pypto.runtime.ensure_pto_isa_root()` returns
+     matches the full hash in `runtime/pto_isa.pin`;
+   - `PTOAS_ROOT` and the repository `PYTHONPATH` are usable in the shell that
+     will run the case.
 10. When the requested platform is available, run
    `examples/beginner/hello_world.py` as the final smoke test. A device smoke
    requires an allocation; do not substitute an arbitrary visible device.

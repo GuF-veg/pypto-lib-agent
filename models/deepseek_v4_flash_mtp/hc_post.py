@@ -188,13 +188,13 @@ def build_tensor_specs(B, S):
         TensorSpec("residual", [T, HC_MULT, D],           torch.float32,  init_value=init_residual),
         TensorSpec("post",     [T, HC_MULT],              torch.float32,  init_value=init_post),
         TensorSpec("comb",     [T, HC_MULT * HC_MULT],    torch.float32,  init_value=init_comb),
-        TensorSpec("y",        [T, HC_MULT, D],           torch.float32,  is_output=True),
+        TensorSpec("y",        [T, HC_MULT, D],           torch.float32),
     ]
 
 
 if __name__ == "__main__":
     import argparse
-    from golden import run_jit
+    from golden import run
 
     MODES = {
         "decode":  (DECODE_BATCH, DECODE_SEQ),
@@ -207,7 +207,7 @@ if __name__ == "__main__":
     parser.add_argument("-d", "--device", type=int, default=0)
     parser.add_argument("--mode", choices=["decode", "prefill", "all"], default="decode",
                         help="Use decode or prefill batch sizes, or 'all' to test both.")
-    parser.add_argument("--enable-l2-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2))
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2))
     parser.add_argument("--compile-only", action="store_true", default=False)
     parser.add_argument("--dump-passes", action="store_true", default=False)
     args = parser.parse_args()
@@ -217,7 +217,7 @@ if __name__ == "__main__":
     for mode_name in modes_to_run:
         B, S = MODES[mode_name]
         print(f"--- hc_post {mode_name}: B={B}, S={S} ---")
-        result = run_jit(
+        result = run(
             fn=hc_post_test,
             specs=build_tensor_specs(B, S),
             golden_fn=golden_hc_post,
@@ -225,7 +225,7 @@ if __name__ == "__main__":
             runtime_cfg=dict(
                 platform=args.platform,
                 device_id=args.device,
-                enable_l2_swimlane=args.enable_l2_swimlane,
+                enable_chip_swimlane=args.enable_chip_swimlane,
             ),
             rtol=1e-3,
             atol=1e-3,

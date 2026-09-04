@@ -41,6 +41,7 @@ MAX_SEQ_LEN = M.max_position_embeddings
 
 # kernel-local (ratio-4 overlapping compressor)
 COMPRESS_RATIO = 4
+CMP_STORAGE_BLOCK_SIZE = BLOCK_SIZE // COMPRESS_RATIO
 OVERLAP = COMPRESS_RATIO == 4
 COFF = 1 + int(OVERLAP)
 OUT_DIM = COFF * HEAD_DIM
@@ -84,7 +85,7 @@ def compressor_ratio4(
     #   cos[j] = cos_half[j>>1];  sin[j] = sin_half[j>>1] * sign[j], sign = [-1,+1,...]
     cos: pl.Tensor[[B, ROPE_HEAD_DIM], pl.FP32],
     sin: pl.Tensor[[B, ROPE_HEAD_DIM], pl.FP32],
-    cmp_kv_cache: pl.Tensor[[CMP_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
+    cmp_kv_cache: pl.Tensor[[CMP_BLOCK_NUM_DYN, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
     position_ids: pl.Tensor[[B, S], pl.INT32],
     cmp_slot_mapping: pl.Tensor[[B, S], pl.INT64],
     state_slot_mapping: pl.Tensor[[B, S], pl.INT64],
@@ -97,7 +98,7 @@ def compressor_ratio4(
     cmp_block_num = pl.tensor.dim(cmp_kv_cache, 0)
     compress_state_flat = pl.reshape(compress_state, [compress_state_block_num * COMPRESS_STATE_BLOCK_SIZE, COMPRESS_STATE_DIM])
     kv_flat = pl.reshape(kv, [B * S, HEAD_DIM])
-    cmp_kv_cache_flat = pl.reshape(cmp_kv_cache, [cmp_block_num * BLOCK_SIZE, HEAD_DIM])
+    cmp_kv_cache_flat = pl.reshape(cmp_kv_cache, [cmp_block_num * CMP_STORAGE_BLOCK_SIZE, HEAD_DIM])
 
     # Deferred behind the caller's rms_norm dummy barrier: qkv's qr_proj_matmul is the
     # critical path and must win the cores when rms_norm retires.
@@ -275,7 +276,7 @@ def compressor_test(
     norm_w: pl.Tensor[[HEAD_DIM], pl.BF16],
     cos: pl.Tensor[[B, ROPE_HEAD_DIM // 2], pl.FP32],
     sin: pl.Tensor[[B, ROPE_HEAD_DIM // 2], pl.FP32],
-    cmp_kv_cache: pl.InOut[pl.Tensor[[CMP_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
+    cmp_kv_cache: pl.InOut[pl.Tensor[[CMP_BLOCK_NUM_DYN, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
     position_ids: pl.Tensor[[B, S], pl.INT32],
     cmp_slot_mapping: pl.Tensor[[B, S], pl.INT64],
     state_slot_mapping: pl.Tensor[[B, S], pl.INT64],
@@ -310,6 +311,9 @@ def compressor_test(
 def golden_compressor(tensors):
     """Torch reference for Compressor.forward (decode branch, ratio=4 overlap)."""
     import torch
+
+    # Rows this golden never writes stay NaN: ignored by the kv comparator.
+    tensors["kv"].fill_(float("nan"))
 
     x = tensors["x"].float()
     compress_state = tensors["compress_state"]
@@ -431,10 +435,10 @@ def golden_compressor(tensors):
         cmp_row = int(cmp_slot_mapping[b, boundary_s].item())
         if cmp_row >= 0:
             # Kernel writes committed pooled result only to kv[:, 0, :]; leave
-            # speculative-boundary rows and kv[:, 1:, :] zero-initialized.
+            # speculative-boundary rows and kv[:, 1:, :] NaN (ignored).
             tensors["kv"][b : b + 1, 0:1, :] = kv_b
-            blk_id = cmp_row // BLOCK_SIZE
-            cmp_kv_cache[blk_id, cmp_row % BLOCK_SIZE, 0] = kv_b[0, 0]
+            blk_id = cmp_row // CMP_STORAGE_BLOCK_SIZE
+            cmp_kv_cache[blk_id, cmp_row % CMP_STORAGE_BLOCK_SIZE, 0] = kv_b[0, 0]
 
     tensors["cmp_kv_cache"][:] = cmp_kv_cache
 
@@ -486,7 +490,7 @@ def build_tensor_specs(start_pos=None):
     def init_sin():
         return materialize_half_rope_tables(shared_freqs_cos, shared_freqs_sin, init_rope_positions())[1]
     def init_cmp_kv_cache():
-        return torch.zeros(CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM)
+        return torch.zeros(CMP_BLOCK_NUM, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM)
     def init_cmp_block_table():
         return block_table(
             batch=B,
@@ -520,13 +524,13 @@ def build_tensor_specs(start_pos=None):
             positions,
             init_cmp_block_table(),
             compress_ratio=COMPRESS_RATIO,
-            block_size=BLOCK_SIZE,
+            block_size=CMP_STORAGE_BLOCK_SIZE,
         )
 
     return [
         TensorSpec("x", [B, S, D], torch.bfloat16, init_value=init_x),
-        TensorSpec("kv", [B, S, HEAD_DIM], torch.float32, is_output=True),
-        TensorSpec("compress_state", [COMPRESS_STATE_BLOCK_NUM, COMPRESS_STATE_BLOCK_SIZE, COMPRESS_STATE_DIM], torch.float32, init_value=init_compress_state, is_output=True),
+        TensorSpec("kv", [B, S, HEAD_DIM], torch.float32),
+        TensorSpec("compress_state", [COMPRESS_STATE_BLOCK_NUM, COMPRESS_STATE_BLOCK_SIZE, COMPRESS_STATE_DIM], torch.float32, init_value=init_compress_state),
         TensorSpec("compress_state_block_table", [B, COMPRESS_STATE_MAX_BLOCKS], torch.int32, init_value=init_compress_state_block_table),
         TensorSpec("wkv", [OUT_DIM, D], torch.bfloat16, init_value=init_wkv),
         TensorSpec("wgate", [OUT_DIM, D], torch.bfloat16, init_value=init_wgate),
@@ -534,7 +538,7 @@ def build_tensor_specs(start_pos=None):
         TensorSpec("norm_w", [HEAD_DIM], torch.bfloat16, init_value=init_norm_w),
         TensorSpec("cos", [B, ROPE_HEAD_DIM // 2], torch.float32, init_value=init_cos),
         TensorSpec("sin", [B, ROPE_HEAD_DIM // 2], torch.float32, init_value=init_sin),
-        TensorSpec("cmp_kv_cache", [CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], torch.bfloat16, init_value=init_cmp_kv_cache, is_output=True),
+        TensorSpec("cmp_kv_cache", [CMP_BLOCK_NUM, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], torch.bfloat16, init_value=init_cmp_kv_cache),
         TensorSpec("position_ids", [B, S], torch.int32, init_value=init_position_ids),
         TensorSpec("cmp_slot_mapping", [B, S], torch.int64, init_value=init_cmp_slot_mapping),
         TensorSpec("state_slot_mapping", [B, S], torch.int64, init_value=init_state_slot_mapping),
@@ -543,7 +547,7 @@ def build_tensor_specs(start_pos=None):
 
 if __name__ == "__main__":
     import argparse
-    from golden import ratio_allclose, run_jit
+    from golden import ratio_allclose, run
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--platform", type=str, default="a2a3",
@@ -552,13 +556,13 @@ if __name__ == "__main__":
     parser.add_argument("--start-pos", type=int, default=None,
                         help="Uniform fixture-only start_pos override for all batches; "
                              "default (unset) uses the canonical per-batch CSA set that includes the 8k point.")
-    parser.add_argument("--enable-l2-swimlane", action="store_true", default=False)
+    parser.add_argument("--enable-chip-swimlane", action="store_true", default=False)
     parser.add_argument("--runtime-dir", type=str, default=None)
     parser.add_argument("--golden-data", type=str, default=None)
     parser.add_argument("--dump-passes", action="store_true", default=False)
     args = parser.parse_args()
 
-    result = run_jit(
+    result = run(
         fn=compressor_test,
         specs=build_tensor_specs(args.start_pos),
         golden_fn=golden_compressor,
@@ -568,12 +572,12 @@ if __name__ == "__main__":
         runtime_cfg=dict(
             platform=args.platform,
             device_id=args.device,
-            enable_l2_swimlane=args.enable_l2_swimlane,
+            enable_chip_swimlane=args.enable_chip_swimlane,
         ),
         rtol=1e-3,
         atol=1e-3,
         compare_fn={
-            "kv":          ratio_allclose(atol=1e-4, rtol=1.0 / 128, max_error_ratio=0.0),
+            "kv":          ratio_allclose(atol=1e-4, rtol=1.0 / 128, max_error_ratio=0.0, ignore_nan=True),
             "compress_state":    ratio_allclose(atol=1e-3, rtol=1e-3, max_error_ratio=0.0),
             "cmp_kv_cache": ratio_allclose(atol=1e-4, rtol=1.0 / 128, max_error_ratio=0.0),
         },

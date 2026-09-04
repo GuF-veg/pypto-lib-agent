@@ -75,7 +75,7 @@ def _iter_source_files():
     for root in SOURCE_ROOTS:
         for dirpath, _, files in os.walk(root):
             for name in files:
-                if name.endswith(".py") and "draft" not in name:
+                if name.endswith(".py") and not name.endswith("_draft.py"):
                     yield os.path.join(dirpath, name)
 
 
@@ -155,16 +155,16 @@ def select_runnable(changed):
     )
     # Only models/ uses the reverse-import graph: a changed examples/ file is
     # already covered by the full-suite run above, so it needs no closure here.
-    # models/deepseek_v4_pro is the A5-only variant: it is exercised by the
-    # dedicated model-tests-a5 daily job, not by PR a2a3/sim (PR CI has no A5
-    # runner, and on 910B it would just duplicate Flash). Exclude it from
-    # PR selection so it neither doubles the sim/a2a3 load nor runs on the
-    # wrong backend. Revisit once a PR A5 job exists.
+    # models/deepseek_v4_pro is the A5-only Pro/Flash implementation. Its Pro
+    # preset is exercised by the dedicated model-tests-a5 daily job, not by PR
+    # a2a3/sim (PR CI has no A5 runner, and on 910B it would duplicate Flash).
+    # Exclude it from PR selection so it neither doubles the sim/a2a3 load nor
+    # runs on the wrong backend. Revisit once a PR A5 job exists.
     models_changed = [
         c
         for c in changed
         if c.endswith(".py")
-        and "draft" not in os.path.basename(c)
+        and not c.endswith("_draft.py")
         and c.startswith("models/")
         and not c.startswith("models/deepseek_v4_pro/")
         and os.path.isfile(c)

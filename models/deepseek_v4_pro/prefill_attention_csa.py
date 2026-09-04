@@ -16,12 +16,11 @@ contiguous run of <=T tokens.
 
 import functools
 
-import os
 
 import pypto.language as pl
 
 from config import (
-    PRO_KERNEL as M,
+    ACTIVE as M,
     BLOCK_SIZE,
     CSA_INNER_STATE_PHYSICAL_BLOCKS,
     CSA_STATE_PHYSICAL_BLOCKS,
@@ -58,6 +57,7 @@ from prefill_indexer_compressor import (
     INNER_STATE_BLOCK_SIZE,
     INNER_STATE_MAX_BLOCKS,
 )
+from prefill_attention_swa import _mapped_pool_ratio_allclose
 from qkv_proj_rope import golden_qkv_proj_rope, materialize_rope_rows, qkv_proj_rope
 from rmsnorm import golden_rms_norm, rms_norm
 from prefill_sparse_attn import (
@@ -127,14 +127,22 @@ assert S == WIN, "packed CSA prefill currently assumes one static window page"
 
 # PRO's wider hidden/HC dims make one prefill attention layer's per-task args and
 # intermediates overflow the runtime's default ring-2 output heap, which surfaces as
-# `orch_error_code=2 HEAP_RING_DEADLOCK`. prefill_fwd.py fixes the same thing with
-# run()'s `ring_heap=` argument, but the golden harness's run_jit() does not plumb
-# that kwarg through to execute_compiled(), so use the documented env-var fallback.
-# Format: per-ring bytes, ring0..ring3, `0` = leave at default.
-# All four rings, not just ring 2: raising ring 2 alone (what prefill_fwd.py needs)
-# still deadlocks here at both 2 GiB and 4 GiB -- measured on device.
-PREFILL_ATTN_RING_HEAP = (4 * 1024 * 1024 * 1024,) * 4
-os.environ.setdefault("PTO2_RING_HEAP", ",".join(str(v) for v in PREFILL_ATTN_RING_HEAP))
+# `orch_error_code=2 HEAP_RING_DEADLOCK`. The default is CHIP_HEAP_SIZE, 256 MiB per
+# ring; measured on a5, every ring at 512 MiB is already enough for all three prefill
+# attention variants, so 1 GiB is one doubling of headroom over the measured need.
+# All four rings, not just ring 2: ring 2 alone (what prefill_fwd.py sets) does not
+# clear it. Applied through run's runtime_cfg, which reaches the device only on
+# the ChipWorker route -- see golden/runner.py::_execute_via_runner.
+PREFILL_ATTN_RING_HEAP = (1024 * 1024 * 1024,) * 4
+
+# Cache and state pools are allocator-managed global tensors.  Their physical
+# capacities are runtime values; request-local tables carry the actual block
+# ownership.
+ORI_BLOCK_NUM_DYN = pl.dynamic("PREFILL_ORI_BLOCK_NUM_DYN")
+CMP_BLOCK_NUM_DYN = pl.dynamic("PREFILL_CMP_BLOCK_NUM_DYN")
+IDX_BLOCK_NUM_DYN = pl.dynamic("PREFILL_IDX_BLOCK_NUM_DYN")
+MAIN_STATE_BLOCK_NUM_DYN = pl.dynamic("PREFILL_CSA_STATE_BLOCK_NUM_DYN")
+INNER_STATE_BLOCK_NUM_DYN = pl.dynamic("PREFILL_INNER_STATE_BLOCK_NUM_DYN")
 
 
 @pl.jit.inline
@@ -157,7 +165,8 @@ def prefill_attention_csa(
     cmp_ape: pl.Tensor[[COMPRESS_RATIO, MAIN_OUT_DIM], pl.FP32],
     cmp_norm_w: pl.Tensor[[HEAD_DIM], pl.BF16],
     compress_state: pl.Tensor[
-        [CSA_STATE_BLOCK_NUM, CSA_STATE_BLOCK_SIZE, MAIN_COMPRESS_STATE_DIM], pl.FP32
+        [MAIN_STATE_BLOCK_NUM_DYN, CSA_STATE_BLOCK_SIZE, MAIN_COMPRESS_STATE_DIM],
+        pl.FP32,
     ],
     compress_state_block_table: pl.Tensor[[CSA_STATE_MAX_BLOCKS], pl.INT32],
     hadamard_idx: pl.Tensor[[IDX_HEAD_DIM, IDX_HEAD_DIM], pl.BF16],
@@ -169,16 +178,17 @@ def prefill_attention_csa(
     inner_ape: pl.Tensor[[COMPRESS_RATIO, INNER_OUT_DIM], pl.FP32],
     inner_norm_w: pl.Tensor[[IDX_HEAD_DIM], pl.BF16],
     inner_compress_state: pl.Tensor[
-        [INNER_STATE_BLOCK_NUM, INNER_STATE_BLOCK_SIZE, INNER_COMPRESS_STATE_DIM], pl.FP32
+        [INNER_STATE_BLOCK_NUM_DYN, INNER_STATE_BLOCK_SIZE, INNER_COMPRESS_STATE_DIM],
+        pl.FP32,
     ],
     inner_compress_state_block_table: pl.Tensor[[INNER_STATE_MAX_BLOCKS], pl.INT32],
-    kv_cache: pl.InOut[pl.Tensor[[CSA_ORI_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
+    kv_cache: pl.InOut[pl.Tensor[[ORI_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
     ori_block_table: pl.Tensor[[SPARSE_ORI_MAX_BLOCKS], pl.INT32],
     ori_slot_mapping: pl.Tensor[[T], pl.INT64],
-    cmp_kv: pl.Out[pl.Tensor[[CSA_CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
+    cmp_kv: pl.Tensor[[CMP_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
     cmp_block_table: pl.Tensor[[SPARSE_CMP_MAX_BLOCKS], pl.INT32],
-    idx_kv_cache: pl.Out[pl.Tensor[[PREFILL_IDX_BLOCK_NUM, BLOCK_SIZE, 1, IDX_HEAD_DIM], pl.INT8]],
-    idx_kv_scale: pl.Out[pl.Tensor[[PREFILL_IDX_BLOCK_NUM, BLOCK_SIZE, 1, 1], pl.FP32]],
+    idx_kv_cache: pl.Tensor[[IDX_BLOCK_NUM_DYN, BLOCK_SIZE, 1, IDX_HEAD_DIM], pl.INT8],
+    idx_kv_scale: pl.Tensor[[IDX_BLOCK_NUM_DYN, BLOCK_SIZE, 1, 1], pl.FP32],
     idx_block_table: pl.Tensor[[IDX_CACHE_MAX_BLOCKS], pl.INT32],
     position_ids: pl.Tensor[[T], pl.INT32],
     cmp_slot_mapping: pl.Tensor[[T], pl.INT64],
@@ -222,7 +232,8 @@ def prefill_attention_csa(
         q, kv, qr, qr_scale, late_dep,
     )
 
-    kv_cache_flat = pl.reshape(kv_cache, [CSA_ORI_BLOCK_NUM * BLOCK_SIZE, HEAD_DIM])
+    ori_block_num = pl.tensor.dim(kv_cache, 0)
+    kv_cache_flat = pl.reshape(kv_cache, [ori_block_num * BLOCK_SIZE, HEAD_DIM])
     with pl.at(level=pl.Level.CORE_GROUP, name_hint="prefill_csa_cache_write"):
         for write_t in pl.range(T):
             if write_t < num_tokens:
@@ -231,17 +242,26 @@ def prefill_attention_csa(
                     write_row = pl.cast(write_row_raw, pl.INDEX)
                     kv_cache_flat[write_row : write_row + 1, :] = kv[write_t : write_t + 1, :]
 
+    compressor_completion = pl.array.create(1, pl.TASK_ID)
     prefill_compressor_ratio4(
         x_normed, compress_state, compress_state_block_table,
         cmp_wkv, cmp_wgate, cmp_ape, cmp_norm_w,
         freqs_cos, freqs_sin, cmp_kv,
         position_ids, num_tokens, cmp_slot_mapping, state_slot_mapping,
+        compressor_completion,
     )
     # Half-width FP32 cos/sin rows for the indexer Q-RoPE: gather freqs at each token's position
     # and take the first HALF_ROPE columns (matches the golden's materialize_half_rope_tables).
+    # The dependency on compressor_completion carries no data: it keeps the whole indexer chain
+    # behind the compressor's cmp_kv/compress_state writeback because prefill_indexer consumes
+    # idx_cos and idx_sin. Do not drop it as redundant.
     idx_cos = pl.create_tensor([T, HALF_ROPE], dtype=pl.FP32)
     idx_sin = pl.create_tensor([T, HALF_ROPE], dtype=pl.FP32)
-    with pl.at(level=pl.Level.CORE_GROUP, name_hint="prefill_csa_idx_halfrope"):
+    with pl.at(
+        level=pl.Level.CORE_GROUP,
+        name_hint="prefill_csa_idx_halfrope",
+        deps=[compressor_completion[0]],
+    ):
         for idx_t in pl.range(T):
             idx_pos = pl.cast(pl.read(position_ids, [idx_t]), pl.INDEX)
             idx_cos = pl.assemble(idx_cos, pl.cast(pl.slice(freqs_cos, [1, HALF_ROPE], [idx_pos, 0]), target_type=pl.FP32), [idx_t, 0])
@@ -327,8 +347,11 @@ def prefill_attention_csa_test(
     cmp_wgate: pl.Tensor[[MAIN_OUT_DIM, D], pl.BF16],
     cmp_ape: pl.Tensor[[COMPRESS_RATIO, MAIN_OUT_DIM], pl.FP32],
     cmp_norm_w: pl.Tensor[[HEAD_DIM], pl.BF16],
-    compress_state: pl.Tensor[
-        [CSA_STATE_BLOCK_NUM, CSA_STATE_BLOCK_SIZE, MAIN_COMPRESS_STATE_DIM], pl.FP32
+    compress_state: pl.InOut[
+        pl.Tensor[
+            [MAIN_STATE_BLOCK_NUM_DYN, CSA_STATE_BLOCK_SIZE, MAIN_COMPRESS_STATE_DIM],
+            pl.FP32,
+        ]
     ],
     compress_state_block_table: pl.Tensor[[CSA_STATE_MAX_BLOCKS], pl.INT32],
     hadamard_idx: pl.Tensor[[IDX_HEAD_DIM, IDX_HEAD_DIM], pl.BF16],
@@ -339,17 +362,20 @@ def prefill_attention_csa_test(
     inner_wgate: pl.Tensor[[INNER_OUT_DIM, D], pl.BF16],
     inner_ape: pl.Tensor[[COMPRESS_RATIO, INNER_OUT_DIM], pl.FP32],
     inner_norm_w: pl.Tensor[[IDX_HEAD_DIM], pl.BF16],
-    inner_compress_state: pl.Tensor[
-        [INNER_STATE_BLOCK_NUM, INNER_STATE_BLOCK_SIZE, INNER_COMPRESS_STATE_DIM], pl.FP32
+    inner_compress_state: pl.InOut[
+        pl.Tensor[
+            [INNER_STATE_BLOCK_NUM_DYN, INNER_STATE_BLOCK_SIZE, INNER_COMPRESS_STATE_DIM],
+            pl.FP32,
+        ]
     ],
     inner_compress_state_block_table: pl.Tensor[[INNER_STATE_MAX_BLOCKS], pl.INT32],
-    kv_cache: pl.InOut[pl.Tensor[[CSA_ORI_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
+    kv_cache: pl.InOut[pl.Tensor[[ORI_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
     ori_block_table: pl.Tensor[[SPARSE_ORI_MAX_BLOCKS], pl.INT32],
     ori_slot_mapping: pl.Tensor[[T], pl.INT64],
-    cmp_kv: pl.Out[pl.Tensor[[CSA_CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
+    cmp_kv: pl.InOut[pl.Tensor[[CMP_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
     cmp_block_table: pl.Tensor[[SPARSE_CMP_MAX_BLOCKS], pl.INT32],
-    idx_kv_cache: pl.InOut[pl.Tensor[[PREFILL_IDX_BLOCK_NUM, BLOCK_SIZE, 1, IDX_HEAD_DIM], pl.INT8]],
-    idx_kv_scale: pl.InOut[pl.Tensor[[PREFILL_IDX_BLOCK_NUM, BLOCK_SIZE, 1, 1], pl.FP32]],
+    idx_kv_cache: pl.InOut[pl.Tensor[[IDX_BLOCK_NUM_DYN, BLOCK_SIZE, 1, IDX_HEAD_DIM], pl.INT8]],
+    idx_kv_scale: pl.InOut[pl.Tensor[[IDX_BLOCK_NUM_DYN, BLOCK_SIZE, 1, 1], pl.FP32]],
     idx_block_table: pl.Tensor[[IDX_CACHE_MAX_BLOCKS], pl.INT32],
     position_ids: pl.Tensor[[T], pl.INT32],
     cmp_slot_mapping: pl.Tensor[[T], pl.INT64],
@@ -415,6 +441,7 @@ def golden_prefill_attention_csa(tensors):
     rope_sin_t = tensors["freqs_sin"].index_select(0, positions).contiguous()
     golden_qkv_proj_rope({
         "x": x_normed.view(T, D),
+        "num_tokens": num_tokens,
         "wq_a": tensors["wq_a"],
         "wq_b": tensors["wq_b"],
         "wq_b_scale": tensors["wq_b_scale"],
@@ -475,7 +502,7 @@ def golden_prefill_attention_csa(tensors):
     })
 
     kv_cache_in = tensors["kv_cache"].clone()
-    kv_cache_flat = kv_cache_in.view(CSA_ORI_BLOCK_NUM * BLOCK_SIZE, HEAD_DIM)
+    kv_cache_flat = kv_cache_in.view(kv_cache_in.shape[0] * BLOCK_SIZE, HEAD_DIM)
     for t in range(num_tokens):
         dst_row = int(tensors["ori_slot_mapping"][t].item())
         if dst_row >= 0:
@@ -870,12 +897,9 @@ def build_tensor_specs(
         ),
         TensorSpec("inner_compress_state_block_table", [INNER_STATE_MAX_BLOCKS], torch.int32, init_value=init_inner_compress_state_block_table),
         TensorSpec("kv_cache", [CSA_ORI_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], torch.bfloat16,
-                   init_value=init_kv_cache, is_output=True),
+                   init_value=init_kv_cache),
         TensorSpec("ori_block_table", [SPARSE_ORI_MAX_BLOCKS], torch.int32, init_value=init_ori_block_table),
         TensorSpec("ori_slot_mapping", [T], torch.int64, init_value=init_ori_slot_mapping),
-        # Compressor / indexer caches are written in-place but not validated here
-        # (decode parity); the dedicated prefill_compressor_ratio4 and
-        # prefill_indexer tests cover them.
         TensorSpec(
             "cmp_kv",
             [CSA_CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM],
@@ -905,7 +929,7 @@ def build_tensor_specs(
         TensorSpec("wo_a", [O_GROUPS, O_LORA, O_GROUP_IN], torch.bfloat16, init_value=init_wo_a),
         TensorSpec("wo_b", [D, O_GROUPS * O_LORA], torch.int8, init_value=lambda: wo_b_i8),
         TensorSpec("wo_b_scale", [D], torch.float32, init_value=lambda: wo_b_scale),
-        TensorSpec("x_out", [T, HC_MULT, D], torch.float32, is_output=True),
+        TensorSpec("x_out", [T, HC_MULT, D], torch.float32),
         ScalarSpec("num_tokens", torch.int32, num_tokens),
     ]
 
@@ -923,7 +947,7 @@ def _quant_w_per_output_channel_local(w):
 
 if __name__ == "__main__":
     import argparse
-    from golden import ratio_allclose, ratio_reldiff, run_jit
+    from golden import ratio_reldiff, run
 
     parser = argparse.ArgumentParser(description="Standalone DeepSeek V4 packed prefill CSA correctness test.")
     parser.add_argument("-p", "--platform", type=str, default="a2a3", choices=["a2a3", "a2a3sim", "a5", "a5sim"])
@@ -933,7 +957,7 @@ if __name__ == "__main__":
                         help="context_len (multiple of S=WIN); fixture-only, lowered into token metadata.")
     parser.add_argument("--num-tokens", type=int, default=T,
                         help="Active token count (q_len), capped by T; passed to the kernel as num_tokens.")
-    parser.add_argument("--enable-l2-swimlane", action="store_true", default=False)
+    parser.add_argument("--enable-chip-swimlane", action="store_true", default=False)
     parser.add_argument("--enable-dep-gen", action="store_true", default=False)
     parser.add_argument("--dump-passes", action="store_true", default=False)
     args = parser.parse_args()
@@ -947,7 +971,9 @@ if __name__ == "__main__":
     # elements), but keep the 0.5% fraction bar identical to full prefill.
     x_out_diff_thd, x_out_max_diff = (8e-3, 2) if args.start_pos else (5e-3, 1)
 
-    result = run_jit(
+    from pypto.runtime import RunConfig
+
+    result = run(
         fn=prefill_attention_csa_test,
         specs=build_tensor_specs(
             args.start_pos,
@@ -958,8 +984,11 @@ if __name__ == "__main__":
         runtime_cfg=dict(
             platform=args.platform,
             device_id=args.device,
-            enable_l2_swimlane=args.enable_l2_swimlane,
+            enable_chip_swimlane=args.enable_chip_swimlane,
             enable_dep_gen=args.enable_dep_gen,
+            # Ring sizing lives on execute_compiled's `config`, not on its
+            # signature, so name it here rather than as a bare keyword.
+            config=RunConfig(ring_heap=PREFILL_ATTN_RING_HEAP),
         ),
         rtol=1e-2,
         atol=1e-2,
@@ -967,7 +996,48 @@ if __name__ == "__main__":
         compare_fn={
             "x_out": ratio_reldiff(diff_thd=x_out_diff_thd, pct_thd=0.005, max_diff_hd=x_out_max_diff,
                                    valid_rows=compare_tokens, zero_tail=True),
-            "kv_cache": ratio_allclose(atol=1e-4, rtol=1.0 / 128),
+            "kv_cache": _mapped_pool_ratio_allclose(
+                "ori_slot_mapping",
+                num_tokens=compare_tokens,
+                atol=1e-4,
+                rtol=1.0 / 128,
+                max_error_ratio=0.005,
+            ),
+            "cmp_kv": _mapped_pool_ratio_allclose(
+                "cmp_slot_mapping",
+                num_tokens=compare_tokens,
+                atol=1e-4,
+                rtol=1.0 / 128,
+                max_error_ratio=0.005,
+            ),
+            "compress_state": _mapped_pool_ratio_allclose(
+                "state_slot_mapping",
+                num_tokens=compare_tokens,
+                atol=1e-3,
+                rtol=1e-3,
+                max_error_ratio=0.005,
+            ),
+            "inner_compress_state": _mapped_pool_ratio_allclose(
+                "inner_state_slot_mapping",
+                num_tokens=compare_tokens,
+                atol=1e-3,
+                rtol=1e-3,
+                max_error_ratio=0.005,
+            ),
+            "idx_kv_cache": _mapped_pool_ratio_allclose(
+                "idx_slot_mapping",
+                num_tokens=compare_tokens,
+                atol=1,
+                rtol=0,
+                max_error_ratio=0.01,
+            ),
+            "idx_kv_scale": _mapped_pool_ratio_allclose(
+                "idx_slot_mapping",
+                num_tokens=compare_tokens,
+                atol=1e-4,
+                rtol=1.0 / 128,
+                max_error_ratio=0.01,
+            ),
         },
     )
     if not result.passed:

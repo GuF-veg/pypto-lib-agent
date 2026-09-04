@@ -113,12 +113,16 @@ def expert_shared(
         # blocks for the decode shape). Activation, row-amax, scale, and requant
         # stay in one task so this stage can start alongside dispatch_push.
         h_tile_fp32 = pl.create_tensor([SH_M_TILE, MOE_INTER], dtype=pl.FP32)
-        h_tile_i8 = pl.create_tensor(
-            [SH_M_TILE, MOE_INTER], dtype=pl.INT8, init_value=0
-        )
+        h_tile_i8 = pl.create_tensor([SH_M_TILE, MOE_INTER], dtype=pl.INT8)
         h_tile_scale_dq = pl.create_tensor(
             [SH_M_TILE, SH_ROW_PAD], dtype=pl.FP32, manual_dep=True
         )
+        with pl.at(level=pl.Level.CORE_GROUP, name_hint="sh_h_tile_i8_init"):
+            h_tile_i8[:, :] = pl.cast(
+                pl.full([SH_M_TILE, MOE_INTER], dtype=pl.FP16, value=0.0),
+                target_type=pl.INT8,
+                mode="trunc",
+            )
         for row_block in pl.spmd(
             SH_VALID_M // SH_ROWS_PER_BLOCK,
             name_hint="sh_gate_up_act_q",
@@ -384,23 +388,23 @@ def build_tensor_specs():
         TensorSpec("shared_w3_scale", [MOE_INTER], torch.float32, init_value=lambda: sw3_s),
         TensorSpec("shared_w2", [D, MOE_INTER], torch.int8, init_value=lambda: sw2_i8),
         TensorSpec("shared_w2_scale", [D], torch.float32, init_value=lambda: sw2_s),
-        TensorSpec("sh", [T, D], torch.bfloat16, is_output=True),
+        TensorSpec("sh", [T, D], torch.bfloat16),
     ]
 
 
 if __name__ == "__main__":
     import argparse
-    from golden import ratio_reldiff, run_jit
+    from golden import ratio_reldiff, run
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--platform", type=str, default="a2a3",
                         choices=["a2a3", "a2a3sim", "a5", "a5sim"])
     parser.add_argument("-d", "--device", type=int, default=0)
-    parser.add_argument("--enable-l2-swimlane", action="store_true", default=False)
+    parser.add_argument("--enable-chip-swimlane", action="store_true", default=False)
     parser.add_argument("--dump-passes", action="store_true", default=False)
     args = parser.parse_args()
 
-    result = run_jit(
+    result = run(
         fn=expert_shared_test,
         specs=build_tensor_specs(),
         golden_fn=golden_expert_shared,
@@ -408,7 +412,7 @@ if __name__ == "__main__":
         runtime_cfg=dict(
             platform=args.platform,
             device_id=args.device,
-            enable_l2_swimlane=args.enable_l2_swimlane,
+            enable_chip_swimlane=args.enable_chip_swimlane,
         ),
         rtol=1e-3,
         atol=1e-3,

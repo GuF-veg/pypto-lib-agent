@@ -6,8 +6,10 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
-"""DeepSeek-V4 configuration"""
+"""DeepSeek-V4 Pro/Flash configuration shared by this model implementation."""
 
+import os
+import sys
 from dataclasses import dataclass, replace
 from typing import Literal, Optional, Tuple
 
@@ -242,26 +244,61 @@ PRESETS = {p.name: p for p in (DEMO, FLASH, PRO)}
 
 # Sequence budget these kernel programs are built for.
 #
-# ``PRO.max_position_embeddings`` is the real 1 M-position capability of
-# DeepSeek-V4-Pro and is left untouched so the preset stays a faithful model
-# description. The programs in this directory are single-kernel test cases, not
-# a serving deployment: each one sizes its paged-KV pool to hold the *whole*
-# context (e.g. ``assert SPARSE_ORI_MAX_BLOCKS <= BLOCK_NUM``), and their golden
-# references are recomputed in torch on the host. Admitting 1 M positions would
-# need a ~64x larger physical pool than the cases allocate and a host-side
-# golden nobody can compute. So the kernels import ``PRO_KERNEL``: architecture
-# identical to PRO, sequence budget matched to what the Flash cases already
-# exercise (8k prompt + 512 decode steps).
+# ``PRO.max_position_embeddings`` remains the real 1 M-position model
+# capability. These programs size their paged-KV pools for kernel validation,
+# so both presets use the same bounded 16K validation budget here.
 #
 # Raise this if a case needs a longer context; nothing else has to change.
 KERNEL_MAX_SEQ_LEN = 16384
 
-PRO_KERNEL = replace(PRO, max_position_embeddings=KERNEL_MAX_SEQ_LEN)
+# Select the architecture before any operator module freezes shapes into its
+# annotations. Pro remains the default, while Flash is selected with
+# ``DEEPSEEK_V4_VARIANT=flash``. This is intentionally a build/import-time
+# switch: PyPTO tensor shapes are static, so one compiled artifact cannot change
+# architecture at runtime.
+VARIANT_ENV = "DEEPSEEK_V4_VARIANT"
+SUPPORTED_VARIANTS = ("pro", "flash")
 
-# The preset this directory's kernel programs are built for. Every kernel here
-# imports ``PRO_KERNEL`` explicitly; ACTIVE exists so the derived pool sizes
-# below cannot silently drift to a different preset than the kernels use.
-ACTIVE = PRO_KERNEL
+
+def _consume_variant_argv():
+    """Read and remove ``--variant`` before entry-point argparse runs."""
+
+    selected = os.environ.get(VARIANT_ENV, "pro")
+    remaining = [sys.argv[0]]
+    i = 1
+    while i < len(sys.argv):
+        token = sys.argv[i]
+        if token == "--variant":
+            if i + 1 >= len(sys.argv):
+                raise ValueError("--variant requires pro or flash")
+            selected = sys.argv[i + 1]
+            i += 2
+            continue
+        if token.startswith("--variant="):
+            selected = token.split("=", 1)[1]
+        else:
+            remaining.append(token)
+        i += 1
+    sys.argv[:] = remaining
+    return selected.strip().lower()
+
+
+ACTIVE_VARIANT = _consume_variant_argv()
+if ACTIVE_VARIANT not in SUPPORTED_VARIANTS:
+    raise ValueError(
+        f"{VARIANT_ENV} must be one of {SUPPORTED_VARIANTS}, got {ACTIVE_VARIANT!r}"
+    )
+
+KERNEL_PRESETS = {
+    name: replace(PRESETS[name], max_position_embeddings=KERNEL_MAX_SEQ_LEN)
+    for name in SUPPORTED_VARIANTS
+}
+ACTIVE_BASE = KERNEL_PRESETS[ACTIVE_VARIANT]
+ACTIVE = ACTIVE_BASE
+
+# Compatibility for out-of-tree users that still import the historical name.
+# In-tree model code imports ACTIVE directly.
+PRO_KERNEL = ACTIVE
 
 
 # Deployment constants

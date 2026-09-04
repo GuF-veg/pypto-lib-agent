@@ -7,8 +7,7 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 # ci: devices=2  # CI: 2-card run; borrows 2 cards via task-submit --device-num
-"""DeepSeek-V4 MoE single-layer (decode), FLASH preset. --ep picks the EP world
-size: 2/4/8/16 run N-rank distributed; each rank keeps 16 experts."""
+"""DeepSeek-V4 FLASH MoE layer with DSpark expert-parallel dispatch and combine."""
 
 
 # Sub-kernels freeze EP / n_routed_experts into their shapes at import
@@ -41,11 +40,18 @@ import pypto.language.distributed as pld
 from pypto.ir.distributed_compiled_program import DistributedConfig
 
 from config import FLASH as M, MOE_TOKENS, RECV_MAX
-from hc_pre import hc_pre
-from hc_post import hc_post
-from gate import gate
-from expert_shared import expert_shared
 from expert_routed import expert_routed
+from expert_shared import expert_shared
+from gate import gate
+from hc_post import hc_post
+from hc_pre import hc_pre
+from prefill_cp_token_allgather import (
+    CP_KV_T_DYN as PREFILL_GROUP_T_DYN,
+    CP_Q_T_DYN as PREFILL_LOCAL_T_DYN,
+    PREFILL_GROUP_CAP,
+    TP_SIZE,
+    prefill_cp_token_allgather_step,
+)
 
 
 T = MOE_TOKENS
@@ -73,6 +79,9 @@ AUX_W = 1
 IDX_PAD = 8  # INT32 route tile width; route rides a separate window from scale/w
              # (an FP32 tile can't hold it: INDEX->FP32 casts are unsupported).
 
+# tiling
+PREFILL_INPUT_ID_TILE = 4
+
 assert N_RANKS in _EP_CHOICES, f"--ep must be one of {_EP_CHOICES} (got {N_RANKS})"
 assert N_EXPERTS_GLOBAL == N_RANKS * N_LOCAL
 assert RECV_MAX == N_RANKS * MAX_PER_SRC
@@ -98,9 +107,30 @@ def clear_moe_signals(
             pl.write(combine_arrived, [src, 0], zero)
 
 
+@pl.jit.inline
+def clear_prefill_moe_signals(
+    stage_token: pl.Tensor[[1], pl.INT32],
+    arrived: pld.DistributedTensor[[N_RANKS, 1], pl.INT32],
+    data_arrived: pld.DistributedTensor[[N_RANKS, 1], pl.INT32],
+    combine_arrived: pld.DistributedTensor[[N_RANKS, 1], pl.INT32],
+    stage_done: pld.DistributedTensor[[N_RANKS, 1], pl.INT32],
+):
+    """Clear retained prefill-MoE epochs after the final wave completes."""
+    with pl.at(level=pl.Level.CORE_GROUP, name_hint="prefill_moe_signal_clear"):
+        # Read the wave-barrier epoch: orders the clear after the final wave.
+        # The always-true guard keeps the read as a dependency edge.
+        completed_epoch = pl.read(stage_token, [0])
+        if completed_epoch >= 0:
+            zero = pl.cast(0, pl.INT32)
+            for src in pl.range(N_RANKS):
+                pl.write(arrived, [src, 0], zero)
+                pl.write(data_arrived, [src, 0], zero)
+                pl.write(combine_arrived, [src, 0], zero)
+                pl.write(stage_done, [src, 0], zero)
+
+
 # === Dispatch ================================================================
-# Lane push, count publish, arrival wait, and cumsum gather run in one
-# pl.at(CORE_GROUP) so program order stays push -> notify -> wait -> gather.
+# Exchange route counts, push payload lanes, defer payload waits, and compact rows by expert.
 @pl.jit.inline
 def dispatch(
     indices: pl.Tensor[[T, TOPK], pl.INT32],
@@ -257,16 +287,10 @@ def dispatch(
                     op=pld.NotifyOp.AtomicAdd,
                 )
 
-    # Wait only (the notify rides inside dispatch_push). The indices read is an
-    # anchor, not data: it deps this task on gate's route tasks, so the wait starts
-    # with dispatch_push instead of trailing dispatch_meta's spin. Anchor it to
-    # something -- an unanchored wait is dispatched immediately and spins holding a
-    # core group, so pipelined layers stack up spinners.
-    with pl.at(level=pl.Level.CORE_GROUP, name_hint="dispatch_wait", allow_early_resolve=True) as _wait_tid:
-        _idx_anchor = pl.read(indices, [0, 0])
+    with pl.at(level=pl.Level.CORE_GROUP, name_hint="dispatch_wait") as _wait_tid:
         for src in pl.range(N_RANKS):
             if src != my_rank:
-                pld.system.wait(
+                pld.system.defer_wait(
                     signal=data_arrived,
                     offsets=[src, 0],
                     expected=pl.cast(moe_epoch * N_LOCAL, pl.INT32),
@@ -282,7 +306,8 @@ def dispatch(
         N_LOCAL,
         name_hint="dispatch_gather",
         deps=[_wait_tid, _meta_tid],
-        allow_early_resolve=True,
+        # Keep the routed expert tasks off the cores until this gather retires.
+        allow_early_resolve=False,
     ) as _gather_tid:
         e = pl.tile.get_block_idx()
         e_base_row = e * RECV_MAX
@@ -302,8 +327,8 @@ def dispatch(
 
 
 # === Combine =================================================================
-# Push recv_y rows back to their origin rank keyed by r_route, barrier, then a
-# dense reduce ffn_out[t] = sh[t] + Sigma_k routed_y_buf[t*TOPK+k].
+# Push rows back to their origin rank, defer peer waits, then reduce
+# ffn_out[t] = sh[t] + Sigma_k routed_y_buf[t*TOPK+k].
 @pl.jit.inline
 def combine(
     recv_y: pl.Tensor[[N_LOCAL, RECV_MAX, D], pl.BF16],
@@ -316,16 +341,14 @@ def combine(
     num_tokens: pl.Scalar[pl.INT32],
     my_rank: pl.Scalar[pl.INT32],
     moe_epoch: pl.Scalar[pl.INT32],
-):
+) -> pl.Scalar[pl.TASK_ID]:
     recv_y_flat = pl.reshape(recv_y, [N_LOCAL * RECV_MAX, D])
     # One SPMD block per LOCAL EXPERT: block e pushes expert e's compact rows back to
     # their origin rank (= the source lane src they arrived on) at their route offset.
     # Rows are src-major, so the per-(e, src) base is a loop-carried prefix sum over
     # src inside the block (same shape as dispatch_gather). Each route maps to a
     # unique (dst, loc_e) and r_route, so the blocks' puts are write-disjoint.
-    # allow_early_resolve: shared_routed pre-stages only when every producer of its
-    # fanin is flagged, and combine_wait already is.
-    with pl.spmd(N_LOCAL, name_hint="combine", allow_early_resolve=True):
+    with pl.spmd(N_LOCAL, name_hint="combine"):
         e = pl.tile.get_block_idx()
         e_base_row = e * RECV_MAX
         b = pl.cast(0, pl.INDEX)
@@ -344,11 +367,7 @@ def combine(
                 )
             b = b + n
 
-        # Payload-arrival notify folded into the scatter (mirrors dispatch_push):
-        # each block signals every peer after its own puts, so the wait below expects
-        # N_LOCAL * moe_epoch. Saves a task launch on the cross-rank critical path.
-        # The [1, D] puts above are single-shot TPUTs, which drain themselves before
-        # this notify issues.
+        # Each local-expert scatter block publishes one completion per peer.
         for peer in pl.range(N_RANKS):
             if peer != my_rank:
                 pld.system.notify(
@@ -359,17 +378,10 @@ def combine(
                     op=pld.NotifyOp.AtomicAdd,
                 )
 
-    # Wait only (the notify rides inside the scatter), so it spins on the peers'
-    # counters while our own scatter runs. The recv_y_flat read is an anchor, not
-    # data: it auto-deps this task on exp_w2_act, starting the wait when the scatter
-    # starts. Anchor it to something -- a wait with no dep at all is dispatched the
-    # moment the scheduler reaches it and spins holding a core group, so pipelined
-    # layers stack up spinners that starve the scatters they wait on.
-    with pl.at(level=pl.Level.CORE_GROUP, name_hint="combine_wait", allow_early_resolve=True) as _cwait_tid:
-        _recv_y_anchor = pl.read(recv_y_flat, [0, 0])
+    with pl.at(level=pl.Level.CORE_GROUP, name_hint="combine_wait") as _cwait_tid:
         for src in pl.range(N_RANKS):
             if src != my_rank:
-                pld.system.wait(
+                pld.system.defer_wait(
                     signal=combine_arrived,
                     offsets=[src, 0],
                     expected=pl.cast(moe_epoch * N_LOCAL, pl.INT32),
@@ -388,7 +400,6 @@ def combine(
         T,
         name_hint="shared_routed",
         deps=[_cwait_tid],
-        allow_early_resolve=True,
     ) as _reduce_tid:
         t = pl.tile.get_block_idx()
         if t < active_tokens:
@@ -399,6 +410,90 @@ def combine(
             ffn_out[t:t + 1, :] = pl.cast(acc, target_type=pl.BF16, mode="rint")
         else:
             ffn_out[t:t + 1, :] = sh[t:t + 1, :]
+    return _reduce_tid
+
+
+@pl.jit.inline(auto_scope=False)
+def _moe_tile(
+    x_mixed: pl.Tensor[[T, D], pl.BF16],
+    norm_w: pl.Tensor[[D], pl.BF16],
+    gate_w: pl.Tensor[[N_EXPERTS_GLOBAL, D], pl.FP32],
+    gate_bias: pl.Tensor[[N_EXPERTS_GLOBAL], pl.FP32],
+    tid2eid: pl.Tensor[[VOCAB, TOPK], pl.INT32],
+    input_ids: pl.Tensor[[T], pl.INT64],
+    routed_w1: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8],
+    routed_w1_scale: pl.Tensor[[N_LOCAL, MOE_INTER], pl.FP32],
+    routed_w3: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8],
+    routed_w3_scale: pl.Tensor[[N_LOCAL, MOE_INTER], pl.FP32],
+    routed_w2: pl.Tensor[[N_LOCAL, D, MOE_INTER], pl.INT8],
+    routed_w2_scale: pl.Tensor[[N_LOCAL, D], pl.FP32],
+    shared_w1: pl.Tensor[[MOE_INTER, D], pl.INT8],
+    shared_w1_scale: pl.Tensor[[MOE_INTER], pl.FP32],
+    shared_w3: pl.Tensor[[MOE_INTER, D], pl.INT8],
+    shared_w3_scale: pl.Tensor[[MOE_INTER], pl.FP32],
+    shared_w2: pl.Tensor[[D, MOE_INTER], pl.INT8],
+    shared_w2_scale: pl.Tensor[[D], pl.FP32],
+    ffn_out: pl.Tensor[[T, D], pl.BF16],
+    recv_meta: pld.DistributedTensor[[N_RANKS, N_LOCAL], pl.INT32],
+    recv_x: pld.DistributedTensor[[N_LOCAL * RECV_MAX, D], pl.INT8],
+    recv_aux: pld.DistributedTensor[[N_LOCAL * RECV_MAX, AUX_PAD], pl.FP32],
+    recv_route: pld.DistributedTensor[[N_LOCAL * RECV_MAX, IDX_PAD], pl.INT32],
+    arrived: pld.DistributedTensor[[N_RANKS, 1], pl.INT32],
+    data_arrived: pld.DistributedTensor[[N_RANKS, 1], pl.INT32],
+    routed_y_buf: pld.DistributedTensor[[N_ROUTES, D], pl.BF16],
+    combine_arrived: pld.DistributedTensor[[N_RANKS, 1], pl.INT32],
+    layer_id: pl.Scalar[pl.INT32],
+    num_tokens: pl.Scalar[pl.INT32],
+    my_rank: pl.Scalar[pl.INT32],
+    moe_epoch: pl.Scalar[pl.INT32],
+) -> pl.Scalar[pl.TASK_ID]:
+    """Run one fixed-capacity gate, expert dispatch, and combine tile."""
+    x_norm_i8 = pl.create_tensor([T, D], dtype=pl.INT8)
+    x_norm_scale = pl.create_tensor([T, 1], dtype=pl.FP32, manual_dep=True)
+    indices = pl.create_tensor([T, TOPK], dtype=pl.INT32)
+    weights = pl.create_tensor([T, TOPK], dtype=pl.FP32)
+    gate(
+        x_mixed, norm_w, gate_w, gate_bias,
+        layer_id, num_tokens, tid2eid, input_ids,
+        x_norm_i8, x_norm_scale, indices, weights,
+    )
+
+    shared_out = pl.create_tensor([T, D], dtype=pl.BF16)
+    expert_shared(
+        x_norm_i8, x_norm_scale,
+        shared_w1, shared_w1_scale, shared_w3, shared_w3_scale,
+        shared_w2, shared_w2_scale,
+        shared_out,
+    )
+
+    recv_x_out = pl.create_tensor([N_LOCAL, RECV_MAX, D], dtype=pl.INT8)
+    recv_scale_out = pl.create_tensor([N_LOCAL, RECV_MAX], dtype=pl.FP32, manual_dep=True)
+    recv_w_out = pl.create_tensor([N_LOCAL, RECV_MAX], dtype=pl.FP32, manual_dep=True)
+    recv_r_route_out = pl.create_tensor([N_LOCAL, RECV_MAX], dtype=pl.INT32, manual_dep=True)
+    recv_count_out = pl.create_tensor([N_LOCAL, 1], dtype=pl.INT32)
+    recv_meta_local = pl.create_tensor([N_RANKS, N_LOCAL], dtype=pl.INT32, manual_dep=True)
+    dispatch(
+        indices, x_norm_i8, x_norm_scale, weights,
+        recv_x_out, recv_scale_out, recv_w_out, recv_r_route_out, recv_count_out, recv_meta_local,
+        recv_meta, recv_x, recv_aux, recv_route, arrived, data_arrived,
+        num_tokens, my_rank, moe_epoch,
+    )
+
+    recv_y = pl.create_tensor([N_LOCAL, RECV_MAX, D], dtype=pl.BF16)
+    expert_routed(
+        recv_x_out, recv_scale_out, recv_w_out, recv_count_out,
+        routed_w1, routed_w1_scale, routed_w3, routed_w3_scale,
+        routed_w2, routed_w2_scale,
+        recv_y,
+    )
+
+    completion_tid = combine(
+        recv_y, recv_r_route_out, shared_out,
+        ffn_out, recv_meta_local,
+        routed_y_buf, combine_arrived,
+        num_tokens, my_rank, moe_epoch,
+    )
+    return completion_tid
 
 
 @pl.jit.inline(auto_scope=False)
@@ -426,7 +521,7 @@ def moe(
     shared_w2: pl.Tensor[[D, MOE_INTER], pl.INT8],
     shared_w2_scale: pl.Tensor[[D], pl.FP32],
     # final output
-    x_next: pl.Out[pl.Tensor[[T, HC_MULT, D], pl.FP32]],
+    x_next: pl.Tensor[[T, HC_MULT, D], pl.FP32],
     # windows
     recv_meta: pld.DistributedTensor[[N_RANKS, N_LOCAL], pl.INT32],
     recv_x: pld.DistributedTensor[[N_LOCAL * RECV_MAX, D], pl.INT8],
@@ -447,61 +542,182 @@ def moe(
     x_mixed = pl.create_tensor([T, D], dtype=pl.BF16)
     post_ffn = pl.create_tensor([T, HC_MULT], dtype=pl.FP32, manual_dep=True)
     comb_ffn = pl.create_tensor([T, HC_MULT * HC_MULT], dtype=pl.FP32)
-    hc_pre(
-        x_hc, hc_ffn_fn, hc_ffn_scale, hc_ffn_base,
-        x_mixed, post_ffn, comb_ffn,
-    )
+    hc_pre(x_hc, hc_ffn_fn, hc_ffn_scale, hc_ffn_base, x_mixed, post_ffn, comb_ffn)
 
-    x_norm_i8 = pl.create_tensor([T, D], dtype=pl.INT8)
-    x_norm_scale = pl.create_tensor([T, 1], dtype=pl.FP32, manual_dep=True)
-    indices = pl.create_tensor([T, TOPK], dtype=pl.INT32)
-    weights = pl.create_tensor([T, TOPK], dtype=pl.FP32)
-    gate(
-        x_mixed, norm_w, gate_w, gate_bias,
-        layer_id, num_tokens, tid2eid, input_ids,
-        x_norm_i8, x_norm_scale, indices, weights,
-    )
-
-    sh = pl.create_tensor([T, D], dtype=pl.BF16)
-    expert_shared(
-        x_norm_i8, x_norm_scale,
-        shared_w1, shared_w1_scale, shared_w3, shared_w3_scale,
-        shared_w2, shared_w2_scale,
-        sh,
-    )
-
-    recv_x_out = pl.create_tensor([N_LOCAL, RECV_MAX, D], dtype=pl.INT8)
-    recv_scale_out = pl.create_tensor([N_LOCAL, RECV_MAX], dtype=pl.FP32, manual_dep=True)
-    recv_w_out = pl.create_tensor([N_LOCAL, RECV_MAX], dtype=pl.FP32, manual_dep=True)
-    recv_r_route_out = pl.create_tensor([N_LOCAL, RECV_MAX], dtype=pl.INT32, manual_dep=True)
-    recv_count_out = pl.create_tensor([N_LOCAL, 1], dtype=pl.INT32)
-    recv_meta_local = pl.create_tensor([N_RANKS, N_LOCAL], dtype=pl.INT32, manual_dep=True)
-    dispatch(
-        indices, x_norm_i8, x_norm_scale, weights,
-        recv_x_out, recv_scale_out, recv_w_out, recv_r_route_out, recv_count_out, recv_meta_local,
-        recv_meta, recv_x, recv_aux, recv_route, arrived, data_arrived,
-        num_tokens, my_rank, moe_epoch,
-    )
-
+    ffn_out = pl.create_tensor([T, D], dtype=pl.BF16)
     with pl.scope():
-        recv_y = pl.create_tensor([N_LOCAL, RECV_MAX, D], dtype=pl.BF16)
-        expert_routed(
-            recv_x_out, recv_scale_out, recv_w_out, recv_count_out,
+        _moe_tile(
+            x_mixed,
+            norm_w, gate_w, gate_bias, tid2eid, input_ids,
             routed_w1, routed_w1_scale, routed_w3, routed_w3_scale,
             routed_w2, routed_w2_scale,
-            recv_y,
+            shared_w1, shared_w1_scale, shared_w3, shared_w3_scale,
+            shared_w2, shared_w2_scale,
+            ffn_out,
+            recv_meta, recv_x, recv_aux, recv_route,
+            arrived, data_arrived, routed_y_buf, combine_arrived,
+            layer_id, num_tokens, my_rank, moe_epoch,
         )
-
-        ffn_out = pl.create_tensor([T, D], dtype=pl.BF16)
-        combine(
-            recv_y, recv_r_route_out, sh,
-            ffn_out, recv_meta_local,
-            routed_y_buf, combine_arrived,
-            num_tokens, my_rank, moe_epoch,
-        )
-
         hc_post(ffn_out, x_hc, post_ffn, comb_ffn, x_next)
     return x_next
+
+
+@pl.jit.inline(auto_scope=False)
+def prefill_moe(
+    attn_out: pl.Tensor[[PREFILL_GROUP_T_DYN, HC_MULT, D], pl.FP32],
+    hc_ffn_fn: pl.Tensor[[MIX_HC, HC_DIM], pl.FP32],
+    hc_ffn_scale: pl.Tensor[[3], pl.FP32],
+    hc_ffn_base: pl.Tensor[[MIX_HC], pl.FP32],
+    norm_w: pl.Tensor[[D], pl.BF16],
+    gate_w: pl.Tensor[[N_EXPERTS_GLOBAL, D], pl.FP32],
+    gate_bias: pl.Tensor[[N_EXPERTS_GLOBAL], pl.FP32],
+    tid2eid: pl.Tensor[[VOCAB, TOPK], pl.INT32],
+    input_ids: pl.Tensor[[PREFILL_LOCAL_T_DYN], pl.INT64],
+    routed_w1: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8],
+    routed_w1_scale: pl.Tensor[[N_LOCAL, MOE_INTER], pl.FP32],
+    routed_w3: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8],
+    routed_w3_scale: pl.Tensor[[N_LOCAL, MOE_INTER], pl.FP32],
+    routed_w2: pl.Tensor[[N_LOCAL, D, MOE_INTER], pl.INT8],
+    routed_w2_scale: pl.Tensor[[N_LOCAL, D], pl.FP32],
+    shared_w1: pl.Tensor[[MOE_INTER, D], pl.INT8],
+    shared_w1_scale: pl.Tensor[[MOE_INTER], pl.FP32],
+    shared_w3: pl.Tensor[[MOE_INTER, D], pl.INT8],
+    shared_w3_scale: pl.Tensor[[MOE_INTER], pl.FP32],
+    shared_w2: pl.Tensor[[D, MOE_INTER], pl.INT8],
+    shared_w2_scale: pl.Tensor[[D], pl.FP32],
+    x_hc: pl.Tensor[[PREFILL_GROUP_T_DYN, HC_MULT, D], pl.FP32],
+    x_mixed: pl.Tensor[[PREFILL_GROUP_T_DYN, D], pl.BF16],
+    post_ffn: pl.Tensor[[PREFILL_GROUP_T_DYN, HC_MULT], pl.FP32],
+    comb_ffn: pl.Tensor[[PREFILL_GROUP_T_DYN, HC_MULT * HC_MULT], pl.FP32],
+    ffn_out: pl.Tensor[[PREFILL_LOCAL_T_DYN, D], pl.BF16],
+    recv_meta: pld.DistributedTensor[[N_RANKS, N_LOCAL], pl.INT32],
+    recv_x: pld.DistributedTensor[[N_LOCAL * RECV_MAX, D], pl.INT8],
+    recv_aux: pld.DistributedTensor[[N_LOCAL * RECV_MAX, AUX_PAD], pl.FP32],
+    recv_route: pld.DistributedTensor[[N_LOCAL * RECV_MAX, IDX_PAD], pl.INT32],
+    arrived: pld.DistributedTensor[[N_RANKS, 1], pl.INT32],
+    data_arrived: pld.DistributedTensor[[N_RANKS, 1], pl.INT32],
+    routed_y_buf: pld.DistributedTensor[[N_ROUTES, D], pl.BF16],
+    combine_arrived: pld.DistributedTensor[[N_RANKS, 1], pl.INT32],
+    stage_done: pld.DistributedTensor[[N_RANKS, 1], pl.INT32],
+    stage_token: pl.Tensor[[1], pl.INT32],
+    layer_completion: pl.Tensor[[1], pl.INT32],
+    gather_window: pld.DistributedTensor[[PREFILL_GROUP_CAP, D], pl.BF16],
+    gather_signal: pld.DistributedTensor[[TP_SIZE, 1], pl.INT32],
+    group_base: pl.Scalar[pl.INT32],
+    tp_rank: pl.Scalar[pl.INT32],
+    layer_id: pl.Scalar[pl.INT32],
+    my_rank: pl.Scalar[pl.INT32],
+) -> pl.Tensor[[PREFILL_GROUP_T_DYN, HC_MULT, D], pl.FP32]:
+    """Run one CP-aware prefill MoE layer over a rank-local token shard."""
+    with pl.scope():
+        hc_pre(attn_out, hc_ffn_fn, hc_ffn_scale, hc_ffn_base, x_mixed, post_ffn, comb_ffn)
+
+    local_rows = pl.tensor.dim(ffn_out, 0)
+    num_waves = (local_rows + T - 1) // T
+    num_waves_i32 = pl.cast(num_waves, pl.INT32)
+    for wave in pl.range(num_waves):
+        wave_i32 = pl.cast(wave, pl.INT32)
+        moe_epoch = layer_id * num_waves_i32 + wave_i32 + pl.const(1, pl.INT32)
+        with pl.scope():
+            local_wave_base = wave_i32 * T
+            # Physical rows in the fixed-capacity wave.
+            wave_rows = pl.min(T, local_rows - local_wave_base)
+            wave_rows_i32 = pl.cast(wave_rows, pl.INT32)
+            full_wave_base = tp_rank * local_rows + local_wave_base
+
+            x_mixed_wave = pl.create_tensor([T, D], dtype=pl.BF16)
+            for token in pl.spmd(T, name_hint="prefill_moe_hidden_stage"):
+                completed_epoch = pl.read(stage_token, [0])
+                if completed_epoch >= 0:
+                    if token < wave_rows:
+                        full_token = full_wave_base + token
+                        x_mixed_row = x_mixed[full_token : full_token + 1, :]
+                        x_mixed_wave[token : token + 1, :] = x_mixed_row
+                    else:
+                        x_mixed_zero = pl.full([1, D], dtype=pl.BF16, value=0.0)
+                        x_mixed_wave[token : token + 1, :] = x_mixed_zero
+
+            input_id_count = pl.tensor.dim(input_ids, 0)
+            input_ids_rows = pl.reshape(input_ids, [input_id_count, 1])
+            input_ids_wave_rows = pl.create_tensor([T, 1], dtype=pl.INT64)
+            if wave_rows == T:
+                for token_block in pl.spmd(T // PREFILL_INPUT_ID_TILE, name_hint="prefill_moe_ids_stage"):
+                    token0 = token_block * PREFILL_INPUT_ID_TILE
+                    local_token = local_wave_base + token0
+                    input_id_tile = input_ids_rows[local_token : local_token + PREFILL_INPUT_ID_TILE, 0:1]
+                    input_ids_wave_rows[token0 : token0 + PREFILL_INPUT_ID_TILE, 0:1] = input_id_tile
+            else:
+                for token in pl.spmd(T, name_hint="prefill_moe_ids_stage_tail"):
+                    if token < wave_rows:
+                        local_token = local_wave_base + token
+                        input_id = pl.read(input_ids_rows, [local_token, 0])
+                        pl.write(input_ids_wave_rows, [token, 0], input_id)
+                    else:
+                        input_id_zero = pl.cast(0, pl.INT64)
+                        pl.write(input_ids_wave_rows, [token, 0], input_id_zero)
+            input_ids_wave = pl.reshape(input_ids_wave_rows, [T])
+
+            ffn_wave = pl.create_tensor([T, D], dtype=pl.BF16)
+            completion_tid = _moe_tile(
+                x_mixed_wave,
+                norm_w, gate_w, gate_bias, tid2eid, input_ids_wave,
+                routed_w1, routed_w1_scale, routed_w3, routed_w3_scale,
+                routed_w2, routed_w2_scale,
+                shared_w1, shared_w1_scale, shared_w3, shared_w3_scale,
+                shared_w2, shared_w2_scale,
+                ffn_wave,
+                recv_meta, recv_x, recv_aux, recv_route,
+                arrived, data_arrived, routed_y_buf, combine_arrived,
+                layer_id, wave_rows_i32, my_rank, moe_epoch,
+            )
+            with pl.spmd(T, name_hint="prefill_moe_output_store", deps=[completion_tid]) as output_store_tid:
+                token = pl.tile.get_block_idx()
+                if token < wave_rows:
+                    local_token = local_wave_base + token
+                    ffn_out[local_token : local_token + 1, :] = ffn_wave[token : token + 1, :]
+            # Publish one globally complete wave before the windows are reused.
+            with pl.at(
+                level=pl.Level.CORE_GROUP,
+                name_hint="prefill_moe_wave_notify",
+                deps=[output_store_tid],
+            ) as notify_tid:
+                for peer in pl.range(N_RANKS):
+                    if peer != my_rank:
+                        pld.system.notify(
+                            target=stage_done, peer=peer, offsets=[my_rank, 0],
+                            value=1, op=pld.NotifyOp.AtomicAdd,
+                        )
+
+            with pl.at(level=pl.Level.CORE_GROUP, name_hint="prefill_moe_wave_wait") as wait_tid:
+                for peer in pl.range(N_RANKS):
+                    if peer != my_rank:
+                        pld.system.defer_wait(
+                            signal=stage_done, offsets=[peer, 0],
+                            expected=moe_epoch, cmp=pld.WaitCmp.Ge,
+                        )
+
+            with pl.at(
+                level=pl.Level.CORE_GROUP,
+                name_hint="prefill_moe_wave_publish",
+                deps=[output_store_tid, notify_tid, wait_tid],
+            ):
+                pl.write(stage_token, [0], moe_epoch)
+
+    with pl.at(level=pl.Level.CORE_GROUP, name_hint="prefill_moe_layer_complete"):
+        completed_epoch = pl.read(stage_token, [0])
+        if completed_epoch >= 0:
+            pl.write(layer_completion, [0], layer_id + pl.const(1, pl.INT32))
+
+    with pl.scope():
+        group_rows = pl.tensor.dim(attn_out, 0)
+        ffn_out_full = pl.create_tensor([group_rows, D], dtype=pl.BF16)
+        ffn_out_full, _gather_signal = prefill_cp_token_allgather_step(
+            ffn_out, ffn_out_full,
+            gather_window, gather_signal,
+            group_base, tp_rank,
+        )
+        hc_post(ffn_out_full, attn_out, post_ffn, comb_ffn, x_hc)
+    return x_hc
 
 
 @pl.jit
@@ -545,6 +761,7 @@ def moe_test(
     my_rank: pl.Scalar[pl.INT32],
     # 1-based MoE call id; multi-layer callers increment it per reused window.
     moe_epoch: pl.Scalar[pl.INT32],
+    finalize_moe: pl.Scalar[pl.INT32],
 ) -> pl.Tensor[[T, HC_MULT, D], pl.FP32]:
     moe(
         x_hc, hc_ffn_fn, hc_ffn_scale, hc_ffn_base,
@@ -558,13 +775,19 @@ def moe_test(
         routed_y_buf, combine_arrived,
         layer_id, num_tokens, my_rank, moe_epoch,
     )
-    clear_moe_signals(x_next, arrived, data_arrived, combine_arrived)
+    if finalize_moe == 1:
+        clear_moe_signals(x_next, arrived, data_arrived, combine_arrived)
     return x_next
+
+
+# Rounds sharing one window allocation. >1 exercises retained-window reuse
+# across MoE epochs; the round axis is kept even at 1.
+MOE_ROUNDS = 1
 
 
 @pl.jit.host
 def l3_moe(
-    x_hc: pl.Tensor[[N_RANKS, T, HC_MULT, D], pl.FP32],
+    x_hc: pl.Tensor[[MOE_ROUNDS, N_RANKS, T, HC_MULT, D], pl.FP32],
     hc_ffn_fn: pl.Tensor[[N_RANKS, MIX_HC, HC_DIM], pl.FP32],
     hc_ffn_scale: pl.Tensor[[N_RANKS, 3], pl.FP32],
     hc_ffn_base: pl.Tensor[[N_RANKS, MIX_HC], pl.FP32],
@@ -572,7 +795,7 @@ def l3_moe(
     gate_w: pl.Tensor[[N_RANKS, N_EXPERTS_GLOBAL, D], pl.FP32],
     gate_bias: pl.Tensor[[N_RANKS, N_EXPERTS_GLOBAL], pl.FP32],
     tid2eid: pl.Tensor[[N_RANKS, VOCAB, TOPK], pl.INT32],
-    input_ids: pl.Tensor[[N_RANKS, T], pl.INT64],
+    input_ids: pl.Tensor[[MOE_ROUNDS, N_RANKS, T], pl.INT64],
     routed_w1: pl.Tensor[[N_RANKS, N_LOCAL, MOE_INTER, D], pl.INT8],
     routed_w1_scale: pl.Tensor[[N_RANKS, N_LOCAL, MOE_INTER], pl.FP32],
     routed_w3: pl.Tensor[[N_RANKS, N_LOCAL, MOE_INTER, D], pl.INT8],
@@ -585,7 +808,7 @@ def l3_moe(
     shared_w3_scale: pl.Tensor[[N_RANKS, MOE_INTER], pl.FP32],
     shared_w2: pl.Tensor[[N_RANKS, D, MOE_INTER], pl.INT8],
     shared_w2_scale: pl.Tensor[[N_RANKS, D], pl.FP32],
-    x_next: pl.Out[pl.Tensor[[N_RANKS, T, HC_MULT, D], pl.FP32]],
+    x_next: pl.Out[pl.Tensor[[MOE_ROUNDS, N_RANKS, T, HC_MULT, D], pl.FP32]],
     layer_id: pl.Scalar[pl.INT32],
     num_tokens: pl.Scalar[pl.INT32],
 ):
@@ -598,32 +821,35 @@ def l3_moe(
     routed_y_buf_buf = pld.alloc_window_buffer([N_ROUTES, D], dtype=pl.BF16)
     combine_arrived_buf = pld.alloc_window_buffer([N_RANKS, 1], dtype=pl.INT32)
 
-    for r in pl.range(pld.world_size()):
-        recv_meta = pld.window(recv_meta_buf, [N_RANKS, N_LOCAL], dtype=pl.INT32)
-        recv_x = pld.window(recv_x_buf, [N_LOCAL * RECV_MAX, D], dtype=pl.INT8)
-        recv_aux = pld.window(recv_aux_buf, [N_LOCAL * RECV_MAX, AUX_PAD], dtype=pl.FP32)
-        recv_route = pld.window(recv_route_buf, [N_LOCAL * RECV_MAX, IDX_PAD], dtype=pl.INT32)
-        arrived = pld.window(arrived_buf, [N_RANKS, 1], dtype=pl.INT32)
-        data_arrived = pld.window(data_arrived_buf, [N_RANKS, 1], dtype=pl.INT32)
-        routed_y_buf = pld.window(routed_y_buf_buf, [N_ROUTES, D], dtype=pl.BF16)
-        combine_arrived = pld.window(combine_arrived_buf, [N_RANKS, 1], dtype=pl.INT32)
-        moe_test(
-            x_hc[r], hc_ffn_fn[r], hc_ffn_scale[r], hc_ffn_base[r],
-            norm_w[r], gate_w[r], gate_bias[r], tid2eid[r], input_ids[r],
-            routed_w1[r], routed_w1_scale[r], routed_w3[r], routed_w3_scale[r],
-            routed_w2[r], routed_w2_scale[r],
-            shared_w1[r], shared_w1_scale[r], shared_w3[r], shared_w3_scale[r],
-            shared_w2[r], shared_w2_scale[r],
-            x_next[r],
-            recv_meta, recv_x, recv_aux, recv_route, arrived, data_arrived,
-            routed_y_buf, combine_arrived,
-            layer_id, num_tokens, r, pl.const(1, pl.INT32),
-            device=r,
-        )
+    for round_id in pl.range(MOE_ROUNDS):
+        moe_epoch = round_id + 1
+        finalize_moe = pl.cast(round_id == MOE_ROUNDS - 1, pl.INT32)
+        for r in pl.range(pld.world_size()):
+            recv_meta = pld.window(recv_meta_buf, [N_RANKS, N_LOCAL], dtype=pl.INT32)
+            recv_x = pld.window(recv_x_buf, [N_LOCAL * RECV_MAX, D], dtype=pl.INT8)
+            recv_aux = pld.window(recv_aux_buf, [N_LOCAL * RECV_MAX, AUX_PAD], dtype=pl.FP32)
+            recv_route = pld.window(recv_route_buf, [N_LOCAL * RECV_MAX, IDX_PAD], dtype=pl.INT32)
+            arrived = pld.window(arrived_buf, [N_RANKS, 1], dtype=pl.INT32)
+            data_arrived = pld.window(data_arrived_buf, [N_RANKS, 1], dtype=pl.INT32)
+            routed_y_buf = pld.window(routed_y_buf_buf, [N_ROUTES, D], dtype=pl.BF16)
+            combine_arrived = pld.window(combine_arrived_buf, [N_RANKS, 1], dtype=pl.INT32)
+            moe_test(
+                x_hc[round_id, r], hc_ffn_fn[r], hc_ffn_scale[r], hc_ffn_base[r],
+                norm_w[r], gate_w[r], gate_bias[r], tid2eid[r], input_ids[round_id, r],
+                routed_w1[r], routed_w1_scale[r], routed_w3[r], routed_w3_scale[r],
+                routed_w2[r], routed_w2_scale[r],
+                shared_w1[r], shared_w1_scale[r], shared_w3[r], shared_w3_scale[r],
+                shared_w2[r], shared_w2_scale[r],
+                x_next[round_id, r],
+                recv_meta, recv_x, recv_aux, recv_route, arrived, data_arrived,
+                routed_y_buf, combine_arrived,
+                layer_id, num_tokens, r, moe_epoch, finalize_moe,
+                device=r,
+            )
 
 
 # === Golden + test ==========================================================
-def golden_moe(tensors):
+def _golden_moe_single(tensors):
     """Per-rank torch reference. Replays the 4 stages on host. Each rank's
     output depends only on its own inputs because the dispatch+combine round-
     trip is r_route-keyed and shape-preserving (test_l3 pattern).
@@ -792,6 +1018,8 @@ def golden_moe(tensors):
             for t in range(num_tokens):
                 acc[t, :] += routed_y_buf_r[t * TOPK + k, :].float()
         ffn_out = acc.to(torch.bfloat16)
+        if "ffn_out" in tensors:
+            tensors["ffn_out"][r].copy_(ffn_out)
         x_next_r = torch.zeros(T, HC_MULT, D, dtype=torch.float32)
         golden_hc_post({
             "x":        ffn_out,
@@ -805,11 +1033,29 @@ def golden_moe(tensors):
     tensors["x_next"][:] = x_next_out
 
 
-def build_tensor_specs(layer_id=0, num_tokens=T, balanced_routing=False):
+def golden_moe(tensors):
+    """Evaluate one MoE layer."""
+    _golden_moe_single(tensors)
+
+
+def golden_moe_rounds(tensors):
+    """Evaluate every MoE round."""
+    for round_id in range(tensors["x_hc"].shape[0]):
+        round_tensors = dict(tensors)
+        round_tensors["x_hc"] = tensors["x_hc"][round_id]
+        round_tensors["input_ids"] = tensors["input_ids"][round_id]
+        round_tensors["x_next"] = tensors["x_next"][round_id]
+        _golden_moe_single(round_tensors)
+
+
+def _build_tensor_specs(layer_id, num_tokens, balanced_routing, fixture_rounds):
     import torch
     from golden import ScalarSpec, TensorSpec
     from expert_routed import gen_routed_weight
     from expert_shared import gen_shared_weight
+
+    retain_round_axis = fixture_rounds is not None
+    rounds = fixture_rounds if retain_round_axis else 1
 
     # Routed = MXFP4 (gen_routed_weight), shared = MXFP8 (gen_shared_weight). This
     # is an integration test whose x_next-equivalent output is dominated by near-zero
@@ -822,7 +1068,8 @@ def build_tensor_specs(layer_id=0, num_tokens=T, balanced_routing=False):
     # Shared (replicated) weights are broadcast across ranks; the routed
     # weights are per-rank shards.
     def init_x_hc():
-        return torch.randn(N_RANKS, T, HC_MULT, D)
+        value = torch.randn(rounds, N_RANKS, T, HC_MULT, D)
+        return value if retain_round_axis else value[0]
 
     # Real layer-0 hc_ffn scale/base (fn synthetic at real magnitude). A synthetic
     # scale=0.5/base=0 leaves hc_pre post~=1 + near-uniform comb, cancelling the FFN output and
@@ -873,11 +1120,17 @@ def build_tensor_specs(layer_id=0, num_tokens=T, balanced_routing=False):
         if balanced_routing:
             # Active tokens across ranks consume consecutive tid2eid rows, making
             # their route ids one contiguous round-robin sequence over experts.
-            rank_starts = torch.arange(N_RANKS, dtype=torch.int64).unsqueeze(1) * num_tokens
-            token_offsets = torch.arange(T, dtype=torch.int64).unsqueeze(0)
-            return rank_starts + token_offsets
+            round_starts = torch.arange(rounds, dtype=torch.int64).view(rounds, 1, 1)
+            rank_starts = torch.arange(N_RANKS, dtype=torch.int64).view(1, N_RANKS, 1)
+            token_offsets = torch.arange(T, dtype=torch.int64).view(1, 1, T)
+            round_offsets = round_starts * N_RANKS
+            stream_indices = round_offsets + rank_starts
+            stream_starts = stream_indices * num_tokens
+            value = stream_starts + token_offsets
+            return value if retain_round_axis else value[0]
         # Distinct per-rank token streams.
-        return torch.randint(0, VOCAB, (N_RANKS, T), dtype=torch.int64)
+        value = torch.randint(0, VOCAB, (rounds, N_RANKS, T), dtype=torch.int64)
+        return value if retain_round_axis else value[0]
 
     if balanced_routing:
         assert layer_id < M.num_hash_layers, "balanced routing requires a hash-routing layer"
@@ -921,8 +1174,14 @@ def build_tensor_specs(layer_id=0, num_tokens=T, balanced_routing=False):
     sw2_i8 = sw2_i8.unsqueeze(0).expand(N_RANKS, -1, -1).contiguous()
     sw2_s = sw2_s.unsqueeze(0).expand(N_RANKS, -1).contiguous()
 
+    x_hc_shape = [N_RANKS, T, HC_MULT, D]
+    input_ids_shape = [N_RANKS, T]
+    if retain_round_axis:
+        x_hc_shape = [rounds, *x_hc_shape]
+        input_ids_shape = [rounds, *input_ids_shape]
+
     specs = [
-        TensorSpec("x_hc",          [N_RANKS, T, HC_MULT, D],     torch.float32, init_value=init_x_hc),
+        TensorSpec("x_hc", x_hc_shape, torch.float32, init_value=init_x_hc),
         TensorSpec("hc_ffn_fn",     [N_RANKS, MIX_HC, HC_DIM],       torch.float32,  init_value=init_hc_ffn_fn),
         TensorSpec("hc_ffn_scale",  [N_RANKS, 3],                    torch.float32,  init_value=init_hc_ffn_scale),
         TensorSpec("hc_ffn_base",   [N_RANKS, MIX_HC],               torch.float32,  init_value=init_hc_ffn_base),
@@ -930,7 +1189,7 @@ def build_tensor_specs(layer_id=0, num_tokens=T, balanced_routing=False):
         TensorSpec("gate_w",        [N_RANKS, N_EXPERTS_GLOBAL, D],  torch.float32,  init_value=init_gate_w),
         TensorSpec("gate_bias",     [N_RANKS, N_EXPERTS_GLOBAL],     torch.float32,  init_value=init_gate_bias),
         TensorSpec("tid2eid",       [N_RANKS, VOCAB, TOPK],          torch.int32,    init_value=init_tid2eid),
-        TensorSpec("input_ids",     [N_RANKS, T],                 torch.int64,    init_value=init_input_ids),
+        TensorSpec("input_ids", input_ids_shape, torch.int64, init_value=init_input_ids),
         TensorSpec("routed_w1",        [N_RANKS, N_LOCAL, MOE_INTER, D], torch.int8,    init_value=lambda: rw1_i8),
         TensorSpec("routed_w1_scale",  [N_RANKS, N_LOCAL, MOE_INTER],    torch.float32, init_value=lambda: rw1_s),
         TensorSpec("routed_w3",        [N_RANKS, N_LOCAL, MOE_INTER, D], torch.int8,    init_value=lambda: rw3_i8),
@@ -943,7 +1202,7 @@ def build_tensor_specs(layer_id=0, num_tokens=T, balanced_routing=False):
         TensorSpec("shared_w3_scale",  [N_RANKS, MOE_INTER],             torch.float32, init_value=lambda: sw3_s),
         TensorSpec("shared_w2",        [N_RANKS, D, MOE_INTER],          torch.int8,    init_value=lambda: sw2_i8),
         TensorSpec("shared_w2_scale",  [N_RANKS, D],                     torch.float32, init_value=lambda: sw2_s),
-        TensorSpec("x_next",           [N_RANKS, T, HC_MULT, D],      torch.float32, is_output=True),
+        TensorSpec("x_next", x_hc_shape, torch.float32),
         ScalarSpec("layer_id",         torch.int32,                      layer_id),
         ScalarSpec("num_tokens",       torch.int32,                      num_tokens),
     ]
@@ -955,7 +1214,7 @@ def build_tensor_specs(layer_id=0, num_tokens=T, balanced_routing=False):
     # H2D/D2H. Covers the routed/shared expert weights and their scales, the gate,
     # the HC-FFN constants, the RMSNorm gamma, and the static tid2eid route table —
     # but NOT the per-step activation (x_hc), per-step input_ids, or the output.
-    # All resident names are inputs (is_output=False), so the flag is always valid.
+    # All resident names are pure inputs, so the flag is always valid.
     RESIDENT_WEIGHT_NAMES = frozenset([
         "hc_ffn_fn", "hc_ffn_scale", "hc_ffn_base", "norm_w",
         "gate_w", "gate_bias", "tid2eid",
@@ -971,10 +1230,19 @@ def build_tensor_specs(layer_id=0, num_tokens=T, balanced_routing=False):
     return specs
 
 
+def build_tensor_specs(layer_id=0, num_tokens=T, balanced_routing=False):
+    return _build_tensor_specs(layer_id, num_tokens, balanced_routing, fixture_rounds=None)
+
+
+def build_rounds_tensor_specs(layer_id=0, num_tokens=T, balanced_routing=False):
+    return _build_tensor_specs(layer_id, num_tokens, balanced_routing,
+                               fixture_rounds=MOE_ROUNDS)
+
+
 if __name__ == "__main__":
     import argparse
 
-    from golden import ratio_reldiff, run_jit
+    from golden import ratio_reldiff, run
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--platform", type=str, default="a2a3",
@@ -988,7 +1256,7 @@ if __name__ == "__main__":
                         help=f"active token count for MoE dispatch/combine (0..{T})")
     parser.add_argument("--balanced-routing", action="store_true", default=False,
                         help="use deterministic hash routes balanced evenly across all experts")
-    parser.add_argument("--enable-l2-swimlane", type=int, nargs="?", const=1, default=0, choices=range(5))
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=range(5))
     parser.add_argument("--compile-only", action="store_true", default=False)
     parser.add_argument("--runtime-dir", type=str, default=None)
     parser.add_argument("--save-data", action="store_true", default=False)
@@ -1005,14 +1273,14 @@ if __name__ == "__main__":
 
     golden_data = args.golden_data
 
-    result = run_jit(
+    result = run(
         fn=l3_moe,
-        specs=build_tensor_specs(
+        specs=build_rounds_tensor_specs(
             layer_id=args.layer_id,
             num_tokens=args.num_tokens,
             balanced_routing=args.balanced_routing,
         ),
-        golden_fn=golden_moe,
+        golden_fn=golden_moe_rounds,
         golden_data=golden_data,
         save_data=args.save_data,
         compile_only=args.compile_only,
@@ -1026,7 +1294,7 @@ if __name__ == "__main__":
         ),
         runtime_cfg=dict(
             platform=args.platform,
-            enable_l2_swimlane=args.enable_l2_swimlane,
+            enable_chip_swimlane=args.enable_chip_swimlane,
             log_level=args.log_level,
         ),
         rtol=1e-3,

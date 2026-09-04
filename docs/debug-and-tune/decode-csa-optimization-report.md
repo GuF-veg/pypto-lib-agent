@@ -127,7 +127,7 @@ correctness, benchmark, capture, or confidence interval result.
 
 `models/deepseek_v4_flash_dspark/decode_csa.py` now exposes opt-in
 `--save-data`, `--enable-dep-gen`, `--enable-pmu`, `--enable-dump-args`, and
-`--enable-scope-stats`, forwarding them to `run_jit`. Defaults are unchanged.
+`--enable-scope-stats`, forwarding them to `run`. Defaults are unchanged.
 This made the baseline capture reproducible without changing the CSA math or
 public tensor contract.
 

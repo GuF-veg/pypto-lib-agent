@@ -2,11 +2,11 @@
 
 A practical guide for tuning pypto-lib kernels on Ascend NPU (A3 / 910C).
 The flow is two-tiered: first balance the inter-kernel schedule on the
-AICPU side (L2 swimlane), then optimize each kernel's internal pipeline
+AICPU side (chip swimlane), then optimize each kernel's internal pipeline
 (L1/L0 swimlane + PMU).
 
 For the underlying levels see simpler's
-[hierarchical_level_runtime.md](https://github.com/hw-native-sys/simpler/blob/main/docs/hierarchical_level_runtime.md):
+[Hierarchical Level Runtime](https://www.pypto.ai/simpler/hierarchical-level-runtime/):
 L2 = one chip (AICPU + AIC/AIV cores), L1 = die / L2 cache, L0 = single
 compute core.
 
@@ -15,7 +15,7 @@ compute core.
 ## Measuring — the benchmark loop (`PYPTO_BENCH`)
 
 Tuning needs a number before and after. Set `PYPTO_BENCH=1` and every
-`run` / `run_jit` call in the process times the kernel on device after its
+`run` call in the process times the kernel on device after its
 correctness dispatch — no `--benchmark` flag, no edit to the model file:
 
 ```bash
@@ -124,17 +124,17 @@ of every later run. See
 
 ### Capture
 
-Run the case with `--enable-l2-swimlane`. The runtime writes raw per-task L2
-records under the build directory and, on a real-device platform, converts
-them to a merged swimlane:
+Run the case with `--enable-chip-swimlane`. The runtime writes raw per-task
+chip swimlane records under the build directory and, on a real-device platform,
+converts them to a merged swimlane:
 
 ```bash
-python models/qwen3_14b/decode_fwd.py -p a2a3 -d 0 --enable-l2-swimlane
+python models/qwen3_14b/decode_fwd.py -p a2a3 -d 0 --enable-chip-swimlane
 ```
 
 ```
 build_output/<ProgramName>_<ts>/dfx_outputs/
-├── l2_swimlane_records.json
+├── chip_swimlane_records.json
 ├── deps.json                    # real-device graph pass
 └── merged_swimlane_<ts>.json   # real device only; open this
 ```
@@ -142,10 +142,10 @@ build_output/<ProgramName>_<ts>/dfx_outputs/
 Two viewers work:
 
 - Open `merged_swimlane_<ts>.json` in <https://ui.perfetto.dev/>.
-- Or open `l2_swimlane_records.json` directly with the
+- Or open `chip_swimlane_records.json` directly with the
   [pypto-toolkit VSCode extension](https://marketplace.visualstudio.com/items?itemName=CANN-PUB.pypto-toolkit).
 
-Simulator platforms emit `l2_swimlane_records.json` but intentionally skip
+Simulator platforms emit `chip_swimlane_records.json` but intentionally skip
 the merged conversion because their records do not yet include the task
 metadata the converter requires. Use a real-device capture when you need the
 merged Perfetto view and dependency arrows.
@@ -171,6 +171,13 @@ Look for these shapes on the swimlane that indicate a problem:
 | Cube lane busy while vector lane idle (or vice versa) | Vec/cube epilogue is split into separate kernels | Merge into a mixed kernel (item 2c) |
 | Sequential AICPU dispatch trail per region | Region issues one kernel per iteration | Use `pl.spmd` to dispatch a block fan-out once (item 5) |
 
+A gap on this trace is not automatically a scheduling problem: the interval
+before a task splits into producer-FIN detection, ready-but-undispatched
+scheduler delay, and post-dispatch pickup, and each has a different fix. See
+[Dependencies and Scheduling](dependency-and-scheduling.md) for how edges are
+formed, what the four per-task timestamps mean, and how to attribute a gap
+without guessing.
+
 ### Tuning rules
 
 #### 1. Use `pl.range` vs. `pl.parallel` correctly
@@ -181,8 +188,8 @@ a dependency chain. Use `pl.parallel` whenever there is no carried state,
 and reserve `pl.range` for accumulators or stateful loops.
 
 ```python
-# decode_fwd.py: batch tile is independent — pl.parallel
-for b0 in pl.parallel(0, batch_padded, BATCH_TILE):
+# the batch tile is independent — pl.parallel
+for b0 in pl.parallel(0, BATCH, BATCH_TILE):
     ...
 ```
 
@@ -240,7 +247,7 @@ and vector on the right unit internally, removing the hand-off:
 
 ```python
 with pl.at(level=pl.Level.CORE_GROUP, name_hint="q_proj"):
-    for kb in pl.pipeline(0, input_proj_k_blocks, stage=2):
+    for kb in pl.pipeline(0, HIDDEN // K_STEP, stage=2):
         ...
         q_acc = pl.matmul_acc(q_acc, tile_a, tile_b)     # cube
     q_bf16 = pl.cast(q_acc, target_type=pl.BF16)         # vector
@@ -342,8 +349,8 @@ overhead is visible per iteration on the swimlane, replace the explicit
 `for ... in pl.parallel: with pl.at: ...` pattern with `pl.spmd`:
 
 ```python
-# qwen3_32b/decode.py: one AICPU dispatch fans out Q_OUT_BLOCKS blocks
-for qi in pl.spmd(Q_OUT_BLOCKS, name_hint="q_proj"):
+# qwen3_14b/decode_layer_a8w8.py: one AICPU dispatch fans out every q_proj block
+for q_grid in pl.spmd(Q_ON * N_SUB, name_hint="q_proj_fused_dequant"):
     ...
 ```
 
@@ -374,7 +381,7 @@ python models/deepseek_v4_flash_mtp/decode_sparse_attn.py -p a2a3 -d 0 --enable-
 ```
 
 Not every kernel exposes `--enable-pmu`; a kernel that does not can still be
-captured by passing `runtime_cfg={"enable_pmu": 2}` to its `run` / `run_jit`
+captured by passing `runtime_cfg={"enable_pmu": 2}` to its `run`
 call (the harness bundles it into the runtime's DFX options).
 
 For a per-kernel intra-core swimlane, use
@@ -424,12 +431,12 @@ loop body `stage` times for ping-pong buffering, so MTE2 (load) overlaps
 with cube/vec compute on alternating tiles.
 
 ```python
-# decode_fwd.py — stage=4 used for the largest input-proj K dim
-for kb in pl.pipeline(input_proj_k_blocks, stage=4):
+# stage=4 for the largest input-projection K dim
+for kb in pl.pipeline(HIDDEN // K_STEP, stage=4):
     ...
 
 # stage=2 is the common default
-for kb in pl.pipeline(0, hidden_blocks, stage=2):
+for kb in pl.pipeline(0, hidden // K_STEP, stage=2):
     ...
 ```
 

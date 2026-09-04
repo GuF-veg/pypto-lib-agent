@@ -149,10 +149,18 @@ def topk_select_fwd(
                     token_id = chunk_base + local_token
                     if token_id >= pl.cast(REAL_VOCAB, target_type=pl.INT32):
                         token_id = pl.cast(0, pl.INT32)
-                    topk_values[b : b + 1, :] = pl.full([1, TOPK], dtype=pl.FP32, value=FP32_NEG_INF)
-                    topk_indices[b : b + 1, :] = pl.full([1, TOPK], dtype=pl.INT32, value=0)
-                    pl.write(topk_values, [b, 0], best_val)
-                    pl.write(topk_indices, [b, 0], token_id)
+                    # One GM store path per output tensor: stage the row in UB
+                    # tiles, patch the winning column scalar, then store the
+                    # whole row once (mixing MTE3 stores with scalar GM writes
+                    # breaks D-cache coherence, which pypto rejects).
+                    greedy_vals = pl.create_tensor([1, TOPK], dtype=pl.FP32)
+                    greedy_vals[:, :] = pl.full([1, TOPK], dtype=pl.FP32, value=FP32_NEG_INF)
+                    greedy_ids = pl.create_tensor([1, TOPK], dtype=pl.INT32)
+                    greedy_ids[:, :] = pl.full([1, TOPK], dtype=pl.INT32, value=0)
+                    pl.write(greedy_vals, [0, 0], best_val)
+                    pl.write(greedy_ids, [0, 0], token_id)
+                    topk_values[b : b + 1, :] = greedy_vals
+                    topk_indices[b : b + 1, :] = greedy_ids
             else:
                 with pl.at(level=pl.Level.CORE_GROUP, name_hint="topk_select"):
                     candidate_vals = pl.create_tensor([1, TOPK_CANDIDATE_PAD], dtype=pl.FP32)
@@ -239,13 +247,20 @@ def topk_select_fwd(
                         mask_pattern=pl.tile.MaskPattern.P1010,
                         output_dtype=pl.INT32,
                     )
+                    # Gather token ids scalar-wise into a UB row, then issue the
+                    # single GM store (same one-path rule as the greedy branch).
+                    selected_ids = pl.create_tensor([1, TOPK], dtype=pl.INT32)
                     for k in pl.range(TOPK):
                         candidate_pos = pl.read(selected_positions, [0, k])
-                        token_id = pl.read(
-                            candidate_ids,
-                            [0, pl.cast(candidate_pos, target_type=pl.INDEX)],
+                        pl.write(
+                            selected_ids,
+                            [0, k],
+                            pl.read(
+                                candidate_ids,
+                                [0, pl.cast(candidate_pos, target_type=pl.INDEX)],
+                            ),
                         )
-                        pl.write(topk_indices, [b, k], token_id)
+                    topk_indices[b : b + 1, :] = selected_ids
         else:
             with pl.at(level=pl.Level.CORE_GROUP, name_hint="topk_select_inactive"):
                 topk_values[b : b + 1, :] = pl.full([1, TOPK], dtype=pl.FP32, value=FP32_NEG_INF)
@@ -302,8 +317,8 @@ def build_tensor_specs(selection_k=TOPK):
             torch.int32,
             init_value=lambda: torch.tensor([2 if selection_k == TOPK else 1, selection_k], dtype=torch.int32),
         ),
-        TensorSpec("topk_values", [BATCH_PAD, TOPK], torch.float32, is_output=True),
-        TensorSpec("topk_indices", [BATCH_PAD, TOPK], torch.int32, is_output=True),
+        TensorSpec("topk_values", [BATCH_PAD, TOPK], torch.float32),
+        TensorSpec("topk_indices", [BATCH_PAD, TOPK], torch.int32),
     ]
 
 
@@ -330,7 +345,7 @@ def golden_topk_select(tensors):
 if __name__ == "__main__":
     import argparse
 
-    from golden import run_jit, topk_pair_compare
+    from golden import run, topk_pair_compare
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -338,17 +353,17 @@ if __name__ == "__main__":
     )
     parser.add_argument("-d", "--device", type=int, default=0)
     parser.add_argument("--selection-k", type=int, choices=[1, TOPK], default=TOPK)
-    parser.add_argument("--enable-l2-swimlane", action="store_true", default=False)
+    parser.add_argument("--enable-chip-swimlane", action="store_true", default=False)
     args = parser.parse_args()
 
-    result = run_jit(
+    result = run(
         fn=topk_select_fwd,
         specs=build_tensor_specs(args.selection_k),
         golden_fn=golden_topk_select,
         runtime_cfg=dict(
             platform=args.platform,
             device_id=args.device,
-            enable_l2_swimlane=args.enable_l2_swimlane,
+            enable_chip_swimlane=args.enable_chip_swimlane,
         ),
         rtol=1e-5,
         atol=1e-5,

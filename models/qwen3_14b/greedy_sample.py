@@ -132,7 +132,7 @@ def build_tensor_specs():
 
     return [
         TensorSpec("logits", [BATCH_PAD, VOCAB], torch.float32, init_value=init_logits),
-        TensorSpec("sampled_ids", [BATCH_PAD, SAMPLED_IDS_PAD], torch.int32, is_output=True),
+        TensorSpec("sampled_ids", [BATCH_PAD, SAMPLED_IDS_PAD], torch.int32),
     ]
 
 
@@ -148,23 +148,23 @@ def golden_greedy_sample(tensors):
 if __name__ == "__main__":
     import argparse
 
-    from golden import run_jit
+    from golden import run
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--platform", type=str, default="a2a3",
                         choices=["a2a3", "a2a3sim", "a5", "a5sim"])
     parser.add_argument("-d", "--device", type=int, default=0)
-    parser.add_argument("--enable-l2-swimlane", action="store_true", default=False)
+    parser.add_argument("--enable-chip-swimlane", action="store_true", default=False)
     args = parser.parse_args()
 
-    result = run_jit(
+    result = run(
         fn=greedy_sample_fwd,
         specs=build_tensor_specs(),
         golden_fn=golden_greedy_sample,
         runtime_cfg=dict(
             platform=args.platform,
             device_id=args.device,
-            enable_l2_swimlane=args.enable_l2_swimlane,
+            enable_chip_swimlane=args.enable_chip_swimlane,
         ),
         rtol=0,
         atol=0,

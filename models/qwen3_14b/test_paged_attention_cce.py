@@ -14,7 +14,7 @@ import math
 
 import torch
 
-from golden import TensorSpec, run_jit
+from golden import TensorSpec, run
 from paged_attention_cce import (
     BATCH_PAD,
     BLOCK_SIZE,
@@ -72,7 +72,6 @@ def build_specs(
             "out",
             [batch, NUM_HEADS, HEAD_DIM],
             torch.bfloat16,
-            is_output=True,
         ),
     ]
 
@@ -126,7 +125,7 @@ def main() -> None:
     parser.add_argument("--ragged", action="store_true")
     parser.add_argument("--cache-offset-test", action="store_true")
     parser.add_argument("--compile-only", action="store_true")
-    parser.add_argument("--enable-l2-swimlane", action="store_true")
+    parser.add_argument("--enable-chip-swimlane", action="store_true")
     args = parser.parse_args()
     if not 0 < args.context_len <= args.capacity:
         raise ValueError("context length must be in (0, capacity]")
@@ -160,14 +159,14 @@ def main() -> None:
     else:
         golden_fn = golden_attention if args.check else None
 
-    result = run_jit(
+    result = run(
         fn=fn,
         specs=specs,
         golden_fn=golden_fn,
         runtime_cfg={
             "platform": args.platform,
             "device_id": args.device,
-            "enable_l2_swimlane": args.enable_l2_swimlane,
+            "enable_chip_swimlane": args.enable_chip_swimlane,
         },
         compile_only=args.compile_only or args.platform.endswith("sim"),
         rtol=5e-3,

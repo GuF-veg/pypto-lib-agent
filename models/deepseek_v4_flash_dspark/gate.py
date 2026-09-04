@@ -151,12 +151,13 @@ def gate(
                 x_norm_i8[t0 : t0 + T_TILE, xq_b_k : xq_b_k + QUANT_TILE] = \
                     pl.cast(xn_q_half, pl.INT8, mode="trunc")
 
-    # Pre-route setup: zero the inactive-token outputs and NEG_INF the biased pad
-    # columns so the sort ranks pad experts last. Route write-backs are guarded to
-    # active tokens, so the inactive-zero can run here rather than post-route.
+    # Zero inactive fixed-tile inputs/outputs and mask padded expert scores.
     with pl.at(level=pl.Level.CORE_GROUP, name_hint="gate_pre_route"):
         for zt in pl.range(T):
             if zt >= active_tokens:
+                inactive_x_norm_f16 = pl.full([1, D], dtype=pl.FP16, value=0.0)
+                inactive_x_norm_i8 = pl.cast(inactive_x_norm_f16, target_type=pl.INT8, mode="trunc")
+                x_norm_i8[zt : zt + 1, :] = inactive_x_norm_i8
                 pl.write(x_norm_scale, [zt, 0], pl.cast(0.0, pl.FP32))
                 for zk in pl.range(TOPK):
                     pl.write(indices, [zt, zk], pl.cast(0, pl.INT32))
@@ -358,6 +359,7 @@ def golden_gate_core(tensors):
     denom = topk_vals.sum(dim=-1, keepdim=True)
     weights = (topk_vals / denom) * ROUTE_SCALE
     if num_tokens < T:
+        x_norm_i8[num_tokens:] = 0
         x_norm_scale[num_tokens:] = 0
         indices[num_tokens:] = 0
         weights[num_tokens:] = 0
@@ -394,10 +396,10 @@ def build_tensor_specs(layer_id=0, num_tokens=T):
         ScalarSpec("num_tokens", torch.int32, num_tokens),
         TensorSpec("tid2eid", [VOCAB, TOPK], torch.int32, init_value=init_tid2eid),
         TensorSpec("input_ids", [T], torch.int64, init_value=init_input_ids),
-        TensorSpec("x_norm_i8", [T, D], torch.int8, is_output=True),
-        TensorSpec("x_norm_scale", [T, 1], torch.float32, is_output=True),
-        TensorSpec("indices", [T, TOPK], torch.int32, is_output=True),
-        TensorSpec("weights", [T, TOPK], torch.float32, is_output=True),
+        TensorSpec("x_norm_i8", [T, D], torch.int8),
+        TensorSpec("x_norm_scale", [T, 1], torch.float32),
+        TensorSpec("indices", [T, TOPK], torch.int32),
+        TensorSpec("weights", [T, TOPK], torch.float32),
     ]
 
 
@@ -409,7 +411,7 @@ def gate_active_rows(num_tokens):
 
 if __name__ == "__main__":
     import argparse
-    from golden import ratio_allclose, run_jit, topk_pair_compare
+    from golden import ratio_allclose, run, topk_pair_compare
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--platform", type=str, default="a2a3",
@@ -417,11 +419,11 @@ if __name__ == "__main__":
     parser.add_argument("-d", "--device", type=int, default=0)
     parser.add_argument("--layer-id", type=int, default=10)
     parser.add_argument("--num-tokens", type=int, default=T)
-    parser.add_argument("--enable-l2-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2))
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2))
     parser.add_argument("--dump-passes", action="store_true", default=False)
     args = parser.parse_args()
 
-    result = run_jit(
+    result = run(
         fn=gate_test,
         specs=build_tensor_specs(layer_id=args.layer_id, num_tokens=args.num_tokens),
         golden_fn=golden_gate_core,
@@ -429,7 +431,7 @@ if __name__ == "__main__":
         runtime_cfg=dict(
             platform=args.platform,
             device_id=args.device,
-            enable_l2_swimlane=args.enable_l2_swimlane,
+            enable_chip_swimlane=args.enable_chip_swimlane,
         ),
         rtol=1e-3,
         atol=1e-3,
