@@ -178,7 +178,7 @@
 
 ---
 
-## 5. 数据模型（DuckDB，schema v1）
+## 5. 数据模型（DuckDB，schema v5）
 
 ### 5.1 引擎、位置与生命周期
 
@@ -204,18 +204,20 @@
 |----|------|--------|
 | `run` | 一次采集的上下文与顶线指标 | `run_id`、`program`、`platform`、`device_id`、`captured_at`、`swimlane_level`、`clock_freq_hz`、`num_cores`、`core_types/json`、`core_to_thread/json`、`rank_label`、`git_commit`、`git_dirty`、`runtime_cfg/json`、`cmdline/json`（脱敏）、`bench_min/median/mean/max_us`、`bench_rounds`、`makespan_us`、`raw_span_us`、`cpm_us`、`retained`、`notes`、`tags[]` |
 | `artifact` | 工件清单与存档凭据 | `artifact_id`、`run_id`、`kind`、`rel_path`、`sha256`、`size_bytes`、`store_mode(link/copy)` |
-| `task` | 逻辑任务（deps + 时序拼接后） | `run_id`、`task_id`、`name`、`family`、`engine`、`scope`、`early_dispatch_flag`、`kernel_ids/json`、`block_num`、`num_rows`、`busy_us`、`wall_us`、`min_dispatch_us`…`max_finish_us`、`on_cpm_observed`、`on_cpm_static` |
-| `task_row` | 物理执行行（泳道每一格） | `run_id`、`task_id`、`core_index`、`engine`、`thread`、`row_index`、`start_us`、`end_us`、`dispatch_us`、`receive_us`、`finish_us`、`aux`（disp/receive/finish 由迁移 0003 补齐，level-1 维持转换器合成的 0.0） |
-| `dep_edge` | 任务依赖边（原始字段保真） | `run_id`、`pred`、`succ`、`source`、`arg`、`flags/json`、`tensor_id`、`consumer_dtype`、`consumer_shape/json`、`consumer_start_offset`、`consumer_strides/json` |
+| `task` | 逻辑任务（deps + 时序拼接后） | `run_id`、canonical `task_id`、`task_id_raw`、`task_id_u64`、`name`、`family`、`engine`、`scope`、`early_dispatch_flag`、`kernel_ids/json`、`block_num`、`num_rows`、`busy_us`、`wall_us`、`min_dispatch_us`…`max_finish_us`、`on_cpm_observed`、`on_cpm_static` |
+| `task_row` | 物理执行行（泳道每一格） | `run_id`、canonical `task_id`、`task_id_raw`、`task_id_u64`、`core_index`、`engine`、`thread`、`row_index`、`start_us`、`end_us`、`dispatch_us`、`receive_us`、`finish_us`、`aux`（disp/receive/finish 由迁移 0003 补齐，level-1 维持转换器合成的 0.0） |
+| `dep_edge` | 任务依赖边（原始字段保真） | `run_id`、`pred`、`succ`、`pred_u64`、`succ_u64`、`source`、`arg`、`flags/json`、`tensor_id`、`consumer_dtype`、`consumer_shape/json`、`consumer_start_offset`、`consumer_strides/json` |
 | `scheduler_phase` | AICPU 调度相位 | `run_id`、`lane`、`kind(dispatch/complete/resolve/release)`、`t0_us`、`t1_us`、`loop_iter`、`tasks_processed`、`pop_hit`、`pop_miss`、`shared_at_start`、`shared_at_end`（后两者为**每队列深度的 JSON 列表**，迁移 0002 修正了 v1 误标 INTEGER） |
 | `orch_phase` | AICPU 编排提交 | `run_id`、`lane`、`submit_idx`、`task_id`、`t0_us`、`t1_us` |
 | `time_band`（衍生） | 密度索引：run 时间轴按固定粒度切带 | `run_id`、`band_idx`、`t0_us`、`t1_us`、`engine`、`total_cores`、`busy_cores`、`task_ids/json`、`sparse`、`drain_tail` |
 | `idle_gap`（衍生） | 核级空闲段及确定性分类 | `run_id`、`engine`、`core_index`、`t0_us`、`t1_us`、`kind(dispatch_wait/ready_starved/drain_tail/unknown)`、`ready_task_ids/json`、`evidence`。<br>判定优先级按 6.3 逐条（dispatch_wait → ready_starved → drain_tail → unknown），1/2 类仅 level≥2 可用（level-1 无 FIN 流，占位 0.0 绝不解释为时刻）；payload 语义分 kind：dispatch_wait=就绪未派任务 id 列表，ready_starved=`[{task_id, fin_us}]` 滞后生产者，其余为空；三实类 `evidence=proven`，unknown `evidence=unproven`。记录阈值：同核相邻行间隔 ≥5µs（含边界）。 |
 | `cpm_path`（衍生） | 关键路径任务序列与间隔分解 | `run_id`、`kind(observed/static)`、`seq`、`task_id`、`wall_us`、`busy_us`、`compute_us`、`stall_us`、`gap_us`、`gap_kind`、`early_dispatch_proven(full/partial/none/unavailable)`。<br>算法与上游 `critical_path` 逐条件同构（对拍即真）：observed 行 `compute_us`=非重叠实际贡献、`stall_us`=距 frontier 的间隔、`gap_kind∈data-wait/core-wait/front-gap`、`gap_us=start-ready`（level≥2 且生产者带时刻时）；static 行为依赖受限最长路径，`compute_us=busy_us`，gap 列空。early-dispatch 用结构规则（直接生产者全部 creator 或 allow_early_resolve）＋两 tick 容差时间戳证明。 |
-| `pmu_counter` | PMU 长表（列名随架构动态） | `run_id`、`task_id`、`counter`、`value`、`total_cycles` |
+| `pmu_counter` | PMU 长表（列名随架构动态） | `run_id`、canonical `task_id`、`task_id_raw`、`task_id_u64`、`sample_seq`、`thread_id`、`core_id`、`func_id`、`core_type`、`event_type`、`counter`、`value`、`total_cycles` |
 | `perf_hint` | 编译器提示逐行 | `run_id`、`seq`、`text`、`source_path`、`origin='compiler'` |
 | `memory_entry` | 缓冲占用报告 | `run_id`、`kernel`、`space(Vec/Mat/Left/Right/Acc)`、`usage`、`limit` |
-| `bench_sample` | 可选原始基准样本 | `run_id`、`round`、`effective_us` |
+| `modality_status` | 可选工件请求及解析状态 | `run_id`、`modality`、`requested`、`request_value`、`rel_path`、`size_bytes`、`parser_state`、`entry_count`、`state`、`reason` |
+| `bench_stratum` | 一次独立 benchmark invocation 的配置 | `run_id`、`stratum`、`source_sha256`、`rounds`、`warmup`、`rank_count`、`aggregation_mode` |
+| `bench_sample` | 可选原始基准样本 | `run_id`、`stratum`、`round`、`effective_us` |
 | `incore_entry` | in-core 指标（仅指标入表） | `run_id`、`kernel`、`status`、`export_dir`、`metrics/json` |
 | `trial` | 一次调优实验（短期） | `trial_id`、`parent_trial_id`、`run_id`、`goal`、`hypothesis`、`changed_files/json`、`status(running/done/abandoned)`、`verdict(win/neutral/regression/pending)`、`evidence_refs/json`、`created_at`、`notes` |
 | `baseline` | 命名基线（受 prune 保护） | `baseline_id`、`name`、`program`、`platform`、`run_id`、`bench_mean_us`、`criteria/json`、`accepted_at` |
@@ -665,7 +667,8 @@ tests ────▶ 可直接触达任何层，但金质题库只走 api/CLI/M
   - [x] 每条输出事实恒带证据状态（模式级校验）；
   - [x] 超预算输出以 `TRUNCATED` 收尾且不静默丢行；
   - [x] 不存在的 task/band 返回 `unavailable`，不发生推测；
-  - [x] 多 rank 库：不带 `--rank` 的确定性查询拒绝回答并列出候选；
+  - [x] 多 rank 库：`runs_list` 返回带 rank 标签的完整清单；run-scoped
+        查询可用 `--rank` 做一致性校验，错误 rank 明确拒绝；
   - [x] 查询注册表自检：每条注册查询必须携带 owner question（6.6）并绑定
         至少一条金质题，缺失即 CI 失败。
 - **实施备注**：`query/` 包 = 注册表（`registry.py`：QuerySpec 强约束
@@ -673,8 +676,8 @@ tests ────▶ 可直接触达任何层，但金质题库只走 api/CLI/M
   Z0–Z4 共 17 条查询（handlers_z0..z4）。处理器只读 schema 表与 derived
   纯函数（stall/early_dispatch 复用，绝无原始 JSON），事实 DSL v2 输出、
   `us()` 显示舍入到纳秒、字节预算 `TRUNCATED remaining=.. limit=..` 显式收尾；
-  不存在的 run/task/band 一律回 `unavailable` 事实、不猜测。多 rank 守门落在
-  `runs_list`（存在非 `single` rank 且未指定 `rank` 时抛 `QueryError` 并列候选）。
+  不存在的 run/task/band 一律回 `unavailable` 事实、不猜测。多 rank 导航由
+  `runs_list` 返回完整 rank 标签，run-scoped 查询的可选 `rank` 参数执行一致性校验。
   无原始 JSON 泄漏检查器（`tests/golden_qa/json_leak.py`）断言每个 list/object
   值要么等于某 schema JSON 单元、要么元素全为该 run 的真实 task id。金质题库
   20 题离线快照（含 6.4 全会话逐步骤）+ 真实捕获 4 题锚点（skipif）；

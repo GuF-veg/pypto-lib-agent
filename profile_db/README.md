@@ -32,8 +32,8 @@
   参数单一同源）+ Z0–Z4 共 17 条查询（runs_list/overview/inventory、
   density/sparse_regions、region/why_sparse/core、task/deps/subgraph、
   why_late/why_long/rows/scheduler/early_dispatch/pmu）；事实 DSL v2 输出、
-  字节预算 `TRUNCATED` 显式收尾、unavailable 语义、多 rank 守门、无原始
-  JSON 泄漏检查器；金质题库 20 题快照（含 6.4 全会话）+ 真实捕获锚点。
+  字节预算 `TRUNCATED` 显式收尾、unavailable 语义、rank 标签与一致性校验、
+  无原始 JSON 泄漏检查器；金质题库 20 题快照（含 6.4 全会话）+ 真实捕获锚点。
 - ✅ T5 接口：公开 Python API（`profile_db.api.ProfileDB` + `Result` +
   `format_result`）与 CLI `list` / `query` 子命令（参数由注册表 pydantic
   模型自动生成，`facts/json/markdown` 三种输出）；CLI 与 API 输出逐字节
@@ -64,6 +64,10 @@
   <dir> --run <id>` 把 in-core `manifest_export.csv` 状态与
   `instr_metrics.json` 指标并入 `incore_entry`；原始大文件（args.bin、
   trace.clean.json、visualize_data.bin）永不进表也不进 store。
+- ✅ PFDB-01…06 整改：迁移 `0005` 增加 task-ID/U64 provenance、PMU 原始
+  sample 坐标、模态请求/解析状态与 benchmark stratum；查询默认只读并报告
+  锁冲突，ingest/render 暴露资源与缓存遥测；`--bench-log` 支持确定性的
+  分层 bootstrap 置信区间。
 - ✅ T10 文档与定型：`docs/debug-and-tune/profile-db.md` 用户手册（与代码
   行为一致，示例可执行）+ 发布检查清单；`profile-feedback` 技能重写为
   pfdb 数据库的**使用说明书**（教 agent 用这套工具、只给轻导航建议、不写
@@ -91,7 +95,7 @@ pfdb --version
 ### 查询
 
 ```bash
-# 列出可用 run（多 rank 库需 --rank 消歧）
+# 列出可用 run（结果包含 rank 标签；可用 --rank 过滤）
 pfdb list
 
 # 顶线指标与拓扑（run id 由 ingest / list 给出）

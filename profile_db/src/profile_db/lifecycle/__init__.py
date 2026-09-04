@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from profile_db.lifecycle.baseline import add_baseline, diff_baseline, list_baselines
 from profile_db.lifecycle.compare import compare_runs
+from profile_db.lifecycle.bootstrap import stratified_speedup
 from profile_db.lifecycle.ids import next_id
 from profile_db.lifecycle.prune import prune_runs
 from profile_db.lifecycle.trial import bind_trial, list_trials, register_trial, set_verdict
@@ -36,5 +37,6 @@ __all__ = [
     "register_trial",
     "retained_run_ids",
     "set_verdict",
+    "stratified_speedup",
     "next_id",
 ]

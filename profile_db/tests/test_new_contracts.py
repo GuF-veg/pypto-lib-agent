@@ -323,19 +323,26 @@ def test_rank_label_isolation_refused() -> None:
     db.close()
 
 
-def test_rank_label_guard_blocks_mixed_query() -> None:
-    """P1-10: runs_list without --rank raises QueryError on a multi-rank DB."""
+def test_rank_label_guard_selects_and_checks_multi_rank_runs() -> None:
+    """PFDB-01: listing is complete and a run query validates its rank guard."""
     d1 = pathlib.Path(tempfile.mkdtemp()) / "dfx_outputs"
     d2 = pathlib.Path(tempfile.mkdtemp()) / "dfx_outputs"
     sa.generate(d1, level=2)
     sa.generate(d2, level=2)
+    d2.joinpath("chip_swimlane_records.json").write_text(
+        d2.joinpath("chip_swimlane_records.json").read_text(encoding="utf-8") + " ",
+        encoding="utf-8",
+    )
     db = ProfileDB(":memory:")
     db.ingest(d1, rank_label="rank0", prune_after=False)
     db.ingest(d2, rank_label="rank1", prune_after=False)
-    with pytest.raises(QueryError, match="multi-rank"):
-        db.query("runs_list")
+    listed = db.query("runs_list")
+    assert {fact.fields["rank"] for fact in listed.facts if fact.rec == "RUN"} == {"rank0", "rank1"}
     result = db.query("runs_list", rank="rank1")
-    assert any(f.rec == "RUN" for f in result.facts)
+    assert {fact.fields["rank"] for fact in result.facts if fact.rec == "RUN"} == {"rank1"}
+    db.query("overview", run_id=1, rank="rank0")
+    with pytest.raises(QueryError, match="belongs to rank"):
+        db.query("overview", run_id=1, rank="rank1")
     db.close()
 
 

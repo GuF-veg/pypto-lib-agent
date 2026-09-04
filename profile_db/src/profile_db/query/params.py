@@ -13,13 +13,15 @@ generated from (DESIGN.md 6.6/9).
 Every registered query owns exactly one pydantic model here, so tool
 schemas, CLI arguments, and validation stay one definition. Models are
 deliberately thin: semantic guards that need database context (run
-existence, multi-rank refusal, window ordering) live in the handlers and
-raise ``QueryError``.
+existence, run/rank consistency, and window ordering) live in the handlers
+and raise ``QueryError``.
 """
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from profile_db.task_ids import normalize_task_id
 
 
 class PfdbParams(BaseModel):
@@ -34,6 +36,10 @@ class RunsListParams(PfdbParams):
 
 class RunIdParams(PfdbParams):
     run_id: int
+    rank: str | None = Field(
+        default=None,
+        description="require this run to belong to the selected rank label",
+    )
 
 
 class OverviewParams(RunIdParams):
@@ -91,6 +97,11 @@ class CoreParams(RunIdParams):
 class TaskIdParams(RunIdParams):
     task_id: str
 
+    @field_validator("task_id")
+    @classmethod
+    def _canonical_task_id(cls, value: str) -> str:
+        return normalize_task_id(value).canonical
+
 
 class TaskParams(TaskIdParams):
     pass
@@ -126,7 +137,10 @@ class EarlyDispatchParams(TaskIdParams):
 
 
 class PmuParams(TaskIdParams):
-    pass
+    samples: bool = Field(
+        default=False,
+        description="include one provenance-preserving fact for each PMU CSV sample",
+    )
 
 
 class CriticalPathParams(RunIdParams):
@@ -148,6 +162,11 @@ class IncoreParams(RunIdParams):
 class ArgsDumpParams(RunIdParams):
     task_id: str | None = Field(default=None, description="restrict to one task")
     stage: str | None = Field(default=None, description="restrict to one stage")
+
+    @field_validator("task_id")
+    @classmethod
+    def _canonical_optional_task_id(cls, value: str | None) -> str | None:
+        return normalize_task_id(value).canonical if value is not None else None
 
 
 class ScopeStatsParams(RunIdParams):

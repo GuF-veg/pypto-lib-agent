@@ -201,8 +201,9 @@ ORCH lane=0 run_id=1 submit_idx=0 t0_us=23.0 t1_us=25.0 task_id="3" evidence=mea
         "pmu",
         "pmu",
         {"run_id": 1, "task_id": "3"},
-        """PMU counter="cube_ratio" ratio=0.0004 run_id=1 task_id="3" total_cycles=1000.0 value=0.4 evidence=measured
-PMU counter="vec_ratio" ratio=0.0008 run_id=1 task_id="3" total_cycles=1000.0 value=0.8 evidence=measured""",
+        """PMU_SUMMARY counters=2 measurements=2 run_id=1 samples=1 task_id="3" evidence=measured
+PMU counter="cube_ratio" ratio=0.0004 run_id=1 samples=1 task_id="3" total_cycles=1000.0 value=0.4 evidence=measured
+PMU counter="vec_ratio" ratio=0.0008 run_id=1 samples=1 task_id="3" total_cycles=1000.0 value=0.8 evidence=measured""",
     ),
     GoldenQuestion(
         "critical_path_observed",

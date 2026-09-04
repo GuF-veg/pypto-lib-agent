@@ -33,14 +33,15 @@ def test_args_dump_and_scope_stats_are_parsed(tmp_path: Path) -> None:
     db = _ingest_capture_with_modalities(tmp_path)
     try:
         rows = db.connection.execute(
-            "SELECT seq, task_id, stage, role, arg_index, kind, dtype, "
+            "SELECT seq, task_id, task_id_raw, stage, role, arg_index, kind, dtype, "
             "CAST(shape AS VARCHAR), bin_size FROM args_dump_entry WHERE run_id = 1 "
             "ORDER BY seq"
         ).fetchall()
         assert len(rows) == 3
-        assert rows[0][1] == "0x0000000200000a00" and rows[0][4] == 0 and rows[0][6] == "float32"
-        assert json.loads(rows[0][7]) == [2, 3] and rows[0][8] == 24
-        assert rows[2][5] == "scalar" and rows[2][8] == 0  # scalar has no payload
+        assert rows[0][1] == "8589937152" and rows[0][2] == "0x0000000200000a00"
+        assert rows[0][5] == 0 and rows[0][7] == "float32"
+        assert json.loads(rows[0][8]) == [2, 3] and rows[0][9] == 24
+        assert rows[2][6] == "scalar" and rows[2][9] == 0  # scalar has no payload
 
         stats = db.connection.execute(
             "SELECT seq, site, ring, phase, CAST(payload AS VARCHAR) FROM scope_stats_entry "

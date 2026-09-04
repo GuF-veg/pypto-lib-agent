@@ -9,7 +9,8 @@
 
 """The golden-query scenario: one fully hand-computable capture.
 
-Two ranks are present so the multi-rank guard has a candidate set. Run 1
+Two ranks are present so rank-labelled listing and consistency checks are
+covered. Run 1
 (rank0) exercises every Z0-Z4 fact family; run 2 (rank1) is minimal. All
 timings are integers in µs at 50 MHz, so every derived number — bands,
 gaps, critical paths, stall segments — is exact and reproducible by hand.

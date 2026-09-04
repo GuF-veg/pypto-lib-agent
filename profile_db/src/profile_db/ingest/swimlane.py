@@ -33,6 +33,7 @@ from typing import Any
 
 from profile_db.errors import IngestError
 from profile_db.ingest import swimlane_us
+from profile_db.task_ids import normalize_task_id
 
 
 def _load_converter():
@@ -56,6 +57,7 @@ class RowTime:
     """
 
     task_id: str
+    task_id_raw: str
     core_id: int
     row_index: int
     engine: str
@@ -195,9 +197,11 @@ def load(records_path: Path, records: dict[str, Any]) -> Swimlane:
         core_id = int(task["core_id"])
         pending = ordinals.setdefault((core_id, task_token), [])
         row_index = pending.pop(0) if pending else -1
+        task_identity = normalize_task_id(task_token)
         rows.append(
             RowTime(
-                task_id=str(task_token),
+                task_id=task_identity.canonical,
+                task_id_raw=task_identity.raw,
                 core_id=core_id,
                 row_index=row_index,
                 engine=_core_type_of(core_id, metadata),

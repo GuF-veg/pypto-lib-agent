@@ -14,6 +14,7 @@ so they run without a device.
 """
 
 import ctypes
+import json
 import sys
 import types
 from pathlib import Path
@@ -32,6 +33,7 @@ from golden.runner import (
     _report_l3_detail,
     _report_l3_per_rank,
     _report_raw_samples,
+    _write_profile_capture_manifest,
     _resident_loop_sizes,
     _run_benchmark_l3,
     _run_l3_resident,
@@ -1772,6 +1774,33 @@ class TestBenchLoopSizes:
         assert _resident_loop_sizes() == (7, 1)
 
 
+class TestProfileCaptureManifest:
+    """DFX request provenance is written next to the capture outputs."""
+
+    def test_requested_modalities_are_recorded(self, tmp_path):
+        _write_profile_capture_manifest(
+            tmp_path,
+            {
+                "enable_pmu": True,
+                "enable_dump_args": 1,
+                "enable_scope_stats": False,
+            },
+        )
+        manifest = json.loads(
+            (tmp_path / "dfx_outputs" / "profile_capture_manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert manifest["schema_version"] == 1
+        assert manifest["modalities"]["pmu"] == {"requested": True, "value": True}
+        assert manifest["modalities"]["args_dump"] == {"requested": True, "value": 1}
+        assert manifest["modalities"]["scope_stats"] == {"requested": False, "value": False}
+
+    def test_no_requested_modalities_do_not_create_manifest(self, tmp_path):
+        _write_profile_capture_manifest(tmp_path, {})
+        assert not (tmp_path / "dfx_outputs").exists()
+
+
 class TestBenchReports:
     """The ``[RUN]`` benchmark report lines."""
 
@@ -1787,6 +1816,7 @@ class TestBenchReports:
         # One line per rank, ranks sorted, samples in inv order (not emission order).
         assert "rank 10 raw n=2 eff_us=[50.0, 51.0]" in lines[1]
         assert "rank 11 raw n=2 eff_us=[99.0, 100.4]" in lines[2]
+        assert "headline raw n=2 eff_us=[99.0, 100.4]" in lines[3]
 
     def test_per_rank_omits_slots_when_one_dispatch_per_rank(self, capsys):
         """Nothing is fused, so slot lines would only restate the rank lines."""

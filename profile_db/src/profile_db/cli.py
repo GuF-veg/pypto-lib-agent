@@ -32,7 +32,7 @@ from typing import Sequence
 from profile_db._version import __version__
 from profile_db.api import ProfileDB, format_result
 from profile_db.errors import PfdbError
-from profile_db.ingest.text_evidence import parse_bench_line
+from profile_db.ingest.text_evidence import parse_bench_line, parse_bench_log
 from profile_db.query import get_query, list_queries
 
 
@@ -73,13 +73,21 @@ def _parser() -> argparse.ArgumentParser:
     )
     ingest.add_argument(
         "--bench-log",
+        action="append",
         default=None,
-        help="PYPTO_BENCH output file whose effective_us line registers on the run",
+        help="PYPTO_BENCH log with raw headline samples (repeat once per independent invocation)",
     )
     ingest.add_argument(
         "--bench",
         default=None,
         help='bench summary string, e.g. "min=12.1 median=13.0 mean=13.2 max=15.0 rounds=100"',
+    )
+    ingest.add_argument(
+        "--modality-request",
+        action="append",
+        default=None,
+        metavar="NAME=VALUE",
+        help="override capture-manifest modality provenance (repeatable)",
     )
 
     incore_cmd = sub.add_parser("ingest-incore", help="attach an in-core collection to a run")
@@ -88,14 +96,21 @@ def _parser() -> argparse.ArgumentParser:
 
     list_cmd = sub.add_parser("list", help="list runs (runs_list query)")
     list_cmd.add_argument("--rank", default=None, help="restrict to one rank label")
+    list_cmd.add_argument("--read-only", action="store_true", help="open the database read-only (default)")
     _add_format_args(list_cmd)
 
     query_cmd = sub.add_parser("query", help="run a registered query")
     query_sub = query_cmd.add_subparsers(dest="query_name", required=True)
     for spec in list_queries():
-        query_parser = query_sub.add_parser(spec.name, help=spec.owner_question)
+        aliases = [spec.name.replace("_", "-")] if "_" in spec.name else []
+        query_parser = query_sub.add_parser(
+            spec.name,
+            aliases=aliases,
+            help=spec.owner_question,
+        )
         _add_query_params(query_parser, spec)
         _add_format_args(query_parser)
+        query_parser.add_argument("--read-only", action="store_true", help="open the database read-only (default)")
 
     render_cmd = sub.add_parser("render", help="render a swimlane image (R0-R3)")
     render_cmd.add_argument("kind", choices=("whole", "window", "task", "core"))
@@ -111,6 +126,7 @@ def _parser() -> argparse.ArgumentParser:
         help="cache directory (default: <db>/.pfdb/render)",
     )
     _add_format_args(render_cmd)
+    render_cmd.add_argument("--read-only", action="store_true", help="open the database read-only (default)")
 
     serve_cmd = sub.add_parser("serve", help="start the MCP stdio server (session-scoped)")
     serve_cmd.add_argument("--mcp", action="store_true", help="serve over MCP stdio")
@@ -135,6 +151,7 @@ def _parser() -> argparse.ArgumentParser:
     compare_cmd = sub.add_parser("compare", help="neutral before/after comparison")
     compare_cmd.add_argument("run_a", type=int)
     compare_cmd.add_argument("run_b", type=int)
+    _add_bootstrap_args(compare_cmd)
     _add_format_args(compare_cmd)
 
     baseline_cmd = sub.add_parser("baseline", help="named baselines (protected from prune)")
@@ -148,6 +165,7 @@ def _parser() -> argparse.ArgumentParser:
     baseline_diff = baseline_sub.add_parser("diff", help="compare a run against a baseline")
     baseline_diff.add_argument("run_id", type=int, metavar="run")
     baseline_diff.add_argument("--baseline", dest="baseline_name", default=None)
+    _add_bootstrap_args(baseline_diff)
     _add_format_args(baseline_diff)
 
     trial_cmd = sub.add_parser("trial", help="short-term tuning experiments")
@@ -173,6 +191,13 @@ def _parser() -> argparse.ArgumentParser:
 def _add_format_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--format", choices=("facts", "json", "markdown"), default="facts")
     parser.add_argument("--budget", type=int, default=4096, help="byte budget for the facts format")
+
+
+def _add_bootstrap_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--bootstrap", action="store_true", help="compute a stratified bootstrap confidence interval")
+    parser.add_argument("--confidence", type=float, default=0.95, help="bootstrap confidence level (default: 0.95)")
+    parser.add_argument("--resamples", type=int, default=10000, help="bootstrap resamples (default: 10000)")
+    parser.add_argument("--seed", type=int, default=0, help="deterministic bootstrap seed (default: 0)")
 
 
 def _field_kind(field_info) -> str:
@@ -236,15 +261,48 @@ def _run_ingest(args: argparse.Namespace) -> int:
     source = Path(args.source)
     git_commit, git_dirty = _git_metadata(source)
     bench: dict = {}
+    bench_strata: list[dict] | None = None
+    if args.bench is not None and args.bench_log:
+        print("pfdb: error: --bench and --bench-log cannot be combined", file=sys.stderr)
+        return 1
     if args.bench is not None:
         bench = parse_bench_line(args.bench)
-    elif args.bench_log is not None:
-        bench_path = Path(args.bench_log)
-        try:
-            bench = parse_bench_line(bench_path.read_text(encoding="utf-8"))
-        except OSError as exc:
-            print(f"pfdb: error: cannot read bench log {bench_path}: {exc}", file=sys.stderr)
+    elif args.bench_log:
+        bench_strata = []
+        for stratum, raw_path in enumerate(args.bench_log):
+            bench_path = Path(raw_path)
+            try:
+                parsed = parse_bench_log(bench_path.read_text(encoding="utf-8"))
+            except OSError as exc:
+                print(f"pfdb: error: cannot read bench log {bench_path}: {exc}", file=sys.stderr)
+                return 1
+            except PfdbError as exc:
+                print(f"pfdb: error: {exc}", file=sys.stderr)
+                return 1
+            bench_strata.append(
+                {
+                    "stratum": stratum,
+                    "source_sha256": _file_sha256(bench_path),
+                    **parsed,
+                }
+            )
+        samples = [sample for item in bench_strata for sample in item["samples"]]
+        if not samples:
+            print("pfdb: error: no benchmark samples found", file=sys.stderr)
             return 1
+        import statistics
+        bench = {
+            "min": min(samples),
+            "median": statistics.median(samples),
+            "mean": statistics.fmean(samples),
+            "max": max(samples),
+            "rounds": len(samples),
+        }
+    try:
+        modality_requests = _parse_modality_requests(args.modality_request or ())
+    except ValueError as exc:
+        print(f"pfdb: error: {exc}", file=sys.stderr)
+        return 1
     try:
         db = ProfileDB()
     except PfdbError as exc:
@@ -269,6 +327,8 @@ def _run_ingest(args: argparse.Namespace) -> int:
             bench_mean_us=bench.get("mean"),
             bench_max_us=bench.get("max"),
             bench_rounds=bench.get("rounds"),
+            bench_strata=bench_strata,
+            modality_requests=modality_requests,
         )
     except PfdbError as exc:
         print(f"pfdb: error: {exc}", file=sys.stderr)
@@ -287,7 +347,40 @@ def _run_ingest(args: argparse.Namespace) -> int:
         f"perf_hints={report['perf_hints']} memory={report['memory_entries']} "
         f"pmu={report['pmu_counters']} makespan={makespan_text}"
     )
+    print(
+        f"  ingest_wall_ms={report['wall_ms']} ingest_cpu_ms={report['cpu_ms']} "
+        f"peak_rss_bytes={report['peak_rss_bytes']} "
+        f"rss_source={report['rss_source']} db_growth_bytes={report['db_growth_bytes']}"
+    )
     return 0
+
+
+def _file_sha256(path: Path) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _parse_modality_requests(items: Sequence[str]) -> dict[str, object]:
+    requests: dict[str, object] = {}
+    for item in items:
+        name, separator, value = item.partition("=")
+        if not separator or not name.strip():
+            raise ValueError("--modality-request must have NAME=VALUE")
+        lowered = value.strip().lower()
+        parsed: object
+        if lowered in ("true", "yes", "on", "1"):
+            parsed = True
+        elif lowered in ("", "false", "no", "off", "0"):
+            parsed = False
+        else:
+            parsed = value.strip()
+        requests[name.strip()] = {"requested": parsed is not False, "value": parsed}
+    return requests
 
 
 def _run_ingest_incore(args: argparse.Namespace) -> int:
@@ -327,14 +420,15 @@ def _emit(result, args: argparse.Namespace) -> None:
 
 
 def _run_query(args: argparse.Namespace) -> int:
-    spec = get_query(args.query_name)
+    query_name = args.query_name.replace("-", "_")
+    spec = get_query(query_name)
     try:
         db = ProfileDB(read_only=True)
     except PfdbError as exc:
         print(f"pfdb: error: {exc}", file=sys.stderr)
         return 1
     try:
-        result = db.query(args.query_name, budget_bytes=args.budget, **_query_params(spec, args))
+        result = db.query(query_name, budget_bytes=args.budget, **_query_params(spec, args))
         _emit(result, args)
         return 0
     except PfdbError as exc:
@@ -436,7 +530,17 @@ def _run_compare(args: argparse.Namespace) -> int:
         print(f"pfdb: error: {exc}", file=sys.stderr)
         return 1
     try:
-        _emit(db.compare(args.run_a, args.run_b), args)
+        _emit(
+            db.compare(
+                args.run_a,
+                args.run_b,
+                bootstrap=args.bootstrap,
+                confidence=args.confidence,
+                resamples=args.resamples,
+                seed=args.seed,
+            ),
+            args,
+        )
         return 0
     except PfdbError as exc:
         print(f"pfdb: error: {exc}", file=sys.stderr)
@@ -473,7 +577,14 @@ def _run_baseline(args: argparse.Namespace) -> int:
         if args.baseline_cmd == "list":
             result = db.baseline_list()
         else:  # diff
-            result = db.baseline_diff(args.run_id, args.baseline_name)
+            result = db.baseline_diff(
+                args.run_id,
+                args.baseline_name,
+                bootstrap=args.bootstrap,
+                confidence=args.confidence,
+                resamples=args.resamples,
+                seed=args.seed,
+            )
         _emit(result, args)
         return 0
     except PfdbError as exc:

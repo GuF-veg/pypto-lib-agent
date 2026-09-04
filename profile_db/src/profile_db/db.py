@@ -101,18 +101,20 @@ class ProfileDB:
             return
         db_path = Path(path) if path is not None else default_db_path()
         db_path = db_path.expanduser()
-        db_path.parent.mkdir(parents=True, exist_ok=True)
         self._path = db_path
+        if read_only:
+            try:
+                self._conn = duckdb.connect(str(self._path), read_only=True)
+            except (duckdb.IOException, duckdb.ConnectionException) as exc:
+                _raise_open_error(self._path, exc)
+            return
+        db_path.parent.mkdir(parents=True, exist_ok=True)
         with WriterGuard(self._path):
             try:
-                self._conn = duckdb.connect(str(self._path), read_only=read_only)
-            except duckdb.IOException as exc:
-                raise DbError(
-                    f"cannot open pfdb at {self._path}: {exc}. "
-                    "This database is a disposable working set; delete the "
-                    ".pfdb directory and rebuild it from build_output."
-                ) from exc
-            if not read_only:
+                self._conn = duckdb.connect(str(self._path), read_only=False)
+            except (duckdb.IOException, duckdb.ConnectionException) as exc:
+                _raise_open_error(self._path, exc)
+            else:
                 apply_pending(self._conn)
 
     @classmethod
@@ -143,3 +145,21 @@ class ProfileDB:
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
         self.close()
         return False
+
+
+def _raise_open_error(path: Path, exc: Exception) -> None:
+    """Translate DuckDB's process-level file lock into the PFDB lock error."""
+    detail = str(exc)
+    if (
+        "conflicting lock" in detail.lower()
+        or "could not set lock" in detail.lower()
+        or "same database file with a different configuration" in detail.lower()
+    ):
+        raise LockError(
+            f"database is locked by another DuckDB process: {path}; wait for its "
+            "write connection to close and retry"
+        ) from exc
+    raise DbError(
+        f"cannot open pfdb at {path}: {detail}. "
+        "This database is a disposable working set; rebuild it from source artifacts."
+    ) from exc

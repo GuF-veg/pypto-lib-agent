@@ -34,19 +34,36 @@ import csv
 import io
 import json
 import re
+import statistics
 from typing import Any
 
 from profile_db.errors import IngestError
+from profile_db.task_ids import normalize_task_id
 
 _HINT_SOURCE = re.compile(r"^(?P<text>.*) at (?P<source>\S+:\d+:\d+)\s*$")
 _HEADING = re.compile(r"^---\s+(.+?)\s+---$")
 _SIZE_CELL = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(B|KB|MB|GB|TB)?\s*$", re.IGNORECASE)
 _BENCH_ROUNDS = re.compile(r"\((\d+)\s+rounds?\)")
 _BENCH_KEYS = {"min", "median", "mean", "max"}
+_RAW_HEADER = re.compile(
+    r"^\[RUN\]\s+raw samples:\s+ranks=(?P<ranks>\d+)\s+rounds=(?P<rounds>\d+)\s+"
+    r"warmup=(?P<warmup>\d+)(?P<fallback>\s+fallback_flattened=1)?\s*$"
+)
+_RAW_HEADLINE = re.compile(r"^\[RUN\]\s+headline raw n=(?P<count>\d+)\s+eff_us=(?P<samples>\[.*\])\s*$")
 _ABS_PATH = re.compile(r"/(?:(?:\w+/)?home|root|data\d+)/[^/\s]+")
 # The total-cycles column of pmu.csv, matched by shape because the exact
 # header varies by architecture (DESIGN.md 5.2: PMU column names are dynamic).
 _TOTAL_CYCLES = re.compile(r"^(?=.*total)(?=.*cycle).*$", re.IGNORECASE)
+_PMU_COORDINATES = {
+    "thread_id",
+    "thread",
+    "core_id",
+    "core",
+    "func_id",
+    "function_id",
+    "core_type",
+    "event_type",
+}
 
 
 def parse_perf_hints(text: str) -> list[dict[str, Any]]:
@@ -142,7 +159,11 @@ def parse_pmu_csv(text: str) -> list[dict[str, Any]]:
             f"pmu.csv must have exactly one task id column; header: {fieldnames}"
         )
     id_column = id_columns[0]
-    counter_columns = [name for name in fieldnames if name != id_column]
+    columns_by_lower = {name.strip().lower(): name for name in fieldnames}
+    counter_columns = [
+        name for name in fieldnames
+        if name != id_column and name.strip().lower() not in _PMU_COORDINATES
+    ]
     if not counter_columns:
         raise IngestError("pmu.csv carries no counter columns besides the task id")
     total_columns = [name for name in counter_columns if _TOTAL_CYCLES.match(name)]
@@ -150,9 +171,24 @@ def parse_pmu_csv(text: str) -> list[dict[str, Any]]:
 
     rows: list[dict[str, Any]] = []
     for lineno, record in enumerate(reader, start=2):
-        task_id = (record.get(id_column) or "").strip()
-        if not task_id:
+        task_id_raw = (record.get(id_column) or "").strip()
+        if not task_id_raw:
             raise IngestError(f"pmu.csv line {lineno}: empty task id")
+        task_id = normalize_task_id(task_id_raw)
+
+        def _integer_coordinate(*names: str) -> int | None:
+            column = next((columns_by_lower.get(name) for name in names if name in columns_by_lower), None)
+            if column is None:
+                return None
+            raw = (record.get(column) or "").strip()
+            if not raw:
+                return None
+            try:
+                return int(raw, 0)
+            except ValueError as exc:
+                raise IngestError(
+                    f"pmu.csv line {lineno} column {column!r}: non-integer value {raw!r}"
+                ) from exc
 
         def _value(column: str) -> float | None:
             raw = (record.get(column) or "").strip()
@@ -173,7 +209,15 @@ def parse_pmu_csv(text: str) -> list[dict[str, Any]]:
                 continue
             rows.append(
                 {
-                    "task_id": task_id,
+                    "task_id": task_id.canonical,
+                    "task_id_raw": task_id.raw,
+                    "task_id_u64": task_id.u64,
+                    "sample_seq": lineno - 2,
+                    "thread_id": _integer_coordinate("thread_id", "thread"),
+                    "core_id": _integer_coordinate("core_id", "core"),
+                    "func_id": _integer_coordinate("func_id", "function_id"),
+                    "core_type": (record.get(columns_by_lower.get("core_type", "")) or "").strip() or None,
+                    "event_type": (record.get(columns_by_lower.get("event_type", "")) or "").strip() or None,
                     "counter": counter,
                     "value": value,
                     "total_cycles": total,
@@ -204,6 +248,56 @@ def parse_bench_line(text: str) -> dict[str, Any]:
         rounds_match = _BENCH_ROUNDS.search(text)
         parsed["rounds"] = int(rounds_match.group(1)) if rounds_match else None
     return parsed
+
+
+def parse_bench_log(text: str) -> dict[str, Any]:
+    """Parse one benchmark invocation including its authoritative raw samples.
+
+    The harness emits one ``headline raw`` sequence per invocation.  Keeping
+    this as one stratum prevents a bootstrap comparison from pretending that
+    three separately launched benchmark processes were one homogeneous run.
+    """
+    summary_line = next(
+        (line for line in text.splitlines() if "effective_us" in line and all(f"{key}=" in line for key in _BENCH_KEYS)),
+        None,
+    )
+    if summary_line is None:
+        raise IngestError("bench log is missing an effective_us summary line")
+    summary = parse_bench_line(summary_line)
+    header = next((_RAW_HEADER.match(line.strip()) for line in text.splitlines() if _RAW_HEADER.match(line.strip())), None)
+    headline = next((_RAW_HEADLINE.match(line.strip()) for line in text.splitlines() if _RAW_HEADLINE.match(line.strip())), None)
+    if header is None or headline is None:
+        raise IngestError(
+            "bench log is missing authoritative raw samples; rerun with PYPTO_BENCH_RAW=1"
+        )
+    if header.group("fallback"):
+        raise IngestError("bench log uses fallback_flattened samples and is not stratifiable")
+    try:
+        samples = json.loads(headline.group("samples"))
+    except json.JSONDecodeError as exc:
+        raise IngestError("bench raw headline has invalid JSON samples") from exc
+    if not isinstance(samples, list) or not samples or not all(
+        isinstance(sample, (int, float)) and not isinstance(sample, bool) for sample in samples
+    ):
+        raise IngestError("bench raw headline must contain a non-empty numeric sample list")
+    if len(samples) != int(headline.group("count")):
+        raise IngestError("bench raw headline count does not match its sample list")
+    if int(header.group("rounds")) != len(samples):
+        raise IngestError("bench raw header rounds does not match headline samples")
+    if summary.get("rounds") is not None and int(summary["rounds"]) != len(samples):
+        raise IngestError("bench summary rounds does not match authoritative raw samples")
+    values = [float(sample) for sample in samples]
+    return {
+        "samples": values,
+        "rounds": len(values),
+        "warmup": int(header.group("warmup")),
+        "rank_count": int(header.group("ranks")),
+        "aggregation_mode": "headline_effective",
+        "min": min(values),
+        "median": statistics.median(values),
+        "mean": statistics.fmean(values),
+        "max": max(values),
+    }
 
 
 def redact_paths(value: Any) -> Any:

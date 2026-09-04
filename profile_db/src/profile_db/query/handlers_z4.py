@@ -406,25 +406,48 @@ def early(conn, params: EarlyDispatchParams) -> list[Fact]:
 )
 def pmu(conn, params: PmuParams) -> list[Fact]:
     run_id = params.run_id
+    status = common.modality_status_fact(conn, run_id, "pmu")
     if common.task_row(conn, run_id, params.task_id) is None:
-        return [
+        facts = [
             Fact("PMU", common.fields(run_id=run_id, task_id=params.task_id), Evidence.UNAVAILABLE)
         ]
+        return [*([status] if status is not None else []), *facts]
     rows = common.q(
         conn,
-        "SELECT counter, value, total_cycles FROM pmu_counter "
-        "WHERE run_id = ? AND task_id = ? ORDER BY counter",
+        "SELECT counter, SUM(value), SUM(total_cycles), COUNT(*) FROM pmu_counter "
+        "WHERE run_id = ? AND task_id = ? GROUP BY counter ORDER BY counter",
         [run_id, params.task_id],
     )
     if not rows:
-        return [
+        facts = [
             Fact("PMU", common.fields(run_id=run_id, task_id=params.task_id), Evidence.UNAVAILABLE)
         ]
-    facts: list[Fact] = []
-    for counter, value, total in rows:
+        return [*([status] if status is not None else []), *facts]
+    sample_count = int(
+        common.one(
+            conn,
+            "SELECT COUNT(DISTINCT sample_seq) FROM pmu_counter "
+            "WHERE run_id = ? AND task_id = ?",
+            [run_id, params.task_id],
+        )[0]
+    )
+    facts: list[Fact] = [
+        Fact(
+            "PMU_SUMMARY",
+            common.fields(
+                run_id=run_id,
+                task_id=params.task_id,
+                samples=sample_count,
+                counters=len(rows),
+                measurements=sum(int(row[3]) for row in rows),
+            ),
+            Evidence.MEASURED,
+        )
+    ]
+    for counter, value, total, measurements in rows:
         fields = common.fields(
             run_id=run_id, task_id=params.task_id, counter=counter, value=value,
-            total_cycles=total,
+            total_cycles=total, samples=measurements,
         )
         if total:
             fields["ratio"] = round(value / total, 6)
@@ -445,7 +468,52 @@ def pmu(conn, params: PmuParams) -> list[Fact]:
                 Evidence.UNAVAILABLE,
             )
         )
-    return facts
+    if params.samples:
+        samples = common.q(
+            conn,
+            "SELECT sample_seq, task_id_raw, thread_id, core_id, func_id, core_type, "
+            "event_type, counter, value, total_cycles FROM pmu_counter "
+            "WHERE run_id = ? AND task_id = ? "
+            "ORDER BY sample_seq, counter",
+            [run_id, params.task_id],
+        )
+        grouped: dict[int, dict] = {}
+        for seq, raw, thread, core, func, core_type, event_type, counter, value, total in samples:
+            item = grouped.setdefault(
+                int(seq),
+                {
+                    "task_id_raw": raw,
+                    "thread_id": thread,
+                    "core_id": core,
+                    "func_id": func,
+                    "core_type": core_type,
+                    "event_type": event_type,
+                    "total_cycles": total,
+                    "counters": {},
+                },
+            )
+            item["counters"][counter] = value
+        facts.extend(
+            Fact(
+                "PMU_SAMPLE",
+                common.fields(
+                    run_id=run_id,
+                    task_id=params.task_id,
+                    sample_seq=seq,
+                    task_id_raw=item["task_id_raw"],
+                    thread_id=item["thread_id"],
+                    core_id=item["core_id"],
+                    func_id=item["func_id"],
+                    core_type=item["core_type"],
+                    event_type=item["event_type"],
+                    total_cycles=item["total_cycles"],
+                    counters=item["counters"],
+                ),
+                Evidence.MEASURED,
+            )
+            for seq, item in grouped.items()
+        )
+    return [*([status] if status is not None else []), *facts]
 
 
 @register(

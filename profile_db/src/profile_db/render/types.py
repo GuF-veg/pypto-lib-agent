@@ -51,3 +51,5 @@ class RenderResult:
     manifest: Mapping[str, Any]
     unavailable: bool
     note: str | None
+    cache_hit: bool
+    wall_ms: float

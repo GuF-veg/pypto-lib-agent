@@ -18,7 +18,7 @@ import pytest
 from profile_db.db import ProfileDB, WriterGuard, default_db_path
 from profile_db.errors import DbError, LockError
 
-# Names of every table the schema v1 migration must create (DESIGN.md 5.2).
+# Names of every table the schema migration chain must create (DESIGN.md 5.2).
 EXPECTED_TABLES = {
     "schema_version",
     "run",
@@ -38,6 +38,8 @@ EXPECTED_TABLES = {
     "incore_entry",
     "args_dump_entry",
     "scope_stats_entry",
+    "modality_status",
+    "bench_stratum",
     "trial",
     "baseline",
 }
@@ -54,7 +56,7 @@ def test_open_creates_and_migrates(db_file: Path) -> None:
     db = ProfileDB(db_file)
     try:
         assert db_file.exists()
-        assert db.schema_version() == 4
+        assert db.schema_version() == 5
         assert _tables(db) == EXPECTED_TABLES
     finally:
         db.close()
@@ -65,7 +67,7 @@ def test_reopen_idempotent(db_file: Path) -> None:
     first.close()
     second = ProfileDB(db_file)
     try:
-        assert second.schema_version() == 4
+        assert second.schema_version() == 5
         assert _tables(second) == EXPECTED_TABLES
     finally:
         second.close()
@@ -93,7 +95,7 @@ def test_memory_mode_has_same_schema() -> None:
     db = ProfileDB.memory()
     try:
         assert db.path is None
-        assert db.schema_version() == 4
+        assert db.schema_version() == 5
         assert _tables(db) == EXPECTED_TABLES
     finally:
         db.close()
@@ -103,7 +105,7 @@ def test_read_only_sees_existing_schema(db_file: Path) -> None:
     ProfileDB(db_file).close()
     db = ProfileDB(db_file, read_only=True)
     try:
-        assert db.schema_version() == 4
+        assert db.schema_version() == 5
         # writes must be impossible on the read-only connection
         with pytest.raises(Exception):
             db.connection.execute("CREATE TABLE forbidden (x INTEGER)")

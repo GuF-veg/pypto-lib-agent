@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from profile_db.errors import IngestError
+from profile_db.task_ids import normalize_task_id
 
 _FAMILY_SUFFIX = re.compile(r"(?:_\d+)?_(?:aic|aiv)$|(?:_\d+)$")
 
@@ -51,6 +52,7 @@ class TaskInfo:
     the swimlane join fills them (ingest orchestrator)."""
 
     task_id: str
+    task_id_raw: str
     scope: str
     early_dispatch: bool
     kernel_ids: list[int]
@@ -111,7 +113,8 @@ def load_deps(deps_path: Path, name_map: dict[str, str]) -> DepGraph:
     for index, raw in enumerate(tasks):
         if "task_id" not in raw:
             raise IngestError(f"{deps_path}: task {index} has no task_id")
-        task_id = str(raw["task_id"])
+        task_identity = normalize_task_id(raw["task_id"])
+        task_id = task_identity.canonical
         if task_id in graph.task_ids:
             raise IngestError(f"{deps_path}: duplicate task_id {task_id}")
         graph.task_ids.add(task_id)
@@ -126,6 +129,7 @@ def load_deps(deps_path: Path, name_map: dict[str, str]) -> DepGraph:
         graph.tasks.append(
             TaskInfo(
                 task_id=task_id,
+                task_id_raw=task_identity.raw,
                 scope=str(raw.get("scope") or ""),
                 early_dispatch=bool(raw.get("early_dispatch")),
                 kernel_ids=kernel_ids,
@@ -139,10 +143,12 @@ def load_deps(deps_path: Path, name_map: dict[str, str]) -> DepGraph:
         for key in ("pred", "succ"):
             if key not in raw:
                 raise IngestError(f"{deps_path}: edge {index} missing {key!r}")
-        succ = str(raw["succ"])
+        succ_identity = normalize_task_id(raw["succ"])
+        succ = succ_identity.canonical
         if succ not in graph.task_ids:
             raise IngestError(f"{deps_path}: edge {index} succ {succ} is not a known task")
-        pred = str(raw["pred"])
+        pred_identity = normalize_task_id(raw["pred"])
+        pred = pred_identity.canonical
         if raw.get("source") != "creator" and pred not in graph.task_ids:
             raise IngestError(
                 f"{deps_path}: edge {index} pred {pred} is not a known task "
@@ -155,6 +161,8 @@ def load_deps(deps_path: Path, name_map: dict[str, str]) -> DepGraph:
             {
                 "pred": pred,
                 "succ": succ,
+                "pred_raw": pred_identity.raw,
+                "succ_raw": succ_identity.raw,
                 "source": str(raw.get("source") or ""),
                 "arg": str(raw.get("arg") or ""),
                 "flags": flags,

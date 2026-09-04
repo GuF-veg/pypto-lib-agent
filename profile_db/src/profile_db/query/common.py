@@ -88,6 +88,41 @@ def run_missing(rec: str, run_id: int) -> list[Fact]:
     return [Fact(rec, fields(run_id=run_id), Evidence.UNAVAILABLE)]
 
 
+def modality_status_fact(conn, run_id: int, modality: str) -> Fact | None:
+    """Return persisted optional-modality provenance when the run has it."""
+    try:
+        row = one(
+            conn,
+            "SELECT requested, request_value, rel_path, size_bytes, parser_state, "
+            "entry_count, state, reason FROM modality_status "
+            "WHERE run_id = ? AND modality = ?",
+            [run_id, modality],
+        )
+    except Exception as exc:
+        if "modality_status" in str(exc):
+            return None
+        raise
+    if row is None:
+        return None
+    requested, request_value, rel_path, size_bytes, parser_state, entry_count, state, reason = row
+    return Fact(
+        "MODALITY",
+        fields(
+            run_id=run_id,
+            modality=modality,
+            requested=requested,
+            request_value=request_value,
+            rel_path=rel_path,
+            size_bytes=size_bytes,
+            parser_state=parser_state,
+            entry_count=entry_count,
+            state=state,
+            reason=reason,
+        ),
+        Evidence.MEASURED if state == "available" else Evidence.UNAVAILABLE,
+    )
+
+
 def task_row(conn, run_id: int, task_id: str) -> tuple | None:
     return one(
         conn,

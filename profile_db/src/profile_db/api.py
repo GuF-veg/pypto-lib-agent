@@ -176,12 +176,33 @@ class ProfileDB(_ProfileDB):
         with self._writing() as conn:
             conn.execute("UPDATE run SET notes = ? WHERE run_id = ?", [text, run_id])
 
-    def compare(self, run_a: int, run_b: int) -> Result:
+    def compare(
+        self,
+        run_a: int,
+        run_b: int,
+        *,
+        bootstrap: bool = False,
+        confidence: float = 0.95,
+        resamples: int = 10000,
+        seed: int = 0,
+    ) -> Result:
         """Neutral before/after comparison (compatibility-gated). Raises
         ``LifecycleError`` when the runs are not comparable."""
         from profile_db.lifecycle import compare_runs
 
-        return _compare_result(compare_runs(self.connection, run_a, run_b))
+        comparison = compare_runs(self.connection, run_a, run_b)
+        if bootstrap:
+            from profile_db.lifecycle.bootstrap import stratified_speedup
+
+            comparison["confidence"] = stratified_speedup(
+                self.connection,
+                run_a,
+                run_b,
+                confidence=confidence,
+                resamples=resamples,
+                seed=seed,
+            )
+        return _compare_result(comparison)
 
     def register_trial(
         self,
@@ -283,10 +304,31 @@ class ProfileDB(_ProfileDB):
         )
         return Result(facts=facts, images=(), truncated=False)
 
-    def baseline_diff(self, run_id: int, baseline_name: str | None = None) -> Result:
+    def baseline_diff(
+        self,
+        run_id: int,
+        baseline_name: str | None = None,
+        *,
+        bootstrap: bool = False,
+        confidence: float = 0.95,
+        resamples: int = 10000,
+        seed: int = 0,
+    ) -> Result:
         from profile_db.lifecycle import diff_baseline
 
-        return _compare_result(diff_baseline(self.connection, run_id, baseline_name))
+        comparison = diff_baseline(self.connection, run_id, baseline_name)
+        if bootstrap:
+            from profile_db.lifecycle.bootstrap import stratified_speedup
+
+            comparison["confidence"] = stratified_speedup(
+                self.connection,
+                comparison["run_a"],
+                comparison["run_b"],
+                confidence=confidence,
+                resamples=resamples,
+                seed=seed,
+            )
+        return _compare_result(comparison)
 
 
 def format_result(result: Result, fmt: str, budget_bytes: int = DEFAULT_BUDGET_BYTES) -> str:
@@ -352,6 +394,8 @@ def _result_from_render(rendered) -> Result:
         "x1_us": x1,
         "us_per_px": manifest.get("us_per_px"),
         "downsampled": manifest.get("downsampled"),
+        "cache_hit": rendered.cache_hit,
+        "wall_ms": rendered.wall_ms,
         # Engine -> color mapping so text-channel consumers can interpret
         # the colors of an image they cannot (or do not) open.
         "legend": manifest.get("legend"),
@@ -402,6 +446,15 @@ def _compare_result(comparison: Mapping[str, Any]) -> Result:
         if "baseline" in comparison:
             fields["baseline"] = comparison["baseline"]
         facts.append(Fact("DELTA", fields, Evidence.MEASURED))
+    confidence = comparison.get("confidence")
+    if confidence is not None:
+        facts.append(
+            Fact(
+                "CONFIDENCE",
+                {key: _num(value) for key, value in confidence.items()},
+                Evidence.MEASURED,
+            )
+        )
     return Result(facts=tuple(facts), images=(), truncated=False)
 
 

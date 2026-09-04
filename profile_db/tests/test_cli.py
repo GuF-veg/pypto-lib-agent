@@ -38,7 +38,7 @@ def test_init_creates_database(tmp_path: Path) -> None:
     result = _run("init", "--path", str(target))
     assert result.returncode == 0, result.stderr
     assert target.exists()
-    assert "schema_version=4" in result.stdout
+    assert "schema_version=5" in result.stdout
     assert str(target) in result.stdout
 
 
@@ -48,7 +48,7 @@ def test_init_is_idempotent(tmp_path: Path) -> None:
     second = _run("init", "--path", str(target))
     assert first.returncode == 0
     assert second.returncode == 0, second.stderr
-    assert "schema_version=4" in second.stdout
+    assert "schema_version=5" in second.stdout
 
 
 def test_init_honours_pfdb_path_env(tmp_path: Path) -> None:
@@ -61,7 +61,7 @@ def test_init_honours_pfdb_path_env(tmp_path: Path) -> None:
 def test_version_flag() -> None:
     result = _run("--version")
     assert result.returncode == 0
-    assert result.stdout.strip() == "pfdb 0.1.0"
+    assert result.stdout.strip() == "pfdb 0.2.0"
 
 
 def test_missing_command_is_usage_error() -> None:

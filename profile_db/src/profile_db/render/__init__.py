@@ -24,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import io
 import sys
+import time
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -143,6 +144,7 @@ def render(
     cache: RenderCache | None = None,
 ) -> RenderResult:
     """Render one swimlane view and cache it. See the module docstring."""
+    started = time.perf_counter()
     if kind not in KINDS:
         raise RenderError(f"unknown render kind {kind!r}; use one of: {', '.join(KINDS)}")
     params = _normalize_params(kind, t0_us, t1_us, task_id, core_index)
@@ -165,6 +167,8 @@ def render(
             manifest=manifest,
             unavailable=False,
             note=manifest.get("note"),
+            cache_hit=True,
+            wall_ms=round((time.perf_counter() - started) * 1000.0, 3),
         )
 
     fig, info, unavailable = renderers.render(conn, run_id, kind, params)
@@ -190,6 +194,8 @@ def render(
             manifest=manifest,
             unavailable=True,
             note=info.note,
+            cache_hit=False,
+            wall_ms=round((time.perf_counter() - started) * 1000.0, 3),
         )
 
     png_bytes, dpi, downsampled = _rasterize(fig, image_max_bytes, DPI)
@@ -208,6 +214,8 @@ def render(
         manifest=manifest,
         unavailable=False,
         note=info.note,
+        cache_hit=False,
+        wall_ms=round((time.perf_counter() - started) * 1000.0, 3),
     )
 
 

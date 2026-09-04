@@ -21,6 +21,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from profile_db.task_ids import normalize_task_id
+
 
 def parse_args_dump(text: str) -> list[dict[str, Any]]:
     """Parse ``args_dump.json`` text into metadata rows (seq-ordered)."""
@@ -35,10 +37,13 @@ def parse_args_dump(text: str) -> list[dict[str, Any]]:
         if not isinstance(arg, dict):
             continue
         shape = arg.get("shape")
+        identity = normalize_task_id(arg["task_id"]) if arg.get("task_id") is not None else None
         rows.append(
             {
                 "seq": index,
-                "task_id": str(arg.get("task_id")) if arg.get("task_id") is not None else None,
+                "task_id": identity.canonical if identity is not None else None,
+                "task_id_raw": identity.raw if identity is not None else None,
+                "task_id_u64": identity.u64 if identity is not None else None,
                 "stage": arg.get("stage"),
                 "role": arg.get("role"),
                 "arg_index": arg.get("arg_index"),

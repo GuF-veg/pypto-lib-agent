@@ -142,6 +142,7 @@ def execute(
 
     spec = get_query(name)
     model = _coerce(spec, params)
+    _validate_rank(conn, model)
     try:
         facts = spec.handler(conn, model)
     except PfdbError:
@@ -149,6 +150,26 @@ def execute(
     except Exception as exc:
         raise QueryError(f"query {name!r} failed: {type(exc).__name__}: {exc}") from exc
     return render(facts, budget_bytes)
+
+
+def _validate_rank(conn, model: BaseModel) -> None:
+    """Check an optional rank selector against a run-scoped request.
+
+    A run id already identifies one capture, so unqualified run queries are
+    deterministic even in a multi-rank database. Supplying ``rank`` remains
+    useful as an explicit guard in scripts: a typo must not silently query a
+    similarly numbered run from another rank.
+    """
+    if not hasattr(model, "run_id") or getattr(model, "rank", None) is None:
+        return
+    row = conn.execute(
+        "SELECT rank_label FROM run WHERE run_id = ?", [getattr(model, "run_id")]
+    ).fetchone()
+    if row is not None and row[0] != getattr(model, "rank"):
+        raise QueryError(
+            f"run {getattr(model, 'run_id')} belongs to rank {row[0]!r}, "
+            f"not requested rank {getattr(model, 'rank')!r}"
+        )
 
 
 __all__ = [

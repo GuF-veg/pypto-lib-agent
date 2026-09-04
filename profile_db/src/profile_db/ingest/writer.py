@@ -26,6 +26,7 @@ from typing import Any, Mapping, Sequence
 import duckdb
 
 from profile_db.ingest.text_evidence import redact_paths
+from profile_db.task_ids import normalize_task_id
 
 RECORD_KINDS = (
     "chip_swimlane_records",
@@ -174,6 +175,8 @@ def insert_tasks(conn: duckdb.DuckDBPyConnection, run_id: int, tasks: Sequence[M
         (
             run_id,
             task["task_id"],
+            task.get("task_id_raw") or task["task_id"],
+            normalize_task_id(task["task_id"]).u64,
             task["name"],
             task["family"],
             task["engine"],
@@ -194,10 +197,10 @@ def insert_tasks(conn: duckdb.DuckDBPyConnection, run_id: int, tasks: Sequence[M
     ]
     _executemany(
         conn,
-        "INSERT INTO task (run_id, task_id, name, family, engine, scope, "
+        "INSERT INTO task (run_id, task_id, task_id_raw, task_id_u64, name, family, engine, scope, "
         "early_dispatch_flag, kernel_ids, block_num, num_rows, busy_us, wall_us, "
         "min_dispatch_us, min_receive_us, min_start_us, max_end_us, max_finish_us) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, CAST(? AS JSON), ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS JSON), ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         rows,
     )
 
@@ -207,6 +210,8 @@ def insert_task_rows(conn: duckdb.DuckDBPyConnection, run_id: int, rows: Sequenc
         (
             run_id,
             row["task_id"],
+            row.get("task_id_raw") or row["task_id"],
+            normalize_task_id(row["task_id"]).u64,
             row["core_id"],
             row["engine"],
             row["thread"],
@@ -221,9 +226,9 @@ def insert_task_rows(conn: duckdb.DuckDBPyConnection, run_id: int, rows: Sequenc
     ]
     _executemany(
         conn,
-        "INSERT INTO task_row (run_id, task_id, core_index, engine, thread, "
+        "INSERT INTO task_row (run_id, task_id, task_id_raw, task_id_u64, core_index, engine, thread, "
         "row_index, start_us, end_us, dispatch_us, receive_us, finish_us) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         data,
     )
 
@@ -237,6 +242,10 @@ def insert_edges(
             run_id,
             edge["pred"],
             edge["succ"],
+            normalize_task_id(edge["pred"]).u64,
+            normalize_task_id(edge["succ"]).u64,
+            edge.get("pred_raw") or edge["pred"],
+            edge.get("succ_raw") or edge["succ"],
             edge["source"],
             edge["arg"],
             json.dumps(edge["flags"]),
@@ -250,9 +259,9 @@ def insert_edges(
     ]
     _executemany(
         conn,
-        "INSERT INTO dep_edge (edge_id, run_id, pred, succ, source, arg, flags, "
+        "INSERT INTO dep_edge (edge_id, run_id, pred, succ, pred_u64, succ_u64, pred_raw, succ_raw, source, arg, flags, "
         "tensor_id, consumer_dtype, consumer_shape, consumer_start_offset, consumer_strides) "
-        "VALUES (?, ?, ?, ?, ?, ?, CAST(? AS JSON), ?, ?, CAST(? AS JSON), ?, CAST(? AS JSON))",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS JSON), ?, ?, CAST(? AS JSON), ?, CAST(? AS JSON))",
         rows,
     )
 
@@ -374,6 +383,16 @@ def insert_pmu_counters(
             first_id + index,
             run_id,
             counter["task_id"],
+            counter.get("task_id_raw") or counter["task_id"],
+            counter.get("task_id_u64") or normalize_task_id(counter["task_id"]).u64,
+            # Captures without an explicit sample coordinate are one legacy
+            # aggregate sample; keep all counters in that sample bucket.
+            counter.get("sample_seq", 0),
+            counter.get("thread_id"),
+            counter.get("core_id"),
+            counter.get("func_id"),
+            counter.get("core_type"),
+            counter.get("event_type"),
             counter["counter"],
             counter["value"],
             counter.get("total_cycles"),
@@ -382,8 +401,73 @@ def insert_pmu_counters(
     ]
     _executemany(
         conn,
-        "INSERT INTO pmu_counter (pmu_id, run_id, task_id, counter, value, total_cycles) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO pmu_counter (pmu_id, run_id, task_id, task_id_raw, task_id_u64, "
+        "sample_seq, thread_id, core_id, func_id, core_type, event_type, counter, value, total_cycles) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+
+
+def insert_modality_statuses(
+    conn: duckdb.DuckDBPyConnection, run_id: int, statuses: Sequence[Mapping[str, Any]]
+) -> None:
+    rows = [
+        (
+            run_id,
+            item["modality"],
+            item.get("requested"),
+            item.get("request_value"),
+            item.get("rel_path"),
+            item.get("size_bytes"),
+            item["parser_state"],
+            item.get("entry_count"),
+            item["state"],
+            item.get("reason"),
+        )
+        for item in statuses
+    ]
+    _executemany(
+        conn,
+        "INSERT INTO modality_status (run_id, modality, requested, request_value, rel_path, "
+        "size_bytes, parser_state, entry_count, state, reason) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+
+
+def insert_bench_strata(
+    conn: duckdb.DuckDBPyConnection, run_id: int, strata: Sequence[Mapping[str, Any]]
+) -> None:
+    rows = [
+        (
+            run_id,
+            item["stratum"],
+            item.get("source_sha256"),
+            item.get("rounds"),
+            item.get("warmup"),
+            item.get("rank_count"),
+            item.get("aggregation_mode"),
+        )
+        for item in strata
+    ]
+    _executemany(
+        conn,
+        "INSERT INTO bench_stratum (run_id, stratum, source_sha256, rounds, warmup, rank_count, aggregation_mode) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+
+
+def insert_bench_samples(
+    conn: duckdb.DuckDBPyConnection, run_id: int, samples: Sequence[Mapping[str, Any]]
+) -> None:
+    rows = [
+        (run_id, item["stratum"], item["round"], item["effective_us"])
+        for item in samples
+    ]
+    _executemany(
+        conn,
+        "INSERT INTO bench_sample (run_id, stratum, round, effective_us) VALUES (?, ?, ?, ?)",
         rows,
     )
 
@@ -515,6 +599,10 @@ def insert_args_dump_entries(
             run_id,
             entry["seq"],
             entry["task_id"],
+            entry.get("task_id_raw") or entry.get("task_id"),
+            entry.get("task_id_u64") or normalize_task_id(entry.get("task_id")).u64
+            if entry.get("task_id") is not None
+            else None,
             entry["stage"],
             entry["role"],
             entry["arg_index"],
@@ -527,8 +615,8 @@ def insert_args_dump_entries(
     ]
     _executemany(
         conn,
-        "INSERT INTO args_dump_entry (run_id, seq, task_id, stage, role, arg_index, "
-        "kind, dtype, shape, bin_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS JSON), ?)",
+        "INSERT INTO args_dump_entry (run_id, seq, task_id, task_id_raw, task_id_u64, stage, role, arg_index, "
+        "kind, dtype, shape, bin_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS JSON), ?)",
         rows,
     )
 

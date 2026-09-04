@@ -32,7 +32,7 @@ MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 _MIGRATION_NAME = re.compile(r"^(\d{4})_[A-Za-z0-9_]+\.sql$")
 
 # Highest migration version shipped by this package.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def discover_migrations(directory: Path = MIGRATIONS_DIR) -> dict[int, Path]:

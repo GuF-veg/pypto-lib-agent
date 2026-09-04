@@ -927,6 +927,13 @@ if __name__ == "__main__":
     parser.add_argument("--golden-data", type=str, default=None,
                         help="Reuse a prior run's data/{in,out} (skips golden recompute); "
                              "requires an unchanged spec set.")
+    parser.add_argument("--save-data", action="store_true", default=False,
+                        help="Persist generated inputs and golden outputs for replay.")
+    parser.add_argument("--enable-dep-gen", action="store_true", default=False,
+                        help="Capture PTO2 dependency edges for profiling analysis.")
+    parser.add_argument("--enable-pmu", nargs="?", const=2, default=0, type=int, choices=[0, 1, 2, 4])
+    parser.add_argument("--enable-dump-args", nargs="?", const=1, default=0, type=int, choices=[0, 1, 2, 3])
+    parser.add_argument("--enable-scope-stats", action="store_true", default=False)
     parser.add_argument("--dump-passes", action="store_true", default=False)
     args = parser.parse_args()
     if args.batch < 4 or args.batch > B or args.batch % 4 != 0:
@@ -938,11 +945,16 @@ if __name__ == "__main__":
         golden_fn=golden_attention_csa,
         runtime_dir=args.runtime_dir,
         golden_data=args.golden_data,
+        save_data=args.save_data,
         compile_cfg=dict(dump_passes=args.dump_passes),
         runtime_cfg=dict(
             platform=args.platform,
             device_id=args.device,
             enable_l2_swimlane=args.enable_l2_swimlane,
+            enable_dep_gen=args.enable_dep_gen,
+            enable_pmu=args.enable_pmu,
+            enable_dump_args=args.enable_dump_args,
+            enable_scope_stats=args.enable_scope_stats,
         ),
         rtol=1e-2,
         atol=1e-2,

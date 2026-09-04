@@ -54,13 +54,14 @@ def incore(conn, params: IncoreParams) -> list[Fact]:
         args.append(params.kernel)
     rows = common.q(conn, sql + " ORDER BY kernel", args)
     if not rows:
-        return [
+        facts = [
             Fact(
                 "INCORE",
                 common.fields(run_id=run_id, kernel=params.kernel),
                 Evidence.UNAVAILABLE,
             )
         ]
+        return facts
     return [
         Fact(
             "INCORE",
@@ -88,7 +89,7 @@ def args_dump(conn, params: ArgsDumpParams) -> list[Fact]:
     if common.one(conn, "SELECT 1 FROM run WHERE run_id = ?", [run_id]) is None:
         return common.run_missing("ARGS", run_id)
     sql = (
-        "SELECT seq, task_id, stage, role, arg_index, kind, dtype, "
+        "SELECT seq, task_id, task_id_raw, task_id_u64, stage, role, arg_index, kind, dtype, "
         "CAST(shape AS VARCHAR), bin_size FROM args_dump_entry WHERE run_id = ?"
     )
     args: list[Any] = [run_id]
@@ -100,7 +101,8 @@ def args_dump(conn, params: ArgsDumpParams) -> list[Fact]:
         args.append(params.stage)
     rows = common.q(conn, sql + " ORDER BY seq", args)
     if not rows:
-        return [
+        status = common.modality_status_fact(conn, run_id, "args_dump")
+        facts = [
             Fact(
                 "ARGS",
                 common.fields(
@@ -109,13 +111,16 @@ def args_dump(conn, params: ArgsDumpParams) -> list[Fact]:
                 Evidence.UNAVAILABLE,
             )
         ]
-    return [
+        return [*([status] if status is not None else []), *facts]
+    facts = [
         Fact(
             "ARGS",
             common.fields(
                 run_id=run_id,
                 seq=seq,
                 task_id=task_id,
+                task_id_raw=task_id_raw,
+                task_id_u64=task_id_u64,
                 stage=stage,
                 role=role,
                 arg_index=arg_index,
@@ -126,8 +131,10 @@ def args_dump(conn, params: ArgsDumpParams) -> list[Fact]:
             ),
             Evidence.MEASURED,
         )
-        for seq, task_id, stage, role, arg_index, kind, dtype, shape, bin_size in rows
+        for seq, task_id, task_id_raw, task_id_u64, stage, role, arg_index, kind, dtype, shape, bin_size in rows
     ]
+    status = common.modality_status_fact(conn, run_id, "args_dump")
+    return [*([status] if status is not None else []), *facts]
 
 
 @register(
@@ -150,14 +157,16 @@ def scope_stats(conn, params: ScopeStatsParams) -> list[Fact]:
         args.append(params.site)
     rows = common.q(conn, sql + " ORDER BY seq", args)
     if not rows:
-        return [
+        status = common.modality_status_fact(conn, run_id, "scope_stats")
+        facts = [
             Fact(
                 "SCOPE",
                 common.fields(run_id=run_id, site=params.site),
                 Evidence.UNAVAILABLE,
             )
         ]
-    return [
+        return [*([status] if status is not None else []), *facts]
+    facts = [
         Fact(
             "SCOPE",
             common.fields(
@@ -172,6 +181,8 @@ def scope_stats(conn, params: ScopeStatsParams) -> list[Fact]:
         )
         for seq, site, ring, phase, payload in rows
     ]
+    status = common.modality_status_fact(conn, run_id, "scope_stats")
+    return [*([status] if status is not None else []), *facts]
 
 
 @register(
@@ -220,15 +231,18 @@ def bench(conn, params: BenchParams) -> list[Fact]:
     ]
     samples = common.q(
         conn,
-        "SELECT round, effective_us FROM bench_sample WHERE run_id = ? ORDER BY round",
+        "SELECT stratum, round, effective_us FROM bench_sample "
+        "WHERE run_id = ? ORDER BY stratum, round",
         [run_id],
     )
     facts.extend(
         Fact(
             "BENCH_SAMPLE",
-            common.fields(run_id=run_id, round=rnd, effective_us=common.us(value)),
+            common.fields(
+                run_id=run_id, stratum=stratum, round=rnd, effective_us=common.us(value)
+            ),
             Evidence.MEASURED,
         )
-        for rnd, value in samples
+        for stratum, rnd, value in samples
     )
     return facts

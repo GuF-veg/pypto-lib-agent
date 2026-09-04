@@ -17,7 +17,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from profile_db.errors import QueryError
 from profile_db.facts import Evidence, Fact
 from profile_db.query import common
 from profile_db.query.registry import register
@@ -47,14 +46,9 @@ def _run_counts(conn, run_id: int) -> dict[str, int]:
     rank_axis=True,
 )
 def runs_list(conn, params: RunsListParams) -> list[Fact]:
-    # Multi-rank guard: without an explicit rank, refusing beats guessing.
-    ranks = [r[0] for r in common.q(conn, "SELECT DISTINCT rank_label FROM run ORDER BY rank_label")]
-    non_single = [r for r in ranks if r != "single"]
-    if params.rank is None and non_single:
-        raise QueryError(
-            "multi-rank database: pass rank=<label> to disambiguate; candidates: "
-            + ", ".join(sorted(non_single))
-        )
+    # Listing is an orientation operation, not an aggregate. Returning every
+    # run with its rank label is deterministic and lets callers choose a run id
+    # before applying an optional rank guard to the follow-up query.
     sql = "SELECT run_id FROM run"
     args: list[Any] = []
     if params.rank is not None:
@@ -186,9 +180,7 @@ def inventory(conn, params: InventoryParams) -> list[Fact]:
         "WHERE run_id = ? ORDER BY kind, rel_path",
         [run_id],
     )
-    if not rows:
-        return [Fact("ARTIFACT", common.fields(run_id=run_id), Evidence.UNAVAILABLE)]
-    return [
+    facts = [
         Fact(
             "ARTIFACT",
             common.fields(
@@ -203,3 +195,32 @@ def inventory(conn, params: InventoryParams) -> list[Fact]:
         )
         for kind, rel_path, sha256, size_bytes, store_mode in rows
     ]
+    statuses = common.q(
+        conn,
+        "SELECT modality, requested, request_value, rel_path, size_bytes, parser_state, "
+        "entry_count, state, reason FROM modality_status WHERE run_id = ? ORDER BY modality",
+        [run_id],
+    )
+    facts.extend(
+        Fact(
+            "MODALITY",
+            common.fields(
+                run_id=run_id,
+                modality=modality,
+                requested=requested,
+                request_value=request_value,
+                rel_path=rel_path,
+                size_bytes=size_bytes,
+                parser_state=parser_state,
+                entry_count=entry_count,
+                state=state,
+                reason=reason,
+            ),
+            Evidence.MEASURED if state == "available" else Evidence.UNAVAILABLE,
+        )
+        for modality, requested, request_value, rel_path, size_bytes, parser_state, entry_count, state, reason
+        in statuses
+    )
+    if not facts:
+        return [Fact("ARTIFACT", common.fields(run_id=run_id), Evidence.UNAVAILABLE)]
+    return facts

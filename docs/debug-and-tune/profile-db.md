@@ -65,9 +65,28 @@ Optional evidence is auto-discovered when present beside/inside the capture:
 `trace.clean.json` / `visualize_data.bin`) are never copied or registered —
 only their metadata and metrics enter the database.
 
+The golden harness writes `dfx_outputs/profile_capture_manifest.json` whenever
+DFX modalities were requested. Ingest uses it to distinguish `not_requested`,
+`not_emitted`, `empty`, `parse_error`, and `available`; legacy or external
+captures can override it with repeatable `--modality-request NAME=VALUE`.
+`inventory`, `args_dump`, and `scope_stats` return these `MODALITY` facts
+rather than treating every missing optional file as the same unavailable result.
+
+For an acceptance benchmark, enable raw output and ingest one log for each
+independent invocation. A raw log must contain the harness's `headline raw`
+sequence; a summary-only log is deliberately insufficient for confidence
+intervals.
+
+```bash
+PYPTO_BENCH=1 PYPTO_BENCH_RAW=1 python models/<model>/decode.py -p a2a3 -d 0 > bench-1.log
+PYPTO_BENCH=1 PYPTO_BENCH_RAW=1 python models/<model>/decode.py -p a2a3 -d 0 > bench-2.log
+PYPTO_BENCH=1 PYPTO_BENCH_RAW=1 python models/<model>/decode.py -p a2a3 -d 0 > bench-3.log
+pfdb ingest build_output/<case>/dfx_outputs --bench-log bench-1.log --bench-log bench-2.log --bench-log bench-3.log
+```
+
 ## Query
 
-`pfdb list` lists runs; `pfdb query <name>` runs one of the 17 registered
+`pfdb list` lists runs; `pfdb query <name>` runs one of the registered
 queries, each bound to the agent question it answers. The zoom path from
 DESIGN.md §6.4 is:
 
@@ -79,6 +98,8 @@ pfdb query why_sparse --run-id 1 --band 9 --engine aiv
 pfdb query task --run-id 1 --task-id 4294967298
 pfdb query deps --run-id 1 --task-id 4294967298 --direction in
 pfdb query why_late --run-id 1 --task-id 4294967298
+pfdb query critical-path --run-id 1        # hyphenated aliases are accepted
+pfdb query pmu --run-id 1 --task-id 4294967298 --samples
 ```
 
 All query output is `facts` (default DSL), `json`, or `markdown`, bounded by
@@ -115,7 +136,9 @@ tick labels, R2 marks the ready line at `max(producer FIN)` only when a real
 FIN timestamp exists (level-1 placeholder FIN never produces a line), and R3
 shades every idle gap with its kind labeled when the band is wide enough. The
 `IMAGE` fact mirrors the engine→color `legend` so text-channel consumers can
-interpret the colors without opening the pixels.
+interpret the colors without opening the pixels. It also reports `cache_hit`
+and `wall_ms`; these operational measurements are deliberately not written
+into the deterministic manifest.
 
 ## MCP
 
@@ -142,6 +165,7 @@ pfdb prune --keep 3
 
 # neutral before/after (refused when program/level/clock/topology differ)
 pfdb compare 1 2
+pfdb compare 1 2 --bootstrap --confidence 0.95 --resamples 10000 --seed 0
 
 # named baseline (protected from prune) and a relative diff
 pfdb baseline add 1 --name best-0123 --bench-mean 12.3
@@ -165,8 +189,13 @@ JSON-encoded. Evidence states are exactly:
 - `unproven` — related but not sufficient to assert the conclusion;
 - `unavailable` — the artifact or field is absent.
 
-A missing run/task/band yields an `unavailable` fact, never a guess. Multi-rank
-databases refuse deterministic queries until you pass `--rank`.
+A missing run/task/band yields an `unavailable` fact, never a guess. `pfdb list`
+returns every run with its rank label; run-scoped queries accept optional
+`--rank` as a consistency guard and reject a mismatched run/rank pair. Query and
+render commands use read-only database connections by default (and expose an
+explicit `--read-only` flag), so multiple readers can share an idle database.
+An active DuckDB writer still excludes readers; the resulting `LockError` tells
+the caller to wait for that writer rather than suggesting deletion.
 
 ## Release checklist
 

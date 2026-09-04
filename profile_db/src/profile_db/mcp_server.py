@@ -41,7 +41,7 @@ from profile_db.query import get_query, list_queries
 
 # Bumped on any breaking change to the tool surface; published with the
 # release (semantic versioning guards the contract).
-TOOL_SCHEMA_VERSION = "1"
+TOOL_SCHEMA_VERSION = "2"
 
 _DEFAULT_BUDGET_BYTES = 4096
 
@@ -75,6 +75,10 @@ class CompareToolParams(BaseModel):
 
     run_a: int
     run_b: int
+    bootstrap: bool = False
+    confidence: float = Field(default=0.95, gt=0.0, lt=1.0)
+    resamples: int = Field(default=10000, ge=1)
+    seed: int = 0
 
 
 class BaselineDiffToolParams(BaseModel):
@@ -84,6 +88,10 @@ class BaselineDiffToolParams(BaseModel):
     baseline_name: str | None = Field(
         default=None, description="baseline name (default: latest registered)"
     )
+    bootstrap: bool = False
+    confidence: float = Field(default=0.95, gt=0.0, lt=1.0)
+    resamples: int = Field(default=10000, ge=1)
+    seed: int = 0
 
 
 class BaselineListToolParams(BaseModel):
@@ -232,10 +240,28 @@ def _lifecycle_result(db: ProfileDB, suffix: str, arguments: dict[str, Any]) -> 
     model_cls, _description, _writes = _LIFECYCLE_TOOLS[suffix]
     model = model_cls.model_validate(arguments)
     if suffix == "compare":
-        return format_result(db.compare(model.run_a, model.run_b), "facts")
+        return format_result(
+            db.compare(
+                model.run_a,
+                model.run_b,
+                bootstrap=model.bootstrap,
+                confidence=model.confidence,
+                resamples=model.resamples,
+                seed=model.seed,
+            ),
+            "facts",
+        )
     if suffix == "baseline_diff":
         return format_result(
-            db.baseline_diff(model.run_id, model.baseline_name), "facts"
+            db.baseline_diff(
+                model.run_id,
+                model.baseline_name,
+                bootstrap=model.bootstrap,
+                confidence=model.confidence,
+                resamples=model.resamples,
+                seed=model.seed,
+            ),
+            "facts",
         )
     if suffix == "baseline_list":
         return format_result(db.baseline_list(), "facts")

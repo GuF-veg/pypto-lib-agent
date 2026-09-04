@@ -104,6 +104,7 @@ LAYERS: dict[str, int] = {
     "profile_db.ingest.scope_stats": 4,
     "profile_db.ingest.incore": 4,
     "profile_db.lifecycle": 4,
+    "profile_db.lifecycle.bootstrap": 4,
     "profile_db.lifecycle.working_set": 4,
     "profile_db.lifecycle.prune": 4,
     "profile_db.lifecycle.trial": 4,
@@ -127,6 +128,7 @@ LAYERS: dict[str, int] = {
     "profile_db.schema": 1,
     "profile_db.errors": 0,
     "profile_db._version": 0,
+    "profile_db.task_ids": 0,
 }
 
 # Packages whose modules may import each other within their shared prefix

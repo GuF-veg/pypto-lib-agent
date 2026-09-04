@@ -73,12 +73,12 @@ def test_ingest_text_evidence_counts_and_content(tmp_path: Path, db_file: Path) 
             "SELECT task_id, counter, value FROM pmu_counter WHERE run_id = 1 ORDER BY pmu_id"
         ).fetchall()
         assert [tuple(row) for row in counters] == [
-            ("0x200000a00", "pmu_total_cycles", 1000.0),
-            ("0x200000a00", "vec_busy_cycles", 900.0),
-            ("0x200000a00", "cube_busy_cycles", 100.0),
-            ("0x200000b00", "pmu_total_cycles", 2000.0),
-            ("0x200000b00", "vec_busy_cycles", 200.0),
-            ("0x200000b00", "cube_busy_cycles", 1600.0),
+                ("8589937152", "pmu_total_cycles", 1000.0),
+                ("8589937152", "vec_busy_cycles", 900.0),
+                ("8589937152", "cube_busy_cycles", 100.0),
+                ("8589937408", "pmu_total_cycles", 2000.0),
+                ("8589937408", "vec_busy_cycles", 200.0),
+                ("8589937408", "cube_busy_cycles", 1600.0),
         ]
     finally:
         db.close()

@@ -8,8 +8,8 @@
 # -----------------------------------------------------------------------------------------------------------
 
 """T4 golden QA: exact-snapshot facts, the 6.4 full session, the registry
-self-check, the evidence envelope, the byte-budget TRUNCATED signal, the
-multi-rank guard, and the no-raw-JSON-leak checker."""
+self-check, the evidence envelope, the byte-budget TRUNCATED signal, rank
+listing/consistency checks, and the no-raw-JSON-leak checker."""
 
 from __future__ import annotations
 
@@ -95,9 +95,11 @@ def test_budget_truncation_is_explicit(scenario_db) -> None:
     assert omitted == len(full.facts) - len(out.text.splitlines()) + 1
 
 
-def test_multi_rank_guard_lists_candidates(scenario_db) -> None:
-    with pytest.raises(QueryError, match="candidates: rank0, rank1"):
-        _run(scenario_db.connection, "runs_list", {})
+def test_multi_rank_list_exposes_rank_labels(scenario_db) -> None:
+    listed = _run(scenario_db.connection, "runs_list", {})
+    assert 'rank="rank0"' in listed.text and 'rank="rank1"' in listed.text
+    with pytest.raises(QueryError, match="belongs to rank"):
+        _run(scenario_db.connection, "overview", {"run_id": 1, "rank": "rank1"})
 
 
 def test_no_raw_json_leak(scenario_db) -> None:

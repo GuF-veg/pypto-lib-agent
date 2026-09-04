@@ -169,6 +169,41 @@ def _consume_runtime_harness_keys(runtime_cfg: dict[str, Any]) -> None:
     configure_log(level)
 
 
+def _write_profile_capture_manifest(work_dir: Path | None, runtime_cfg: dict[str, Any]) -> None:
+    """Persist requested DFX modalities beside the capture, never user paths.
+
+    Runtime may legitimately omit an optional artifact.  The manifest lets an
+    offline evidence reader distinguish that from a modality that was not
+    requested at all without inspecting a machine-specific command line.
+    """
+    if work_dir is None:
+        return
+    values = {
+        "l2_swimlane": runtime_cfg.get("enable_l2_swimlane"),
+        "dep_gen": runtime_cfg.get("enable_dep_gen"),
+        "pmu": runtime_cfg.get("enable_pmu"),
+        "args_dump": runtime_cfg.get("enable_dump_args"),
+        "scope_stats": runtime_cfg.get("enable_scope_stats"),
+    }
+    modalities = {
+        name: {"requested": bool(value), "value": value}
+        for name, value in values.items()
+    }
+    if not any(item["requested"] for item in modalities.values()):
+        return
+    path = work_dir / "dfx_outputs" / "profile_capture_manifest.json"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        import json
+
+        path.write_text(
+            json.dumps({"schema_version": 1, "modalities": modalities}, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        print(f"[RUN]   profile capture manifest unavailable: {exc}", flush=True)
+
+
 def _stale_cpps(work_dir: Path) -> list[Path]:
     """Return cpps under ``kernels/`` / ``orchestration/`` that need rebuilding.
 
@@ -517,7 +552,7 @@ def _report_effective(stats: Any) -> None:
 
 
 def _report_raw_samples(stats: Any) -> None:
-    """Print every measured dispatch's raw Effective sample, per rank.
+    """Print authoritative raw Effective samples and per-rank diagnostics.
 
     No-op unless :func:`_bench_raw_enabled` (``PYPTO_BENCH_RAW``). Reads
     :attr:`BenchmarkStats.invocations` — the flat per-dispatch list — rather than
@@ -525,9 +560,11 @@ def _report_raw_samples(stats: Any) -> None:
     for L3, and for the L3 flatten fallback where ``per_rank`` returns ``{}`` and
     the summary lines are the least trustworthy.
 
-    Samples are in ``inv`` order (warmup already dropped), so the sequence shows
-    drift directly. The lines use a ``raw`` token and ``eff_us``, never
-    ``effective_us``, so the Daily-CI collector's match cannot select them.
+    ``headline raw`` is the one authoritative sequence that pfdb ingests. It
+    uses the same per-round effective aggregation as the summary and therefore
+    has exactly ``rounds`` values. The rank lines remain diagnostics for
+    distributed launches. All raw lines use ``eff_us``, never ``effective_us``,
+    so the Daily-CI collector cannot select them.
     """
     if not _bench_raw_enabled() or not stats.invocations:
         return
@@ -543,6 +580,10 @@ def _report_raw_samples(stats: Any) -> None:
     for pid in sorted(by_pid):
         eff = [round(iv.effective_us, 1) for iv in by_pid[pid]]
         print(f"[RUN]     rank {pid} raw n={len(eff)} eff_us={eff}", flush=True)
+    if not stats.fallback_flattened:
+        headline = [round(value, 1) for value in stats.per_round("effective") if value > 0.0]
+        if headline:
+            print(f"[RUN]   headline raw n={len(headline)} eff_us={headline}", flush=True)
 
 
 def _report_l3_detail(stats: Any, compiled: Any, *, resident: bool) -> None:
@@ -1296,6 +1337,8 @@ def run(
             print(f"[RUN] PASS ({total:.2f}s)", flush=True)
             return RunResult(passed=True, execution_time=total, work_dir=work_dir)
 
+    _write_profile_capture_manifest(work_dir, runtime_cfg)
+
     # Generate Inputs
     try:
         with _Stage("generate inputs"):
@@ -1485,6 +1528,8 @@ def run_jit(
             total = time.time() - start
             print(f"[RUN] PASS ({total:.2f}s)", flush=True)
             return RunResult(passed=True, execution_time=total, work_dir=work_dir)
+
+    _write_profile_capture_manifest(work_dir, runtime_cfg)
 
     # Generate Inputs
     try:

@@ -36,7 +36,7 @@ class IngestError(PfdbError):
 
 class QueryError(PfdbError):
     """A query cannot be answered: unknown name, invalid parameters, or a
-    multi-rank database that requires an explicit rank selection."""
+    run/rank consistency check failed."""
 
 
 class RenderError(PfdbError):

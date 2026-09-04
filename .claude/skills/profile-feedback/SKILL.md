@@ -45,10 +45,12 @@ means the capture does not carry that data.
 
 | Command | What it does |
 |---|---|
-| `pfdb ingest <dfx_outputs> [--platform …] [--rank …] [--bench "min=… median=… mean=… max=… rounds=…"] [--bench-log <file>] [--copy] [--no-prune]` | Turn one existing capture directory into a run. Link mode by default (no file copies). Idempotent. Auto-prunes to the latest 3 runs after ingest; use `--no-prune` to keep more. |
+| `pfdb ingest <dfx_outputs> [--platform …] [--rank …] [--bench "min=… median=… mean=… max=… rounds=…"] [--bench-log <file>]… [--copy] [--no-prune]` | Turn one existing capture directory into a run. Link mode by default (no file copies). Each `--bench-log` is one independent raw-sample stratum. Idempotent. Auto-prunes to the latest 3 runs after ingest; use `--no-prune` to keep more. |
 | `pfdb ingest-incore <collection> --run <id>` | Attach an in-core simulator collection (`manifest_export.csv`) to an existing run. Raw traces are never copied. |
 
-**Always pass `--bench` or `--bench-log`** if you have PYPTO_BENCH numbers. The
+**Always pass `--bench` or `--bench-log`** if you have PYPTO_BENCH numbers. For
+an acceptance comparison, pass three `--bench-log` files produced with
+`PYPTO_BENCH_RAW=1`; pfdb requires their `headline raw` samples. The
 unprofiled `bench_mean_us` is what `baseline add` uses by default; without it,
 `baseline diff`'s `bench_mean_us` delta is silently absent. Note: `bench_mean_us`
 and `makespan_us` measure different things and must never be compared to each other
@@ -67,7 +69,8 @@ The byte budget applies equally to all three formats — the stream is always
 prefix-truncated and ends with an explicit `TRUNCATED first_dropped_index=…
 remaining=… limit=…` line when output is cut.
 
-Multi-rank databases refuse queries that would mix ranks; pass `--rank <label>`.
+`pfdb list` returns every run with its rank label. Run-scoped queries accept
+optional `--rank <label>` and reject a mismatch with that run's rank.
 
 **Z0 — orient** (which run, what configuration):
 
@@ -119,14 +122,17 @@ Requires level ≥ 2; returns `evidence=unavailable` on level-1 captures.
   phases around it (level-4 only for full phase data).
 - `pfdb query early_dispatch --run-id <id> --task-id <t>` — whether early
   dispatch actually happened (`full/partial/none/unavailable`).
-- `pfdb query pmu --run-id <id> --task-id <t>` — per-pipeline busy ratios. Only
+- `pfdb query pmu --run-id <id> --task-id <t> [--samples]` — task-level
+  aggregate counters and, with `--samples`, one provenance-preserving raw CSV
+  sample per fact. Hexadecimal and decimal task IDs normalize to the same U64
+  identity while preserving the raw spelling. Only
   available when the capture includes `pmu.csv`. Without a `*total*cycle*` column
   in that CSV the `ratio` field is absent; `pfdb query pmu` says so explicitly
   with an `EVIDENCE metric=ratio status=unavailable` line.
 
 **Evidence tables** (cross-cutting):
 
-- `pfdb query critical_path --run-id <id> [--kind observed|static]` — the path
+- `pfdb query critical_path` (or `critical-path`) `--run-id <id> [--kind observed|static]` — the path
   that decides makespan, task by task.
 - `pfdb query perf_hints --run-id <id>` — compiler tile/placement hints, verbatim.
 - `pfdb query memory --run-id <id>` — buffer spaces vs hardware limits.
@@ -166,7 +172,7 @@ question.
   baseline/active-trial references). This runs automatically after `ingest` with
   `--keep 3`; use `--no-prune` at ingest time if you want to keep older runs.
 - `pfdb note <run> "<text>"` — attach a free-text note to a run.
-- `pfdb compare <run_a> <run_b>` — neutral before/after deltas; refuses
+- `pfdb compare <run_a> <run_b> [--bootstrap --confidence 0.95 --resamples 10000 --seed 0]` — neutral before/after deltas; optional raw-sample confidence facts; refuses
   incompatible runs.
 - `pfdb baseline add <run> --name …` / `pfdb baseline list` / `pfdb baseline diff <run> [--baseline …]`
   — named baselines and relative change. A baseline protects its run from prune.
