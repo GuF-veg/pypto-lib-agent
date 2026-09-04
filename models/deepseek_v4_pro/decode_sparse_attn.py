@@ -92,6 +92,10 @@ PROJ_B_ACT_TASK_T_TILE = 8
 # CSA uses at least two sparse blocks.
 SPARSE_BLOCKS = max(2, (TOPK + ATTN_K_TILE - 1) // ATTN_K_TILE)
 PADDED_TOPK = SPARSE_BLOCKS * ATTN_K_TILE
+# Page-contiguous runs one sliding-window K tile spans: WIN rows capped by the tile,
+# plus a worst-case BLOCK_SIZE - 1 head offset, rounded up to pages.
+SWA_TILE_WIN_ROWS = min(ATTN_K_TILE, WIN)
+SWA_RUNS = (SWA_TILE_WIN_ROWS + 2 * (BLOCK_SIZE - 1)) // BLOCK_SIZE
 
 
 def get_standalone_cmp_valid(compress_ratio: int) -> int:
@@ -234,29 +238,41 @@ def sparse_attn(
             qk_block_valid = pl.read(valid_block_mask, [qk_t, qk_sb])
             if qk_block_valid > 0:
                 qk_kv = pl.create_l1([ATTN_K_TILE, HEAD_DIM], pl.BF16)
-                for qk_r in pl.range(ATTN_K_TILE):
-                    qk_k = qk_s0 + qk_r
-                    if qk_k < WIN:
-                        qk_win_slot_i32 = pl.read(window_swa_indices, [qk_t, qk_k])
-                        if qk_win_slot_i32 >= 0:
-                            qk_win_slot = pl.cast(qk_win_slot_i32, pl.INDEX)
-                            qk_kv = pl.gather_row(qk_kv, ori_kv_flat, [qk_r, 0], [qk_win_slot, 0], [1, HEAD_DIM])
+                # Window rows are consecutive absolute positions and paged KV keeps a
+                # page's positions consecutive, so they form SWA_RUNS page-contiguous
+                # runs -- one multi-row gather each, instead of a single-row DMA per row.
+                qk_win_rows = pl.min(pl.max(WIN - qk_s0, 0), ATTN_K_TILE)
+                if qk_win_rows > 0:
+                    qk_pos = pl.cast(pl.read(position_ids, [qk_t, 0]), pl.INDEX)
+                    qk_win_len = pl.min(qk_pos + 1, WIN)
+                    qk_win_start = qk_pos - qk_win_len + 1
+                    qk_run_rows = pl.min(pl.max(qk_win_len - qk_s0, 0), qk_win_rows)
+                    qk_head = (qk_win_start + qk_s0) % BLOCK_SIZE
+                    for qk_run in pl.unroll(SWA_RUNS):
+                        qk_run_lo = pl.max(qk_run * BLOCK_SIZE - qk_head, 0)
+                        qk_run_hi = pl.min((qk_run + 1) * BLOCK_SIZE - qk_head, qk_run_rows)
+                        if qk_run_hi > qk_run_lo:
+                            qk_run_raw = pl.read(window_swa_indices, [qk_t, qk_s0 + qk_run_lo])
+                            qk_run_src = pl.cast(pl.max(qk_run_raw, 0), pl.INDEX)
+                            qk_kv = pl.gather_row(qk_kv, ori_kv_flat, [qk_run_lo, 0], [qk_run_src, 0], [ATTN_K_TILE, HEAD_DIM], valid_shape=[qk_run_hi - qk_run_lo, HEAD_DIM])
+                    qk_tail_n = qk_win_rows - qk_run_rows
+                    if qk_tail_n > 0:
+                        qk_kv = pl.gather_row(qk_kv, ori_kv_flat, [qk_run_rows, 0], [0, 0], [ATTN_K_TILE, HEAD_DIM], valid_shape=[qk_tail_n, HEAD_DIM])
+                # Compressed rows stay per-row: the indexer top-k slots are scattered.
+                for qk_r in pl.range(qk_win_rows, ATTN_K_TILE):
+                    qk_cmp_k = qk_s0 + qk_r - WIN
+                    if qk_cmp_k < CMP_TOPK:
+                        qk_ridx = pl.read(cmp_sparse_indices, [qk_t, qk_cmp_k])
+                        if qk_ridx >= 0:
+                            qk_slot = qk_ridx
+                            qk_cblk_i32 = pl.read(cmp_block_table, [qk_b, qk_slot // BLOCK_SIZE])
+                            qk_cblk = pl.cast(qk_cblk_i32, pl.INDEX)
+                            qk_csrc = qk_cblk * BLOCK_SIZE + qk_slot % BLOCK_SIZE
+                            qk_kv = pl.gather_row(qk_kv, cmp_kv_flat, [qk_r, 0], [qk_csrc, 0], [1, HEAD_DIM])
                         else:
                             qk_kv = pl.gather_row(qk_kv, ori_kv_flat, [qk_r, 0], [0, 0], [1, HEAD_DIM])
                     else:
-                        qk_cmp_k = qk_k - WIN
-                        if qk_cmp_k < CMP_TOPK:
-                            qk_ridx = pl.read(cmp_sparse_indices, [qk_t, qk_cmp_k])
-                            if qk_ridx >= 0:
-                                qk_slot = qk_ridx
-                                qk_cblk_i32 = pl.read(cmp_block_table, [qk_b, qk_slot // BLOCK_SIZE])
-                                qk_cblk = pl.cast(qk_cblk_i32, pl.INDEX)
-                                qk_csrc = qk_cblk * BLOCK_SIZE + qk_slot % BLOCK_SIZE
-                                qk_kv = pl.gather_row(qk_kv, cmp_kv_flat, [qk_r, 0], [qk_csrc, 0], [1, HEAD_DIM])
-                            else:
-                                qk_kv = pl.gather_row(qk_kv, ori_kv_flat, [qk_r, 0], [0, 0], [1, HEAD_DIM])
-                        else:
-                            qk_kv = pl.gather_row(qk_kv, ori_kv_flat, [qk_r, 0], [0, 0], [1, HEAD_DIM])
+                        qk_kv = pl.gather_row(qk_kv, ori_kv_flat, [qk_r, 0], [0, 0], [1, HEAD_DIM])
 
                 for qk_hb in pl.pipeline(H // QK_M_TILE, stage=2):
                     qk_h0 = qk_hb * QK_M_TILE
@@ -809,11 +825,14 @@ if __name__ == "__main__":
     cache_help = "Place a sentinel row inside the cache window prefix."
     parser.add_argument("--cache-window-replacement-fixture", action="store_true", default=False, help=cache_help)
     parser.add_argument("--golden-data", type=str, default=None)
-    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2))
+    parser.add_argument("--save-data", action="store_true", default=False)
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2, 4))
     dep_help = "Capture PTO2 dependency edges (deps.json); the swimlane "
     dep_help += "converter draws fanout/fanin arrows from the sibling file."
     parser.add_argument("--enable-dep-gen", action="store_true", default=False, help=dep_help)
     parser.add_argument("--enable-pmu", nargs="?", const=2, default=0, type=int, choices=[0, 1, 2, 4])
+    parser.add_argument("--enable-dump-args", nargs="?", const=1, default=0, type=int, choices=[0, 1, 2, 3])
+    parser.add_argument("--enable-scope-stats", action="store_true", default=False)
     parser.add_argument("--dump-passes", action="store_true", default=False)
     args = parser.parse_args()
 
@@ -832,6 +851,7 @@ if __name__ == "__main__":
         ),
         golden_fn=golden_sparse_attn,
         golden_data=args.golden_data,
+        save_data=args.save_data,
         compile_cfg=dict(dump_passes=args.dump_passes),
         runtime_cfg=dict(
             platform=args.platform,
@@ -839,6 +859,8 @@ if __name__ == "__main__":
             enable_chip_swimlane=args.enable_chip_swimlane,
             enable_dep_gen=args.enable_dep_gen,
             enable_pmu=args.enable_pmu,
+            enable_dump_args=args.enable_dump_args,
+            enable_scope_stats=args.enable_scope_stats,
         ),
         rtol=1e-3,
         atol=1e-3,
