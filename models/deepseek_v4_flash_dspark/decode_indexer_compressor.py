@@ -63,6 +63,14 @@ OUT_TILE = 64
 PROJ_OUT_TILE = 32  # kv_score_proj N-tile
 assert PROJ_OUT_TILE % 16 == 0, "cube tile cols must be a multiple of 16"
 MM_B_TILE = 16
+# kv_score_proj runs on persistent workers, each striding over the block list.
+KV_SCORE_WORKERS = 24
+# scatter_softmax_pool and compress_state_commit run on persistent workers,
+# each striding over requests.
+POOL_WORKERS = 48
+# kv_hadamard runs on persistent workers; the hadamard tile is read once per worker.
+HADAMARD_WORKERS = 24
+COMMIT_WORKERS = 48
 # Scratch spans the CP group's whole token stream, not the rank-local B * S.
 GROUP_BS = DECODE_BATCH * DECODE_SEQ
 BS_PAD = ((GROUP_BS + MM_B_TILE - 1) // MM_B_TILE) * MM_B_TILE
@@ -109,34 +117,33 @@ def indexer_compressor(
 
     # Deferred behind the caller's rms_norm dummy barrier: qkv's qr_proj_matmul is the
     # critical path and must win the cores when rms_norm retires.
-    with pl.spmd(
-        t_matmul * OUT_DIM // (MM_B_TILE * PROJ_OUT_TILE), name_hint="kv_score_proj", deps=[late_dep]
-    ) as _kv_score_tid:
-        idx = pl.tile.get_block_idx()
-        global_row0 = (idx // (OUT_DIM // PROJ_OUT_TILE)) * MM_B_TILE
-        o0 = (idx % (OUT_DIM // PROJ_OUT_TILE)) * PROJ_OUT_TILE
-        kv_acc = pl.create_tensor([MM_B_TILE, PROJ_OUT_TILE], dtype=pl.FP32)
-        score_acc = pl.create_tensor([MM_B_TILE, PROJ_OUT_TILE], dtype=pl.FP32)
-        for kb in pl.pipeline(0, D // K_TILE, stage=2):
-            k0 = kb * K_TILE
-            x_rows = pl.min(MM_B_TILE, bs - global_row0)
-            x_tile = pl.slice(x_flat, [MM_B_TILE, K_TILE], [global_row0, k0], valid_shape=[x_rows, K_TILE])
-            # Weights stored transposed [OUT_DIM, D] and consumed via b_trans=True so the
-            # GM->L1 load is a DN2ZN (each [PROJ_OUT_TILE, K_TILE] row is K-contiguous = long
-            # bursts) instead of ND2NZ on [K_TILE, PROJ_OUT_TILE] (K strided = many short
-            # bursts). Mirrors the main compressor (decode_compressor_ratio4); the strided
-            # ND2NZ form here was ~2x slower on this matmul (43us -> ~20us per task).
-            wkv_tile = wkv[o0 : o0 + PROJ_OUT_TILE, k0 : k0 + K_TILE]
-            wgate_tile = wgate[o0 : o0 + PROJ_OUT_TILE, k0 : k0 + K_TILE]
-            if k0 == 0:
-                kv_acc = pl.matmul(x_tile, wkv_tile, out_dtype=pl.FP32, b_trans=True)
-                score_acc = pl.matmul(x_tile, wgate_tile, out_dtype=pl.FP32, b_trans=True)
-            else:
-                kv_acc = pl.matmul_acc(kv_acc, x_tile, wkv_tile, b_trans=True)
-                score_acc = pl.matmul_acc(score_acc, x_tile, wgate_tile, b_trans=True)
+    with pl.spmd(KV_SCORE_WORKERS, name_hint="kv_score_proj", deps=[late_dep]) as _kv_score_tid:
+        kv_worker = pl.tile.get_block_idx()
+        for idx in pl.range(kv_worker, t_matmul * OUT_DIM // (MM_B_TILE * PROJ_OUT_TILE), KV_SCORE_WORKERS):
+            global_row0 = (idx // (OUT_DIM // PROJ_OUT_TILE)) * MM_B_TILE
+            o0 = (idx % (OUT_DIM // PROJ_OUT_TILE)) * PROJ_OUT_TILE
+            kv_acc = pl.create_tensor([MM_B_TILE, PROJ_OUT_TILE], dtype=pl.FP32)
+            score_acc = pl.create_tensor([MM_B_TILE, PROJ_OUT_TILE], dtype=pl.FP32)
+            for kb in pl.pipeline(0, D // K_TILE, stage=2):
+                k0 = kb * K_TILE
+                x_rows = pl.min(MM_B_TILE, bs - global_row0)
+                x_tile = pl.slice(x_flat, [MM_B_TILE, K_TILE], [global_row0, k0], valid_shape=[x_rows, K_TILE])
+                # Weights stored transposed [OUT_DIM, D] and consumed via b_trans=True so the
+                # GM->L1 load is a DN2ZN (each [PROJ_OUT_TILE, K_TILE] row is K-contiguous = long
+                # bursts) instead of ND2NZ on [K_TILE, PROJ_OUT_TILE] (K strided = many short
+                # bursts). Mirrors the main compressor (decode_compressor_ratio4); the strided
+                # ND2NZ form here was ~2x slower on this matmul (43us -> ~20us per task).
+                wkv_tile = wkv[o0 : o0 + PROJ_OUT_TILE, k0 : k0 + K_TILE]
+                wgate_tile = wgate[o0 : o0 + PROJ_OUT_TILE, k0 : k0 + K_TILE]
+                if k0 == 0:
+                    kv_acc = pl.matmul(x_tile, wkv_tile, out_dtype=pl.FP32, b_trans=True)
+                    score_acc = pl.matmul(x_tile, wgate_tile, out_dtype=pl.FP32, b_trans=True)
+                else:
+                    kv_acc = pl.matmul_acc(kv_acc, x_tile, wkv_tile, b_trans=True)
+                    score_acc = pl.matmul_acc(score_acc, x_tile, wgate_tile, b_trans=True)
 
-        kv_proj_pad[global_row0 : global_row0 + MM_B_TILE, o0 : o0 + PROJ_OUT_TILE] = kv_acc
-        score_proj_pad[global_row0 : global_row0 + MM_B_TILE, o0 : o0 + PROJ_OUT_TILE] = score_acc
+            kv_proj_pad[global_row0 : global_row0 + MM_B_TILE, o0 : o0 + PROJ_OUT_TILE] = kv_acc
+            score_proj_pad[global_row0 : global_row0 + MM_B_TILE, o0 : o0 + PROJ_OUT_TILE] = score_acc
 
     # Pool every ratio-4 boundary against the old persistent ring plus the
     # current-step projection overlay. State is committed only after all pools
@@ -145,100 +152,102 @@ def indexer_compressor(
     pooled_kv = pl.create_tensor([BS_PAD, HEAD_DIM], dtype=pl.FP32)
     # One block per request: each c_idx owns its own state ring and writes only
     # its own pooled_kv rows, so the whole nest is parallel over requests.
-    with pl.spmd(b_dim, name_hint="scatter_softmax_pool", deps=[_kv_score_tid]) as pool_tid:
-        c_idx = pl.tile.get_block_idx()
-        first_pos_b = pl.read(position_ids, [c_idx * s_dim])
-        for s_idx in pl.range(s_dim):
-            token = c_idx * s_dim + s_idx
-            token_pos = pl.read(position_ids, [token])
-            pooled_kv[token : token + 1, :] = pl.full([1, HEAD_DIM], dtype=pl.FP32, value=0.0)
-            if (token_pos + 1) % COMPRESS_RATIO == 0:
-                window_start = token_pos - STATE_LEN + 1
-                for h0 in pl.range(0, HEAD_DIM, HEAD_TILE):
-                    last_ape_row = pl.cast(token_pos % COMPRESS_RATIO, target_type=pl.INDEX)
-                    mi = pl.add(
-                        score_proj_pad[
+    with pl.spmd(POOL_WORKERS, name_hint="scatter_softmax_pool", deps=[_kv_score_tid]) as pool_tid:
+        pool_worker = pl.tile.get_block_idx()
+        for c_idx in pl.range(pool_worker, b_dim, POOL_WORKERS):
+            first_pos_b = pl.read(position_ids, [c_idx * s_dim])
+            for s_idx in pl.range(s_dim):
+                token = c_idx * s_dim + s_idx
+                token_pos = pl.read(position_ids, [token])
+                pooled_kv[token : token + 1, :] = pl.full([1, HEAD_DIM], dtype=pl.FP32, value=0.0)
+                if (token_pos + 1) % COMPRESS_RATIO == 0:
+                    window_start = token_pos - STATE_LEN + 1
+                    for h0 in pl.range(0, HEAD_DIM, HEAD_TILE):
+                        last_ape_row = pl.cast(token_pos % COMPRESS_RATIO, target_type=pl.INDEX)
+                        mi = pl.add(
+                            score_proj_pad[
+                                token : token + 1,
+                                HEAD_DIM + h0 : HEAD_DIM + h0 + HEAD_TILE,
+                            ],
+                            ape[
+                                last_ape_row : last_ape_row + 1,
+                                HEAD_DIM + h0 : HEAD_DIM + h0 + HEAD_TILE,
+                            ],
+                        )
+                        li = pl.exp(pl.sub(mi, mi))
+                        oi = kv_proj_pad[
                             token : token + 1,
                             HEAD_DIM + h0 : HEAD_DIM + h0 + HEAD_TILE,
-                        ],
-                        ape[
-                            last_ape_row : last_ape_row + 1,
-                            HEAD_DIM + h0 : HEAD_DIM + h0 + HEAD_TILE,
-                        ],
-                    )
-                    li = pl.exp(pl.sub(mi, mi))
-                    oi = kv_proj_pad[
-                        token : token + 1,
-                        HEAD_DIM + h0 : HEAD_DIM + h0 + HEAD_TILE,
-                    ]
-                    for state_idx in pl.range(STATE_LEN - 1):
-                        logical_pos = window_start + state_idx
-                        value = pl.full([1, HEAD_TILE], dtype=pl.FP32, value=0.0)
-                        score = pl.full([1, HEAD_TILE], dtype=pl.FP32, value=FP32_NEG_INF)
-                        state_half = 0
-                        if state_idx >= COMPRESS_RATIO:
-                            state_half = HEAD_DIM
-                        if logical_pos >= 0 and logical_pos < first_pos_b:
-                            ring_row = logical_pos % STATE_LEN
-                            state_page_off = ring_row // COMPRESS_STATE_BLOCK_SIZE
-                            state_blk_id_i32 = pl.read(
-                                compress_state_block_table, [c_idx, state_page_off])
-                            if state_blk_id_i32 >= 0:
-                                state_blk_id = pl.cast(state_blk_id_i32, pl.INDEX)
-                                state_row = state_blk_id * COMPRESS_STATE_BLOCK_SIZE + ring_row % COMPRESS_STATE_BLOCK_SIZE
-                                value = compress_state_flat[
-                                    state_row : state_row + 1,
-                                    state_half + h0 : state_half + h0 + HEAD_TILE,
-                                ]
-                                score = compress_state_flat[
-                                    state_row : state_row + 1,
-                                    OUT_DIM + state_half + h0 : OUT_DIM + state_half + h0 + HEAD_TILE,
-                                ]
-                        if logical_pos >= first_pos_b:
-                            if logical_pos <= token_pos:
-                                overlay_token = c_idx * s_dim + logical_pos - first_pos_b
-                                ape_row = pl.cast(logical_pos % COMPRESS_RATIO, target_type=pl.INDEX)
-                                value = kv_proj_pad[
-                                    overlay_token : overlay_token + 1,
-                                    state_half + h0 : state_half + h0 + HEAD_TILE,
-                                ]
-                                score = pl.add(
-                                    score_proj_pad[
+                        ]
+                        for state_idx in pl.range(STATE_LEN - 1):
+                            logical_pos = window_start + state_idx
+                            value = pl.full([1, HEAD_TILE], dtype=pl.FP32, value=0.0)
+                            score = pl.full([1, HEAD_TILE], dtype=pl.FP32, value=FP32_NEG_INF)
+                            state_half = 0
+                            if state_idx >= COMPRESS_RATIO:
+                                state_half = HEAD_DIM
+                            if logical_pos >= 0 and logical_pos < first_pos_b:
+                                ring_row = logical_pos % STATE_LEN
+                                state_page_off = ring_row // COMPRESS_STATE_BLOCK_SIZE
+                                state_blk_id_i32 = pl.read(
+                                    compress_state_block_table, [c_idx, state_page_off])
+                                if state_blk_id_i32 >= 0:
+                                    state_blk_id = pl.cast(state_blk_id_i32, pl.INDEX)
+                                    state_row = state_blk_id * COMPRESS_STATE_BLOCK_SIZE + ring_row % COMPRESS_STATE_BLOCK_SIZE
+                                    value = compress_state_flat[
+                                        state_row : state_row + 1,
+                                        state_half + h0 : state_half + h0 + HEAD_TILE,
+                                    ]
+                                    score = compress_state_flat[
+                                        state_row : state_row + 1,
+                                        OUT_DIM + state_half + h0 : OUT_DIM + state_half + h0 + HEAD_TILE,
+                                    ]
+                            if logical_pos >= first_pos_b:
+                                if logical_pos <= token_pos:
+                                    overlay_token = c_idx * s_dim + logical_pos - first_pos_b
+                                    ape_row = pl.cast(logical_pos % COMPRESS_RATIO, target_type=pl.INDEX)
+                                    value = kv_proj_pad[
                                         overlay_token : overlay_token + 1,
                                         state_half + h0 : state_half + h0 + HEAD_TILE,
-                                    ],
-                                    ape[
-                                        ape_row : ape_row + 1,
-                                        state_half + h0 : state_half + h0 + HEAD_TILE,
-                                    ],
-                                )
-                        mi_next = pl.maximum(mi, score)
-                        alpha = pl.exp(pl.sub(mi, mi_next))
-                        beta = pl.exp(pl.sub(score, mi_next))
-                        li = pl.add(pl.mul(alpha, li), beta)
-                        oi = pl.add(pl.mul(oi, alpha), pl.mul(value, beta))
-                        mi = mi_next
-                    pooled_kv[token : token + 1, h0 : h0 + HEAD_TILE] = pl.div(oi, li)
+                                    ]
+                                    score = pl.add(
+                                        score_proj_pad[
+                                            overlay_token : overlay_token + 1,
+                                            state_half + h0 : state_half + h0 + HEAD_TILE,
+                                        ],
+                                        ape[
+                                            ape_row : ape_row + 1,
+                                            state_half + h0 : state_half + h0 + HEAD_TILE,
+                                        ],
+                                    )
+                            mi_next = pl.maximum(mi, score)
+                            alpha = pl.exp(pl.sub(mi, mi_next))
+                            beta = pl.exp(pl.sub(score, mi_next))
+                            li = pl.add(pl.mul(alpha, li), beta)
+                            oi = pl.add(pl.mul(oi, alpha), pl.mul(value, beta))
+                            mi = mi_next
+                        pooled_kv[token : token + 1, h0 : h0 + HEAD_TILE] = pl.div(oi, li)
 
     # The recurrent state ring is a commit, not a source for the current step.
     # One block per request, like the pool above. Each token commits to its own
     # ring row: S <= STATE_LEN, so a request's tokens hold distinct positions mod
     # STATE_LEN, and requests hold distinct state pages.
-    with pl.spmd(b_dim, name_hint="compress_state_commit", deps=[pool_tid]):
-        c_idx = pl.tile.get_block_idx()
-        for s_idx in pl.range(s_dim):
-            token = c_idx * s_dim + s_idx
-            state_row_i64 = pl.read(inner_state_slot_mapping, [token])
-            if state_row_i64 >= 0:
-                state_row = pl.cast(state_row_i64, pl.INDEX)
-                token_pos = pl.read(position_ids, [token])
-                ape_row = pl.cast(token_pos % COMPRESS_RATIO, target_type=pl.INDEX)
-                compress_state_flat[state_row : state_row + 1, 0 : OUT_DIM] = kv_proj_pad[
-                    token : token + 1, 0 : OUT_DIM]
-                compress_state_flat[state_row : state_row + 1, OUT_DIM : COMPRESS_STATE_DIM] = pl.add(
-                    score_proj_pad[token : token + 1, 0 : OUT_DIM],
-                    ape[ape_row : ape_row + 1, 0 : OUT_DIM],
-                )
+    with pl.spmd(COMMIT_WORKERS, name_hint="compress_state_commit", deps=[pool_tid]):
+        commit_worker = pl.tile.get_block_idx()
+        for c_idx in pl.range(commit_worker, b_dim, COMMIT_WORKERS):
+            for s_idx in pl.range(s_dim):
+                token = c_idx * s_dim + s_idx
+                state_row_i64 = pl.read(inner_state_slot_mapping, [token])
+                if state_row_i64 >= 0:
+                    state_row = pl.cast(state_row_i64, pl.INDEX)
+                    token_pos = pl.read(position_ids, [token])
+                    ape_row = pl.cast(token_pos % COMPRESS_RATIO, target_type=pl.INDEX)
+                    compress_state_flat[state_row : state_row + 1, 0 : OUT_DIM] = kv_proj_pad[
+                        token : token + 1, 0 : OUT_DIM]
+                    compress_state_flat[state_row : state_row + 1, OUT_DIM : COMPRESS_STATE_DIM] = pl.add(
+                        score_proj_pad[token : token + 1, 0 : OUT_DIM],
+                        ape[ape_row : ape_row + 1, 0 : OUT_DIM],
+                    )
 
     normed_kv = pl.create_tensor([BS_PAD, HEAD_DIM], dtype=pl.BF16)
     norm_w_2d = pl.reshape(norm_w, [1, HEAD_DIM])
@@ -294,14 +303,17 @@ def indexer_compressor(
         )
 
     kv_final = pl.create_tensor([BS_PAD, HEAD_DIM], dtype=pl.FP32)
-    with pl.spmd(rms_blocks, name_hint="kv_hadamard", deps=[rms_tid]) as hadamard_tid:
-        had_blk = pl.tile.get_block_idx()
-        had_b0 = had_blk * RMS_PAD_TILE
-        kv_proj_tile = normed_kv[had_b0 : had_b0 + RMS_PAD_TILE, 0 : HEAD_DIM]
+    with pl.spmd(HADAMARD_WORKERS, name_hint="kv_hadamard", deps=[rms_tid]) as hadamard_tid:
+        had_worker = pl.tile.get_block_idx()
+        # Column tile outermost: the hadamard slice is then read once per worker per
+        # column instead of once per row block, and the row blocks reuse it.
         for o0 in pl.range(0, HEAD_DIM, OUT_TILE):
             hadamard_tile = hadamard[0 : HEAD_DIM, o0 : o0 + OUT_TILE]
-            kv_hadamard_acc = pl.matmul(kv_proj_tile, hadamard_tile, out_dtype=pl.FP32)
-            kv_final[had_b0 : had_b0 + RMS_PAD_TILE, o0 : o0 + OUT_TILE] = kv_hadamard_acc
+            for had_blk in pl.range(had_worker, rms_blocks, HADAMARD_WORKERS):
+                had_b0 = had_blk * RMS_PAD_TILE
+                kv_proj_tile = normed_kv[had_b0 : had_b0 + RMS_PAD_TILE, 0 : HEAD_DIM]
+                kv_hadamard_acc = pl.matmul(kv_proj_tile, hadamard_tile, out_dtype=pl.FP32)
+                kv_final[had_b0 : had_b0 + RMS_PAD_TILE, o0 : o0 + OUT_TILE] = kv_hadamard_acc
 
     with pl.spmd(rms_blocks, name_hint="kv_and_cache_write", deps=[hadamard_tid]) as _write_tid:
         wr_blk = pl.tile.get_block_idx()

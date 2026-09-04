@@ -92,12 +92,19 @@ WEIGHTS_OK = 4
 WEIGHTS_K_SLICE = D // WEIGHTS_OK
 assert WEIGHTS_K_SLICE % D_TILE == 0
 QH_QUANT_TILE = 64
-# cube tile for q @ hadamard; L0C caps it at QH_MM_TILE * IDX_HEAD_DIM * 4B <= 64KiB.
+# qr_hadamard_quant and idx_qr_proj_matmul run on persistent workers.
+QH_QUANT_WORKERS = 48
+QR_PROJ_WORKERS = 24
+# cube tile for q @ hadamard; bs_heads // QH_MM_TILE truncates, so the tile stays
+# at the loosest divisibility the kernel already required.
 QH_MM_TILE = 64
+# qr_hadamard_matmul runs on persistent workers, each striding over the block list.
+QH_WORKERS = 24
 QH_HEAD_DIM_TILE = 64
 ROPE_ROW_BLOCK = IDX_N_HEADS
-# qr_rope SPMD tile == row block: one ROPE_ROW_TILE-row block per SPMD tile.
+# qr_rope runs on persistent workers, each striding over ROPE_ROW_TILE-row blocks.
 ROPE_ROW_TILE = 32
+ROPE_WORKERS = 48
 assert IDX_N_HEADS >= ROPE_ROW_TILE and IDX_N_HEADS % ROPE_ROW_TILE == 0
 TOPK_PAIR_WIDTH = 2 * IDX_TOPK
 
@@ -650,23 +657,24 @@ def indexer(
     bs_heads = bs * IDX_N_HEADS
     row_blocks = (bs + MM_ROW_TILE - 1) // MM_ROW_TILE
     qr_acc_pad = pl.create_tensor([T_PAD, IDX_N_HEADS * IDX_HEAD_DIM], dtype=pl.INT32)
-    for qr_unit in pl.spmd(QR_OT_COUNT * row_blocks, name_hint="idx_qr_proj_matmul", allow_early_resolve=True):
-        qr_rb = qr_unit // QR_OT_COUNT  # row block outermost
-        ot = qr_unit - qr_rb * QR_OT_COUNT
-        qr_r0 = qr_rb * MM_ROW_TILE
-        qr_rows = pl.min(MM_ROW_TILE, bs - qr_r0)
-        o_base = ot * Q_OUT_TILE
-        for ns in pl.range(0, Q_OUT_TILE, MM_N_TILE):
-            qr_acc = pl.create_tensor([MM_ROW_TILE, MM_N_TILE], dtype=pl.INT32)
-            for kb in pl.pipeline(0, Q_LORA // Q_TILE, stage=2):
-                q0 = kb * Q_TILE
-                qr_tile = pl.slice(qr, [MM_ROW_TILE, Q_TILE], [qr_r0, q0], valid_shape=[qr_rows, Q_TILE])
-                wq_tile = wq_b[q0 : q0 + Q_TILE, o_base + ns : o_base + ns + MM_N_TILE]
-                if q0 == 0:
-                    qr_acc = pl.matmul(qr_tile, wq_tile, out_dtype=pl.INT32)
-                else:
-                    qr_acc = pl.matmul_acc(qr_acc, qr_tile, wq_tile)
-            qr_acc_pad[qr_r0 : qr_r0 + MM_ROW_TILE, o_base + ns : o_base + ns + MM_N_TILE] = qr_acc
+    for qr_proj_worker in pl.spmd(QR_PROJ_WORKERS, name_hint="idx_qr_proj_matmul", allow_early_resolve=True):
+        for qr_unit in pl.range(qr_proj_worker, QR_OT_COUNT * row_blocks, QR_PROJ_WORKERS):
+            qr_rb = qr_unit // QR_OT_COUNT  # row block outermost
+            ot = qr_unit - qr_rb * QR_OT_COUNT
+            qr_r0 = qr_rb * MM_ROW_TILE
+            qr_rows = pl.min(MM_ROW_TILE, bs - qr_r0)
+            o_base = ot * Q_OUT_TILE
+            for ns in pl.range(0, Q_OUT_TILE, MM_N_TILE):
+                qr_acc = pl.create_tensor([MM_ROW_TILE, MM_N_TILE], dtype=pl.INT32)
+                for kb in pl.pipeline(0, Q_LORA // Q_TILE, stage=2):
+                    q0 = kb * Q_TILE
+                    qr_tile = pl.slice(qr, [MM_ROW_TILE, Q_TILE], [qr_r0, q0], valid_shape=[qr_rows, Q_TILE])
+                    wq_tile = wq_b[q0 : q0 + Q_TILE, o_base + ns : o_base + ns + MM_N_TILE]
+                    if q0 == 0:
+                        qr_acc = pl.matmul(qr_tile, wq_tile, out_dtype=pl.INT32)
+                    else:
+                        qr_acc = pl.matmul_acc(qr_acc, qr_tile, wq_tile)
+                qr_acc_pad[qr_r0 : qr_r0 + MM_ROW_TILE, o_base + ns : o_base + ns + MM_N_TILE] = qr_acc
     qr_proj = pl.create_tensor([bs, IDX_N_HEADS * IDX_HEAD_DIM], dtype=pl.FP32)
     for ot in pl.spmd(IDX_N_HEADS * IDX_HEAD_DIM // Q_OUT_TILE, name_hint="idx_qr_proj_dequant", allow_early_resolve=True):
         o_base = ot * Q_OUT_TILE
@@ -705,27 +713,32 @@ def indexer(
         rope_swap_idx_t[0:ROPE_ROW_TILE, 0:ROPE_HEAD_DIM] = pl.cast(
             pl.sub(pl.add(sw_col, 1.0), pl.mul(sw_lane, 2.0)), target_type=pl.INT32)                   # j^1
 
-    for idx in pl.spmd(bs_heads // ROPE_ROW_TILE, name_hint="qr_rope", allow_early_resolve=True):
-        o0 = idx * ROPE_ROW_TILE
-        token_idx = o0 // ROPE_ROW_BLOCK
+    for rope_worker in pl.spmd(ROPE_WORKERS, name_hint="qr_rope", allow_early_resolve=True):
+        # The swap index is the same for every block, so it is read once per worker.
         rope_swap_idx = rope_swap_idx_t[0:ROPE_ROW_TILE, 0:ROPE_HEAD_DIM]
-        cos_row = cos[token_idx : token_idx + 1, 0 : ROPE_HEAD_DIM]
-        sin_row = sin[token_idx : token_idx + 1, 0 : ROPE_HEAD_DIM]
-        qr_nope_slice = qr_proj_flat[o0 : o0 + ROPE_ROW_TILE, 0 : IDX_NOPE_HEAD_DIM]
-        qr_rope_slice = qr_proj_flat[o0 : o0 + ROPE_ROW_TILE, IDX_NOPE_HEAD_DIM : IDX_HEAD_DIM]
-        qr_swapped = pl.gather(qr_rope_slice, dim=-1, index=rope_swap_idx)
-        rope_rot = pl.add(
-            pl.col_expand_mul(qr_rope_slice, cos_row), pl.col_expand_mul(qr_swapped, sin_row))
-        qr_vec = pl.concat(pl.cast(qr_nope_slice, target_type=pl.BF16, mode="rint"), pl.cast(rope_rot, target_type=pl.BF16, mode="rint"))
-        qr_bf16[o0 : o0 + ROPE_ROW_TILE, :] = qr_vec
+        for idx in pl.range(rope_worker, bs_heads // ROPE_ROW_TILE, ROPE_WORKERS):
+            o0 = idx * ROPE_ROW_TILE
+            token_idx = o0 // ROPE_ROW_BLOCK
+            cos_row = cos[token_idx : token_idx + 1, 0 : ROPE_HEAD_DIM]
+            sin_row = sin[token_idx : token_idx + 1, 0 : ROPE_HEAD_DIM]
+            qr_nope_slice = qr_proj_flat[o0 : o0 + ROPE_ROW_TILE, 0 : IDX_NOPE_HEAD_DIM]
+            qr_rope_slice = qr_proj_flat[o0 : o0 + ROPE_ROW_TILE, IDX_NOPE_HEAD_DIM : IDX_HEAD_DIM]
+            qr_swapped = pl.gather(qr_rope_slice, dim=-1, index=rope_swap_idx)
+            rope_rot = pl.add(
+                pl.col_expand_mul(qr_rope_slice, cos_row), pl.col_expand_mul(qr_swapped, sin_row))
+            qr_vec = pl.concat(pl.cast(qr_nope_slice, target_type=pl.BF16, mode="rint"), pl.cast(rope_rot, target_type=pl.BF16, mode="rint"))
+            qr_bf16[o0 : o0 + ROPE_ROW_TILE, :] = qr_vec
 
     # cube-only scope: q @ hadamard lands in GM, keeping the vector amax/quant below
     # in its own scope so the two run as separate cube and vector tasks.
     qh_acc_gm = pl.create_tensor([bs_heads, IDX_HEAD_DIM], dtype=pl.FP32)
-    for idx in pl.spmd(bs_heads // QH_MM_TILE, name_hint="qr_hadamard_matmul", allow_early_resolve=True):
-        o0 = idx * QH_MM_TILE
-        qh_acc = pl.matmul(qr_bf16[o0 : o0 + QH_MM_TILE, :], hadamard, out_dtype=pl.FP32)
-        qh_acc_gm[o0 : o0 + QH_MM_TILE, :] = qh_acc
+    for qh_worker in pl.spmd(QH_WORKERS, name_hint="qr_hadamard_matmul", allow_early_resolve=True):
+        # The hadamard matrix is the same for every block, so it is read once per worker.
+        qh_hadamard = hadamard[0:IDX_HEAD_DIM, 0:IDX_HEAD_DIM]
+        for idx in pl.range(qh_worker, bs_heads // QH_MM_TILE, QH_WORKERS):
+            o0 = idx * QH_MM_TILE
+            qh_acc = pl.matmul(qr_bf16[o0 : o0 + QH_MM_TILE, :], qh_hadamard, out_dtype=pl.FP32)
+            qh_acc_gm[o0 : o0 + QH_MM_TILE, :] = qh_acc
 
     qr_hadamard_i8 = pl.create_tensor(
         [T_PAD * IDX_N_HEADS, IDX_HEAD_DIM], dtype=pl.INT8
@@ -734,29 +747,30 @@ def indexer(
         [T_PAD * IDX_N_HEADS, 1], dtype=pl.FP32
     )
     with pl.spmd(
-        bs_heads // QH_QUANT_TILE,
+        QH_QUANT_WORKERS,
         name_hint="qr_hadamard_quant",
         allow_early_resolve=True,
     ) as qh_quant_tid:
-        idx = pl.tile.get_block_idx()
-        o0 = idx * QH_QUANT_TILE
-        qh_amax = pl.full([1, QH_QUANT_TILE], dtype=pl.FP32, value=INT8_AMAX_EPS)
-        for h0 in pl.range(0, IDX_HEAD_DIM, QH_HEAD_DIM_TILE):
-            qh_a_f32 = qh_acc_gm[o0 : o0 + QH_QUANT_TILE, h0 : h0 + QH_HEAD_DIM_TILE]
-            qh_a_abs = pl.maximum(qh_a_f32, pl.neg(qh_a_f32))
-            qh_a_max = pl.reshape(pl.row_max(qh_a_abs), [1, QH_QUANT_TILE])
-            qh_amax = pl.maximum(qh_amax, qh_a_max)
-        qh_scale_quant_row = pl.div(pl.full([1, QH_QUANT_TILE], dtype=pl.FP32, value=INT8_SCALE_MAX), qh_amax)
-        qh_scale_dq = pl.reshape(pl.recip(qh_scale_quant_row), [QH_QUANT_TILE, 1])
-        qr_hadamard_scale_dq[o0 : o0 + QH_QUANT_TILE, :] = qh_scale_dq
-        qh_scale_quant = pl.reshape(qh_scale_quant_row, [QH_QUANT_TILE, 1])
-        for h1 in pl.range(0, IDX_HEAD_DIM, QH_HEAD_DIM_TILE):
-            qh_q_f32 = qh_acc_gm[o0 : o0 + QH_QUANT_TILE, h1 : h1 + QH_HEAD_DIM_TILE]
-            qh_q_scaled = pl.row_expand_mul(qh_q_f32, qh_scale_quant)
-            qh_q_i32 = pl.cast(qh_q_scaled, target_type=pl.INT32, mode="rint")
-            qh_q_half = pl.cast(qh_q_i32, target_type=pl.FP16, mode="round")
-            qh_i8 = pl.cast(qh_q_half, target_type=pl.INT8, mode="trunc")
-            qr_hadamard_i8[o0 : o0 + QH_QUANT_TILE, h1 : h1 + QH_HEAD_DIM_TILE] = qh_i8
+        qh_quant_worker = pl.tile.get_block_idx()
+        for idx in pl.range(qh_quant_worker, bs_heads // QH_QUANT_TILE, QH_QUANT_WORKERS):
+            o0 = idx * QH_QUANT_TILE
+            qh_amax = pl.full([1, QH_QUANT_TILE], dtype=pl.FP32, value=INT8_AMAX_EPS)
+            for h0 in pl.range(0, IDX_HEAD_DIM, QH_HEAD_DIM_TILE):
+                qh_a_f32 = qh_acc_gm[o0 : o0 + QH_QUANT_TILE, h0 : h0 + QH_HEAD_DIM_TILE]
+                qh_a_abs = pl.maximum(qh_a_f32, pl.neg(qh_a_f32))
+                qh_a_max = pl.reshape(pl.row_max(qh_a_abs), [1, QH_QUANT_TILE])
+                qh_amax = pl.maximum(qh_amax, qh_a_max)
+            qh_scale_quant_row = pl.div(pl.full([1, QH_QUANT_TILE], dtype=pl.FP32, value=INT8_SCALE_MAX), qh_amax)
+            qh_scale_dq = pl.reshape(pl.recip(qh_scale_quant_row), [QH_QUANT_TILE, 1])
+            qr_hadamard_scale_dq[o0 : o0 + QH_QUANT_TILE, :] = qh_scale_dq
+            qh_scale_quant = pl.reshape(qh_scale_quant_row, [QH_QUANT_TILE, 1])
+            for h1 in pl.range(0, IDX_HEAD_DIM, QH_HEAD_DIM_TILE):
+                qh_q_f32 = qh_acc_gm[o0 : o0 + QH_QUANT_TILE, h1 : h1 + QH_HEAD_DIM_TILE]
+                qh_q_scaled = pl.row_expand_mul(qh_q_f32, qh_scale_quant)
+                qh_q_i32 = pl.cast(qh_q_scaled, target_type=pl.INT32, mode="rint")
+                qh_q_half = pl.cast(qh_q_i32, target_type=pl.FP16, mode="round")
+                qh_i8 = pl.cast(qh_q_half, target_type=pl.INT8, mode="trunc")
+                qr_hadamard_i8[o0 : o0 + QH_QUANT_TILE, h1 : h1 + QH_HEAD_DIM_TILE] = qh_i8
 
     x_flat = x
     weights = pl.create_tensor([T_PAD, IDX_N_HEADS], dtype=pl.FP32)
