@@ -6,7 +6,7 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
-# ci: devices=2 # CI: 2-card run; borrows 2 cards via task-submit --device-num
+# ci: devices=2
 """DeepSeek-V4 packed (request-aware) chunked prefill single layer with MoE EP2.
 
 This is the Qwen-style packed-prefill variant of ``prefill_layer.py``. The packed
@@ -34,7 +34,7 @@ import itertools
 
 import pypto.language as pl
 import pypto.language.distributed as pld
-from pypto.ir.distributed_compiled_program import DistributedConfig
+from pypto.ir import DistributedConfig
 
 # The prefill path routes PREFILL_TOKENS tokens. Set MOE_TOKENS before importing
 # moe (which freezes recv shapes and derives RECV_MAX = EP * MOE_TOKENS at import).
@@ -48,6 +48,8 @@ from moe import (
     HC_DIM,
     HC_MULT,
     IDX_PAD,
+    H_SCALE,
+    K_SCALE,
     MIX_HC,
     MOE_INTER,
     N_EXPERTS_GLOBAL,
@@ -263,21 +265,22 @@ def prefill_layer_core(
     gate_bias: pl.Tensor[[N_EXPERTS_GLOBAL], pl.FP32],
     tid2eid: pl.Tensor[[VOCAB, TOPK], pl.INT32],
     input_ids: pl.Tensor[[PREFILL_TOKENS_DYN], pl.INT64],
-    routed_w1: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8],
-    routed_w1_scale: pl.Tensor[[N_LOCAL, MOE_INTER], pl.FP32],
-    routed_w3: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8],
-    routed_w3_scale: pl.Tensor[[N_LOCAL, MOE_INTER], pl.FP32],
-    routed_w2: pl.Tensor[[N_LOCAL, D, MOE_INTER], pl.INT8],
-    routed_w2_scale: pl.Tensor[[N_LOCAL, D], pl.FP32],
-    shared_w1: pl.Tensor[[MOE_INTER, D], pl.INT8],
-    shared_w1_scale: pl.Tensor[[MOE_INTER], pl.FP32],
-    shared_w3: pl.Tensor[[MOE_INTER, D], pl.INT8],
-    shared_w3_scale: pl.Tensor[[MOE_INTER], pl.FP32],
-    shared_w2: pl.Tensor[[D, MOE_INTER], pl.INT8],
-    shared_w2_scale: pl.Tensor[[D], pl.FP32],
+    routed_w1: pl.Tensor[[N_LOCAL, D, MOE_INTER], pl.FP8E4M3FN],
+    routed_w1_scale: pl.Tensor[[N_LOCAL * K_SCALE, MOE_INTER], pl.FP8E8M0, pl.MX_B_NN],
+    routed_w3: pl.Tensor[[N_LOCAL, D, MOE_INTER], pl.FP8E4M3FN],
+    routed_w3_scale: pl.Tensor[[N_LOCAL * K_SCALE, MOE_INTER], pl.FP8E8M0, pl.MX_B_NN],
+    routed_w2: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.FP8E4M3FN],
+    routed_w2_scale: pl.Tensor[[N_LOCAL * H_SCALE, D], pl.FP8E8M0, pl.MX_B_NN],
+    shared_w1: pl.Tensor[[D, MOE_INTER], pl.FP8E4M3FN],
+    shared_w1_scale: pl.Tensor[[K_SCALE, MOE_INTER], pl.FP8E8M0, pl.MX_B_NN],
+    shared_w3: pl.Tensor[[D, MOE_INTER], pl.FP8E4M3FN],
+    shared_w3_scale: pl.Tensor[[K_SCALE, MOE_INTER], pl.FP8E8M0, pl.MX_B_NN],
+    shared_w2: pl.Tensor[[MOE_INTER, D], pl.FP8E4M3FN],
+    shared_w2_scale: pl.Tensor[[H_SCALE, D], pl.FP8E8M0, pl.MX_B_NN],
     x_next: pl.InOut[pl.Tensor[[PREFILL_TOKENS_DYN, HC_MULT, D], pl.FP32]],
     recv_meta: pld.DistributedTensor[[N_RANKS, N_LOCAL], pl.INT32],
     recv_x: pld.DistributedTensor[[N_LOCAL * RECV_MAX, D], pl.INT8],
+    recv_scale: pld.DistributedTensor[[N_LOCAL * RECV_MAX, K_SCALE], pl.UINT8],
     recv_aux: pld.DistributedTensor[[N_LOCAL * RECV_MAX, AUX_PAD], pl.FP32],
     recv_route: pld.DistributedTensor[[N_LOCAL * RECV_MAX, IDX_PAD], pl.INT32],
     arrived: pld.DistributedTensor[[N_RANKS, SIGNAL_PAD], pl.INT32],
@@ -429,7 +432,7 @@ def prefill_layer_core(
                 shared_w1, shared_w1_scale, shared_w3, shared_w3_scale,
                 shared_w2, shared_w2_scale,
                 x_next_tile,
-                recv_meta, recv_x, recv_aux, recv_route, arrived, data_arrived,
+                recv_meta, recv_x, recv_scale, recv_aux, recv_route, arrived, data_arrived,
                 routed_y_buf, combine_arrived, consumed,
                 layer_id, valid_n, my_rank, moe_epoch,
             )
@@ -542,23 +545,24 @@ def l3_prefill_layer(
     gate_bias: pl.Tensor[[N_RANKS, N_EXPERTS_GLOBAL], pl.FP32],
     tid2eid: pl.Tensor[[N_RANKS, VOCAB, TOPK], pl.INT32],
     input_ids: pl.Tensor[[N_RANKS, PREFILL_TOKENS_DYN], pl.INT64],
-    routed_w1: pl.Tensor[[N_RANKS, N_LOCAL, MOE_INTER, D], pl.INT8],
-    routed_w1_scale: pl.Tensor[[N_RANKS, N_LOCAL, MOE_INTER], pl.FP32],
-    routed_w3: pl.Tensor[[N_RANKS, N_LOCAL, MOE_INTER, D], pl.INT8],
-    routed_w3_scale: pl.Tensor[[N_RANKS, N_LOCAL, MOE_INTER], pl.FP32],
-    routed_w2: pl.Tensor[[N_RANKS, N_LOCAL, D, MOE_INTER], pl.INT8],
-    routed_w2_scale: pl.Tensor[[N_RANKS, N_LOCAL, D], pl.FP32],
-    shared_w1: pl.Tensor[[N_RANKS, MOE_INTER, D], pl.INT8],
-    shared_w1_scale: pl.Tensor[[N_RANKS, MOE_INTER], pl.FP32],
-    shared_w3: pl.Tensor[[N_RANKS, MOE_INTER, D], pl.INT8],
-    shared_w3_scale: pl.Tensor[[N_RANKS, MOE_INTER], pl.FP32],
-    shared_w2: pl.Tensor[[N_RANKS, D, MOE_INTER], pl.INT8],
-    shared_w2_scale: pl.Tensor[[N_RANKS, D], pl.FP32],
+    routed_w1: pl.Tensor[[N_RANKS, N_LOCAL, D, MOE_INTER], pl.FP8E4M3FN],
+    routed_w1_scale: pl.Tensor[[N_RANKS, N_LOCAL * K_SCALE, MOE_INTER], pl.FP8E8M0],
+    routed_w3: pl.Tensor[[N_RANKS, N_LOCAL, D, MOE_INTER], pl.FP8E4M3FN],
+    routed_w3_scale: pl.Tensor[[N_RANKS, N_LOCAL * K_SCALE, MOE_INTER], pl.FP8E8M0],
+    routed_w2: pl.Tensor[[N_RANKS, N_LOCAL, MOE_INTER, D], pl.FP8E4M3FN],
+    routed_w2_scale: pl.Tensor[[N_RANKS, N_LOCAL * H_SCALE, D], pl.FP8E8M0],
+    shared_w1: pl.Tensor[[N_RANKS, D, MOE_INTER], pl.FP8E4M3FN],
+    shared_w1_scale: pl.Tensor[[N_RANKS, K_SCALE, MOE_INTER], pl.FP8E8M0],
+    shared_w3: pl.Tensor[[N_RANKS, D, MOE_INTER], pl.FP8E4M3FN],
+    shared_w3_scale: pl.Tensor[[N_RANKS, K_SCALE, MOE_INTER], pl.FP8E8M0],
+    shared_w2: pl.Tensor[[N_RANKS, MOE_INTER, D], pl.FP8E4M3FN],
+    shared_w2_scale: pl.Tensor[[N_RANKS, H_SCALE, D], pl.FP8E8M0],
     x_next: pl.InOut[pl.Tensor[[N_RANKS, PREFILL_TOKENS_DYN, HC_MULT, D], pl.FP32]],
     layer_id: pl.Scalar[pl.INT32],
 ):
     recv_meta_buf = pld.alloc_window_buffer([N_RANKS, N_LOCAL], dtype=pl.INT32)
     recv_x_buf = pld.alloc_window_buffer([N_LOCAL * RECV_MAX, D], dtype=pl.INT8)
+    recv_scale_buf = pld.alloc_window_buffer([N_LOCAL * RECV_MAX, K_SCALE], dtype=pl.UINT8)
     recv_aux_buf = pld.alloc_window_buffer([N_LOCAL * RECV_MAX, AUX_PAD], dtype=pl.FP32)
     recv_route_buf = pld.alloc_window_buffer([N_LOCAL * RECV_MAX, IDX_PAD], dtype=pl.INT32)
     arrived_buf = pld.alloc_window_buffer([N_RANKS, SIGNAL_PAD], dtype=pl.INT32)
@@ -570,6 +574,7 @@ def l3_prefill_layer(
     for rank in pl.range(pld.world_size()):
         recv_meta = pld.window(recv_meta_buf, [N_RANKS, N_LOCAL], dtype=pl.INT32)
         recv_x = pld.window(recv_x_buf, [N_LOCAL * RECV_MAX, D], dtype=pl.INT8)
+        recv_scale = pld.window(recv_scale_buf, [N_LOCAL * RECV_MAX, K_SCALE], dtype=pl.UINT8)
         recv_aux = pld.window(recv_aux_buf, [N_LOCAL * RECV_MAX, AUX_PAD], dtype=pl.FP32)
         recv_route = pld.window(recv_route_buf, [N_LOCAL * RECV_MAX, IDX_PAD], dtype=pl.INT32)
         arrived = pld.window(arrived_buf, [N_RANKS, SIGNAL_PAD], dtype=pl.INT32)
@@ -607,7 +612,7 @@ def l3_prefill_layer(
             shared_w1[rank], shared_w1_scale[rank], shared_w3[rank], shared_w3_scale[rank],
             shared_w2[rank], shared_w2_scale[rank],
             x_next[rank],
-            recv_meta, recv_x, recv_aux, recv_route, arrived, data_arrived,
+            recv_meta, recv_x, recv_scale, recv_aux, recv_route, arrived, data_arrived,
             routed_y_buf, combine_arrived, consumed,
             layer_id, rank,
             device=rank,
@@ -1625,7 +1630,7 @@ if __name__ == "__main__":
                         help="Comma-separated per-request logical chunk lengths.")
     parser.add_argument("--start-positions", type=str, default=None,
                         help="Comma-separated per-request prior context lengths; defaults to all zeros.")
-    parser.add_argument("--enable-chip-swimlane", action="store_true", default=False)
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=range(5))
     parser.add_argument("--compile-only", action="store_true", default=False)
     parser.add_argument("--save-data", action="store_true", default=False,
                         help="persist inputs and golden outputs for replay")
@@ -1718,14 +1723,12 @@ if __name__ == "__main__":
         golden_data=args.golden_data,
         save_data=args.save_data,
         compile_only=args.compile_only,
-        compile_cfg=dict(
+        config=dict(
             dump_passes=args.dump_passes,
             distributed_config=DistributedConfig(
                 device_ids=device_ids[:N_RANKS],
                 num_sub_workers=0,
             ),
-        ),
-        runtime_cfg=dict(
             platform=args.platform,
             enable_chip_swimlane=args.enable_chip_swimlane,
             ring_heap=LAYER_RING_HEAP,

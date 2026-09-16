@@ -24,7 +24,8 @@ T_DYN = pl.dynamic("DSPARK_PROJ_T_DYN")
 
 # model config
 D = M.hidden_size
-TARGET_LAYERS = 3                        # dspark_target_layer_ids
+TARGET_LAYER_IDS = (40, 41, 42)          # dspark_target_layer_ids
+TARGET_LAYERS = len(TARGET_LAYER_IDS)
 MAIN_HIDDEN_DIM = TARGET_LAYERS * D
 
 # tiling
@@ -114,7 +115,7 @@ if __name__ == "__main__":
     parser.add_argument("-p", "--platform", type=str, default="a2a3", choices=["a2a3", "a2a3sim", "a5", "a5sim"])
     parser.add_argument("-d", "--device", type=int, default=0)
     parser.add_argument("--mode", choices=["decode", "prefill", "all"], default="all")
-    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2, 4))
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=range(5))
     parser.add_argument("--dump-passes", action="store_true", default=False)
     args = parser.parse_args()
 
@@ -129,8 +130,8 @@ if __name__ == "__main__":
             fn=dspark_proj_test,
             specs=build_tensor_specs(batch, seq),
             golden_fn=golden_dspark_proj,
-            compile_cfg=dict(dump_passes=args.dump_passes),
-            runtime_cfg=dict(
+            config=dict(
+                dump_passes=args.dump_passes,
                 platform=args.platform,
                 device_id=args.device,
                 enable_chip_swimlane=args.enable_chip_swimlane,

@@ -353,14 +353,14 @@ if __name__ == "__main__":
     )
     parser.add_argument("-d", "--device", type=int, default=0)
     parser.add_argument("--selection-k", type=int, choices=[1, TOPK], default=TOPK)
-    parser.add_argument("--enable-chip-swimlane", action="store_true", default=False)
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=range(5))
     args = parser.parse_args()
 
     result = run(
         fn=topk_select_fwd,
         specs=build_tensor_specs(args.selection_k),
         golden_fn=golden_topk_select,
-        runtime_cfg=dict(
+        config=dict(
             platform=args.platform,
             device_id=args.device,
             enable_chip_swimlane=args.enable_chip_swimlane,

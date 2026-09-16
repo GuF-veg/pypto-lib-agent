@@ -6,7 +6,7 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
-# ci: devices=2  # CI: 2-card run; borrows 2 cards via task-submit --device-num
+# ci: devices=2
 """DeepSeek-V4 packed prefill CSA attention with compression, indexing, and cache writeback."""
 
 import functools
@@ -16,8 +16,8 @@ import pypto.language as pl
 from config import (
     FLASH as M,
     BLOCK_SIZE,
-    CSA_INNER_STATE_PHYSICAL_BLOCKS,
-    CSA_STATE_PHYSICAL_BLOCKS,
+    CSA_INNER_STATE_BLOCKS_PER_REQUEST,
+    CSA_STATE_BLOCKS_PER_REQUEST,
     INT8_AMAX_EPS,
     INT8_SCALE_MAX,
     KV_ORI_BLOCK_NUM,
@@ -887,7 +887,7 @@ def build_tensor_specs(
             * 0.1916
         )
 
-    state_table = _state_block_table(CSA_STATE_MAX_BLOCKS, CSA_STATE_PHYSICAL_BLOCKS)
+    state_table = _state_block_table(CSA_STATE_MAX_BLOCKS, CSA_STATE_BLOCKS_PER_REQUEST)
 
     def init_compress_state_block_table():
         return state_table.clone().unsqueeze(0)
@@ -928,10 +928,7 @@ def build_tensor_specs(
             * 0.2663
         )
 
-    inner_state_table = _state_block_table(
-        INNER_STATE_MAX_BLOCKS,
-        CSA_INNER_STATE_PHYSICAL_BLOCKS,
-    )
+    inner_state_table = _state_block_table(INNER_STATE_MAX_BLOCKS, CSA_INNER_STATE_BLOCKS_PER_REQUEST)
 
     def init_inner_compress_state_block_table():
         return inner_state_table.clone().unsqueeze(0)
@@ -1875,14 +1872,16 @@ def build_ragged2_cp_tensor_specs(tp_size: int = TP_SIZE):
     ori_block_table = make_block_table(batch=2, table_blocks=SPARSE_ORI_MAX_BLOCKS, physical_blocks=CSA_ORI_BLOCK_NUM)
     cmp_block_table = make_block_table(batch=2, table_blocks=SPARSE_CMP_MAX_BLOCKS, physical_blocks=CSA_CMP_BLOCK_NUM)
     idx_block_table = make_block_table(batch=2, table_blocks=IDX_CACHE_MAX_BLOCKS, physical_blocks=IDX_CACHE_BLOCK_NUM)
-    compress_state_block_table = make_block_table(
-        batch=2, table_blocks=CSA_STATE_MAX_BLOCKS,
-        physical_blocks=CSA_STATE_BLOCK_NUM,
-    )
-    inner_compress_state_block_table = make_block_table(
-        batch=2, table_blocks=INNER_STATE_MAX_BLOCKS,
-        physical_blocks=INNER_STATE_BLOCK_NUM,
-    )
+    request_slots = torch.arange(2, dtype=torch.int32)
+    request_slots = request_slots.unsqueeze(1)
+    state_request_stride = CSA_STATE_BLOCK_NUM // CSA_STATE_BLOCKS_PER_REQUEST
+    state_ring_blocks = _state_block_table(CSA_STATE_MAX_BLOCKS, CSA_STATE_BLOCKS_PER_REQUEST)
+    state_ring_offsets = state_ring_blocks.unsqueeze(0) * state_request_stride
+    compress_state_block_table = state_ring_offsets + request_slots
+    inner_state_request_stride = INNER_STATE_BLOCK_NUM // CSA_INNER_STATE_BLOCKS_PER_REQUEST
+    inner_state_ring_blocks = _state_block_table(INNER_STATE_MAX_BLOCKS, CSA_INNER_STATE_BLOCKS_PER_REQUEST)
+    inner_state_ring_offsets = inner_state_ring_blocks.unsqueeze(0) * inner_state_request_stride
+    inner_compress_state_block_table = inner_state_ring_offsets + request_slots
 
     ori_mappings = []
     cmp_mappings = []
@@ -2062,7 +2061,7 @@ if __name__ == "__main__":
         "--case", choices=["b1", "ragged2"], default="b1",
         help="Fixture case; ragged2 is the fixed two-request TP2 boundary case.",
     )
-    parser.add_argument("--enable-chip-swimlane", action="store_true", default=False)
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=range(5))
     parser.add_argument("--enable-dep-gen", action="store_true", default=False)
     parser.add_argument("--dump-passes", action="store_true", default=False)
     args = parser.parse_args()
@@ -2100,8 +2099,8 @@ if __name__ == "__main__":
             fn=prefill_attention_csa_test,
             specs=build_tensor_specs(args.start_pos, args.token_count),
             golden_fn=golden_prefill_attention_csa,
-            compile_cfg=dict(dump_passes=args.dump_passes),
-            runtime_cfg=dict(
+            config=dict(
+                dump_passes=args.dump_passes,
                 platform=args.platform,
                 device_id=device_ids[0],
                 enable_chip_swimlane=args.enable_chip_swimlane,
@@ -2122,7 +2121,7 @@ if __name__ == "__main__":
             },
         )
     else:
-        from pypto.ir.distributed_compiled_program import DistributedConfig
+        from pypto.ir import DistributedConfig
 
         specs = (
             build_ragged2_cp_tensor_specs(TP_SIZE)
@@ -2133,11 +2132,12 @@ if __name__ == "__main__":
             fn=l3_prefill_attention_csa_cp,
             specs=specs,
             golden_fn=golden_prefill_attention_csa_cp,
-            compile_cfg=dict(
+            config=dict(
                 dump_passes=args.dump_passes,
                 distributed_config=DistributedConfig(device_ids=device_ids, num_sub_workers=0),
+                platform=args.platform,
+                ring_heap=PREFILL_RING_HEAP,
             ),
-            runtime_cfg=dict(platform=args.platform, ring_heap=PREFILL_RING_HEAP),
             compile_only=args.compile_only,
             rtol=1e-2,
             atol=1e-2,

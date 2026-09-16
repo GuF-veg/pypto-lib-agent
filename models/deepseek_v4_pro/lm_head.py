@@ -6,7 +6,7 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
-# ci: devices=2  # CI: 2-card run; borrows 2 cards via task-submit --device-num
+# ci: devices=2
 """DeepSeek-V4 LM head projection with DP-owned hidden and TP vocab shards.
 
 Hidden states must already have passed the final RMSNorm.
@@ -30,7 +30,7 @@ import sys
 
 import pypto.language as pl
 import pypto.language.distributed as pld
-from pypto.ir.distributed_compiled_program import DistributedConfig
+from pypto.ir import DistributedConfig
 
 from config import ACTIVE as M, DECODE_TOKENS
 
@@ -632,8 +632,7 @@ if __name__ == "__main__":
                         help="Active hidden rows each owner projects")
     parser.add_argument("-d", "--device", type=str, default=",".join(str(i) for i in range(DP_SIZE)),
                         help=f"comma-separated device ids; need at least {DP_SIZE}")
-    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0,
-                        choices=(0, 1, 2, 4))
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=range(5))
     parser.add_argument("--compile-only", action="store_true", default=False)
     parser.add_argument("--runtime-dir", type=str, default=None)
     parser.add_argument("--dump-passes", action="store_true", default=False)
@@ -662,14 +661,12 @@ if __name__ == "__main__":
         compare_fn=compare_fn,
         compile_only=args.compile_only,
         runtime_dir=args.runtime_dir,
-        compile_cfg=dict(
+        config=dict(
             dump_passes=args.dump_passes,
             distributed_config=DistributedConfig(
                 device_ids=device_ids[:required_devices],
                 num_sub_workers=0,
             ),
-        ),
-        runtime_cfg=dict(
             platform=args.platform,
             enable_chip_swimlane=args.enable_chip_swimlane,
         ),

@@ -6,15 +6,14 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
-# ci: devices=2  # CI: 2-card run; borrows 2 cards via task-submit --device-num
+# ci: devices=2
 """DeepSeek-V4 packed prefill HCA (ratio-128) attention over one contiguous run of <=T tokens."""
-
-import functools
 
 import pypto.language as pl
 
 from config import (
     BLOCK_SIZE,
+    DECODE_BATCH,
     FLASH as M,
     HCA_STATE_PHYSICAL_BLOCKS,
     INT8_AMAX_EPS,
@@ -36,6 +35,7 @@ from prefill_metadata import QUERY_START_LOC_DYN, REQUESTS_DYN
 from qkv_proj_rope import golden_qkv_proj_rope, qkv_proj_rope
 from rmsnorm import golden_rms_norm, rms_norm
 from prefill_sparse_attn import (
+    PREFILL_RING_HEAP,
     golden_prefill_sparse_attn,
     hca_streaming_attn_physical,
 )
@@ -263,14 +263,17 @@ def prefill_attention_hca(
         pad_t = pl.tile.get_block_idx()
         if pl.read(local_request_ids, [pad_t]) < 0:
             attn_out[pad_t : pad_t + 1, :] = pl.full([1, D], dtype=pl.BF16, value=0.0)
-    request_dep = pl.system.task_dummy(deps=[cache_ready_dep, pad_output_tid])
+    # Serial chain over requests. A pl.range body is its own scope, so the carry
+    # must be an array outliving it, not a Python name naming a dead local.
+    request_deps = pl.array.create(1, pl.TASK_ID)
+    request_deps[0] = pl.system.task_dummy(deps=[cache_ready_dep, pad_output_tid])
     request_count = pl.tensor.dim(query_start_loc, 0) - 1
     for request in pl.range(request_count):
         request_start = pl.cast(pl.read(query_start_loc, [request]), pl.INDEX)
         request_end = pl.cast(pl.read(query_start_loc, [request + 1]), pl.INDEX)
         request_rows = request_end - request_start
         if request_rows > 0:
-            request_dep = hca_streaming_attn_physical(
+            request_tid = hca_streaming_attn_physical(
                 q,
                 kv_cache, swa_indices,
                 cmp_kv, cmp_block_table[request],
@@ -278,11 +281,14 @@ def prefill_attention_hca(
                 freqs_cos, freqs_sin,
                 wo_a, wo_b, wo_b_scale,
                 attn_out,
-                request_dep,
+                request_deps[0],
                 o_proj_weight_dep,
                 request_start,
                 request_rows,
             )
+            # Store the returned id, not the call: an inline callee assigned
+            # straight into a slot is not expanded.
+            request_deps[0] = request_tid
 
     hc_post(attn_out, x_hc, post, comb, x_out)
     return x_out
@@ -540,19 +546,10 @@ def golden_prefill_attention_hca(tensors):
     tensors["x_out"][:] = y
 
 
-@functools.lru_cache(maxsize=None)
-def _state_block_table(max_blocks, physical_blocks):
-    """Constant scrambled state block table [max_blocks]."""
-    import torch
-
-    blocks = torch.arange(max_blocks, dtype=torch.int32)
-    return (blocks * 17 + 3) % physical_blocks
-
-
 def build_tensor_specs(start_pos: int = START_POS, token_count: int = PREFILL_SEQ):
     import torch
     from golden import TensorSpec
-    from utils import cache_row_from_table, quant_w_per_channel, token_local_rope
+    from utils import block_table, cache_row_from_table, quant_w_per_channel, token_local_rope
 
     # Single-request geometry: the physical token dimension is q_len.
     context_len = start_pos
@@ -693,7 +690,12 @@ def build_tensor_specs(start_pos: int = START_POS, token_count: int = PREFILL_SE
             * 0.0539
         )
 
-    state_table = _state_block_table(HCA_STATE_MAX_BLOCKS, HCA_STATE_PHYSICAL_BLOCKS)
+    state_table = block_table(
+        batch=1,
+        table_blocks=HCA_STATE_MAX_BLOCKS,
+        physical_blocks=HCA_STATE_PHYSICAL_BLOCKS,
+        request_slots=DECODE_BATCH,
+    )[0]
 
     def init_compress_state_block_table():
         return state_table.clone().unsqueeze(0)
@@ -1000,7 +1002,9 @@ def prefill_attention_hca_cp_core(
         pad_t = pl.tile.get_block_idx()
         if pl.read(local_request_ids, [pad_t]) < 0:
             attn_out_local[pad_t : pad_t + 1, :] = pl.full([1, D], dtype=pl.BF16, value=0.0)
-    request_dep = pl.system.task_dummy(deps=[cache_ready_dep, pad_output_tid])
+    # Serial chain over requests, array carry as in the non-CP path above.
+    request_deps = pl.array.create(1, pl.TASK_ID)
+    request_deps[0] = pl.system.task_dummy(deps=[cache_ready_dep, pad_output_tid])
     request_count = pl.tensor.dim(query_start_loc, 0) - 1
     for request in pl.range(request_count):
         local_start = pl.cast(0, pl.INDEX)
@@ -1012,7 +1016,7 @@ def prefill_attention_hca_cp_core(
                     local_start = local_t
                 request_rows = request_rows + 1
         if request_rows > 0:
-            request_dep = hca_streaming_attn_physical(
+            request_tid = hca_streaming_attn_physical(
                 q,
                 kv_cache, swa_indices,
                 cmp_kv, cmp_block_table[request],
@@ -1020,11 +1024,14 @@ def prefill_attention_hca_cp_core(
                 freqs_cos_local, freqs_sin_local,
                 wo_a, wo_b, wo_b_scale,
                 attn_out_local,
-                request_dep,
+                request_deps[0],
                 o_proj_weight_dep,
                 local_start,
                 request_rows,
             )
+            # Store the returned id, not the call: an inline callee assigned
+            # straight into a slot is not expanded.
+            request_deps[0] = request_tid
     return attn_out_local
 
 
@@ -1468,6 +1475,7 @@ def build_ragged2_cp_tensor_specs(tp_size: int = TP_SIZE):
     compress_state_block_table = make_block_table(
         batch=2, table_blocks=HCA_STATE_MAX_BLOCKS,
         physical_blocks=HCA_STATE_BLOCK_NUM,
+        request_slots=DECODE_BATCH,
     )
 
     ori_mappings = []
@@ -1621,7 +1629,7 @@ if __name__ == "__main__":
         "--case", choices=["b1", "ragged2"], default="b1",
         help="Fixture case; ragged2 is the fixed two-request TP2 boundary case.",
     )
-    parser.add_argument("--enable-chip-swimlane", action="store_true", default=False)
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=range(5))
     parser.add_argument("--enable-dep-gen", action="store_true", default=False)
     parser.add_argument("--dump-passes", action="store_true", default=False)
     args = parser.parse_args()
@@ -1647,8 +1655,8 @@ if __name__ == "__main__":
             fn=prefill_attention_hca_test,
             specs=build_tensor_specs(args.start_pos, args.token_count),
             golden_fn=golden_prefill_attention_hca,
-            compile_cfg=dict(dump_passes=args.dump_passes),
-            runtime_cfg=dict(
+            config=dict(
+                dump_passes=args.dump_passes,
                 platform=args.platform,
                 device_id=device_ids[0],
                 enable_chip_swimlane=args.enable_chip_swimlane,
@@ -1665,7 +1673,7 @@ if __name__ == "__main__":
             },
         )
     else:
-        from pypto.ir.distributed_compiled_program import DistributedConfig
+        from pypto.ir import DistributedConfig
 
         specs = (
             build_ragged2_cp_tensor_specs(TP_SIZE)
@@ -1676,11 +1684,12 @@ if __name__ == "__main__":
             fn=l3_prefill_attention_hca_cp,
             specs=specs,
             golden_fn=golden_prefill_attention_hca_cp,
-            compile_cfg=dict(
+            config=dict(
                 dump_passes=args.dump_passes,
                 distributed_config=DistributedConfig(device_ids=device_ids, num_sub_workers=0),
+                platform=args.platform,
+                ring_heap=PREFILL_RING_HEAP,
             ),
-            runtime_cfg=dict(platform=args.platform),
             compile_only=args.compile_only,
             rtol=1e-2,
             atol=1e-2,

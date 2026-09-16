@@ -30,11 +30,27 @@ therefore replaces it with `KERNEL_MAX_SEQ_LEN = 16384` — an 8k prompt plus 51
 decode steps, the budget the Flash cases already exercise. Raise that one
 constant if a case needs a longer context.
 
-Native MXFP8-MXFP4 is not implemented yet. The tracked kernels run an INT8
-stand-in with the same tensor split as
-[V4-Flash](../deepseek_v4_flash_mtp/index.md#what-is-quantized): `gen_routed_weight` in
-[expert_routed.py](../../../models/deepseek_v4_pro/expert_routed.py) re-quantizes
-off the MXFP4 grid into INT8 rather than feeding the cube MXFP4 weights.
+The MoE path follows the DeepSeek-V4-Pro AscendC quantization boundary:
+
+- Routed W1/W3/W2 checkpoint tensors stay MXFP4 on disk. The host bridge in
+  [utils.py](../../../models/deepseek_v4_pro/utils.py) expands each E2M1
+  nibble exactly to its FP8E4M3 value, preserves the original per-32 E8M0
+  scale, and packs it as ``MX_B_NN`` before Cube multiplication.
+- Shared W1/W3/W2 use native MXFP8 data and per-32 E8M0 scales.
+- [gate.py](../../../models/deepseek_v4_pro/gate.py) applies ``pl.quant_mx``
+  to the normalized MoE input. [moe.py](../../../models/deepseek_v4_pro/moe.py)
+  dispatches both the FP8 data and its scale, and both expert kernels apply
+  ``pl.quant_mx`` again after SwiGLU before W2.
+
+The expert kernels pass ordinary ``pl.load`` results directly to
+``pl.matmul_mx``. PyPTO infers the data and scale staging from the four operand
+positions, including ``LeftScale`` and ``RightScale`` placement. Quantized
+activations remain GM-backed where multiple expert or W2 output blocks reuse
+them; direct vector-to-cube transport would otherwise repeat quantization or
+reduce output-block parallelism.
+
+This path does not use an NVIDIA ``scale_alg`` setting. Scale generation and
+physical layout conversion are expressed directly through PyPTO's MX APIs.
 
 ### Model shape and layer schedule
 
@@ -126,10 +142,11 @@ prefill_mtp     mtp_projection → prefill_attention_swa → moe → hc_head →
 
 `utils.py` converts the released DeepSeek-V4-Flash checkpoint (hybrid
 MXFP4 routed experts + block-FP8 attention/shared-expert linears) into the
-host-tensor ABI of the two forward drivers: FP4/FP8 tensors are dequantized
-and re-quantized to the kernels' INT8 + per-output-channel FP32-scale form,
-per-layer tensors are stacked and EP/TP-sharded exactly like the fixture
-specs. Convert once offline, then point the drivers at the cache:
+host-tensor ABI of the two forward drivers. Routed MXFP4 values are expanded
+losslessly to FP8E4M3 while retaining their E8M0 scales; shared-expert weights
+are converted to native MXFP8; attention's existing W8A8 tensors remain
+INT8. Per-layer tensors are stacked and EP/TP-sharded exactly like the
+fixture specs. Convert once offline, then point the drivers at the cache:
 
 ```bash
 PYTHONPATH=.:models/deepseek_v4_pro python -c 'import utils; utils.main()' \
@@ -226,30 +243,11 @@ The prefill and decode RoPE paths use fixed even/odd lane gather and scatter
 operations for adjacent-lane permutations instead of synthesizing tile-local
 index tensors.
 
-The [daily model workflow](../../../.github/workflows/daily_ci.yml) runs this
-EP8 loop nightly on the A5 runner (job `e2e-flash-a5`: real
-DeepSeek-V4-Flash weights, fixed 128-row prefill capacity with active rows set
-from the prompt, and 32 greedy decode steps from "The capital of France is") and
-publishes the prompt and the generated text in the run summary under
-"Daily CI Model Test Results", so a reviewer can read the continuation
-every day instead of a pass/fail tick. The runner finds the checkpoint
-through `PYPTO_DSV4_FLASH_CKPT_DIR` in its `.env` (falling back to the A5
-host's `/home/pyptouser/models/DeepSeek-V4-Flash-0731`). The
-`utils.py` cache (ep8/tp2) is resolved in this order:
-`PYPTO_DSV4_FLASH_WEIGHTS_DIR` from the runner's `.env` if set, else the
-shared cache next to the checkpoint (`pypto-weights-cache/flash_ep8_tp2`),
-else the runner's own `CI_CACHE_ROOT/dsv4-flash-weights/flash_ep8_tp2`,
-which the job builds from the checkpoint once (~25 min) when it is missing.
-Unlike the rest of the nightly, this job currently builds a pinned pypto
-(`pypto-ref` in the workflow, with the full story in its comment): the
-toolchain that pypto HEAD pins carries a pto-isa A5 dispatch regression
-that stalls every EP8 prefill before the first token. The pin comes off
-once the upstream fix reaches pto-isa's mirror and the simpler/pypto pins
-move past it. While the pinned toolchain's probabilistic cross-rank
-divergence ([#1043](https://github.com/hw-native-sys/pypto-lib/issues/1043))
-stays open, the job also retries the loop once; `e2e.json` carries the
-attempt count and the first attempt's error, so a flaky night still reads
-as exactly what it was.
+The EP8 loop needs a toolchain without the pto-isa A5 dispatch regression that
+stalls every EP8 prefill before the first token, and a probabilistic
+cross-rank divergence
+([#1043](https://github.com/hw-native-sys/pypto-lib/issues/1043)) is still
+open, so a run can diverge between ranks without the kernels having changed.
 
 ## Files
 
@@ -264,10 +262,9 @@ as exactly what it was.
 | Prefill attention and cache | [prefill_attention_swa.py](../../../models/deepseek_v4_pro/prefill_attention_swa.py), [prefill_attention_csa.py](../../../models/deepseek_v4_pro/prefill_attention_csa.py), [prefill_attention_hca.py](../../../models/deepseek_v4_pro/prefill_attention_hca.py), [prefill_sparse_attn.py](../../../models/deepseek_v4_pro/prefill_sparse_attn.py), [prefill_compressor_ratio4.py](../../../models/deepseek_v4_pro/prefill_compressor_ratio4.py), [prefill_compressor_ratio128.py](../../../models/deepseek_v4_pro/prefill_compressor_ratio128.py), [prefill_indexer.py](../../../models/deepseek_v4_pro/prefill_indexer.py), [prefill_indexer_compressor.py](../../../models/deepseek_v4_pro/prefill_indexer_compressor.py) |
 | Shared transforms | [rmsnorm.py](../../../models/deepseek_v4_pro/rmsnorm.py), [qkv_proj_rope.py](../../../models/deepseek_v4_pro/qkv_proj_rope.py), [hc_pre.py](../../../models/deepseek_v4_pro/hc_pre.py), [hc_post.py](../../../models/deepseek_v4_pro/hc_post.py), [hc_head.py](../../../models/deepseek_v4_pro/hc_head.py) |
 | MoE and output | [moe.py](../../../models/deepseek_v4_pro/moe.py), [gate.py](../../../models/deepseek_v4_pro/gate.py), [expert_shared.py](../../../models/deepseek_v4_pro/expert_shared.py), [expert_routed.py](../../../models/deepseek_v4_pro/expert_routed.py), [lm_head.py](../../../models/deepseek_v4_pro/lm_head.py) |
-| Metadata and host helpers | [config.py](../../../models/deepseek_v4_pro/config.py), [decode_metadata.py](../../../models/deepseek_v4_pro/decode_metadata.py), [rope_tables.py](../../../models/deepseek_v4_pro/rope_tables.py) |
-| Real-weight loading | [utils.py](../../../models/deepseek_v4_pro/utils.py) |
+| Metadata and host helpers | [config.py](../../../models/deepseek_v4_pro/config.py), [decode_metadata.py](../../../models/deepseek_v4_pro/decode_metadata.py), [rope_tables.py](../../../models/deepseek_v4_pro/rope_tables.py), [utils.py](../../../models/deepseek_v4_pro/utils.py) |
+| Real-weight loading and MX conversion | [utils.py](../../../models/deepseek_v4_pro/utils.py) |
 | Token loop | [synthetic_token_loop.py](../../../models/deepseek_v4_pro/synthetic_token_loop.py) |
 
 `config.py`, `decode_metadata.py`, and `rope_tables.py` have no `__main__`
-block and are imported rather than run. Which entry points CI schedules is
-defined by the [daily model workflow](../../../.github/workflows/daily_ci.yml).
+block and are imported rather than run.

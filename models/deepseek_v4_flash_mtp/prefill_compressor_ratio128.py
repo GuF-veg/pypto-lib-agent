@@ -39,6 +39,10 @@ NOPE_HEAD_DIM = HEAD_DIM - ROPE_HEAD_DIM
 MAX_SEQ_LEN = M.max_position_embeddings
 START_POS = 0
 COMPRESS_RATIO = 128
+# The compressed block table is indexed by the same logical page as the raw KV
+# cache, so a block holds BLOCK_SIZE / COMPRESS_RATIO rows. Callers that page
+# the compressed cache differently pass an equivalent one-row-per-block view --
+# this kernel only ever addresses cmp_kv as a flat row space.
 CMP_STORAGE_BLOCK_SIZE = BLOCK_SIZE // COMPRESS_RATIO
 OUT_DIM = HEAD_DIM
 STATE_LEN = COMPRESS_RATIO
@@ -85,10 +89,7 @@ def prefill_compressor_ratio128(
     cmp_block_num = pl.tensor.dim(cmp_kv, 0)
     kv_proj_scratch = pl.create_tensor([T, OUT_DIM], dtype=pl.FP32)
     score_proj_scratch = pl.create_tensor([T, OUT_DIM], dtype=pl.FP32)
-    compress_state_flat = pl.reshape(
-        compress_state,
-        [state_block_num * HCA_STATE_BLOCK_SIZE, COMPRESS_STATE_DIM],
-    )
+    compress_state_flat = pl.reshape(compress_state, [state_block_num * HCA_STATE_BLOCK_SIZE, COMPRESS_STATE_DIM])
     cmp_kv_flat = pl.reshape(cmp_kv, [cmp_block_num * CMP_STORAGE_BLOCK_SIZE, HEAD_DIM])
     pooled_kv_pad = pl.create_tensor([HCA_C128_RMS_PAD_ROWS, HEAD_DIM], dtype=pl.FP32)
     normed_kv_pad = pl.create_tensor([HCA_C128_RMS_PAD_ROWS, HEAD_DIM], dtype=pl.FP32)
@@ -104,12 +105,8 @@ def prefill_compressor_ratio128(
             # long bursts) instead of ND2NZ (strided short bursts). Matches ratio4/CSA/decode-HCA.
             wkv_tile = wkv[o0 : o0 + OUT_TILE, k0 : k0 + K_TILE]
             wgate_tile = wgate[o0 : o0 + OUT_TILE, k0 : k0 + K_TILE]
-            if k0 == 0:
-                kv_acc = pl.matmul(x_tile, wkv_tile, out_dtype=pl.FP32, b_trans=True)
-                score_acc = pl.matmul(x_tile, wgate_tile, out_dtype=pl.FP32, b_trans=True)
-            else:
-                kv_acc = pl.matmul_acc(kv_acc, x_tile, wkv_tile, b_trans=True)
-                score_acc = pl.matmul_acc(score_acc, x_tile, wgate_tile, b_trans=True)
+            kv_acc = pl.matmul_acc(kv_acc, x_tile, wkv_tile, b_trans=True, init_cond=(k0 == 0))
+            score_acc = pl.matmul_acc(score_acc, x_tile, wgate_tile, b_trans=True, init_cond=(k0 == 0))
         kv_proj_scratch[0:T, o0 : o0 + OUT_TILE] = kv_acc
         score_proj_scratch[0:T, o0 : o0 + OUT_TILE] = score_acc
 
@@ -266,9 +263,7 @@ def prefill_compressor_ratio128(
 @pl.jit
 def prefill_compressor_ratio128_test(
     x: pl.Tensor[[T, D], pl.BF16],
-    compress_state: pl.InOut[
-        pl.Tensor[[STATE_BLOCK_NUM_DYN, HCA_STATE_BLOCK_SIZE, COMPRESS_STATE_DIM], pl.FP32]
-    ],
+    compress_state: pl.InOut[pl.Tensor[[STATE_BLOCK_NUM_DYN, HCA_STATE_BLOCK_SIZE, COMPRESS_STATE_DIM], pl.FP32]],
     compress_state_block_table: pl.Tensor[[HCA_STATE_MAX_BLOCKS], pl.INT32],
     wkv: pl.Tensor[[OUT_DIM, D], pl.BF16],
     wgate: pl.Tensor[[OUT_DIM, D], pl.BF16],
@@ -294,14 +289,13 @@ def golden_prefill_compressor_ratio128(tensors):
     num_tokens = int(tensors["num_tokens"])
     kv_proj = tensors["x"].float() @ tensors["wkv"].float().t()    # wkv stored [OUT_DIM, D] for b_trans
     score_proj = tensors["x"].float() @ tensors["wgate"].float().t()
-    compress_state_flat = tensors["compress_state"].view(
-        HCA_STATE_BLOCK_NUM * HCA_STATE_BLOCK_SIZE,
-        COMPRESS_STATE_DIM,
-    )
+    compress_state_flat = tensors["compress_state"].view(-1, COMPRESS_STATE_DIM)
     kv_state_flat = compress_state_flat[:, :OUT_DIM]
     score_state_flat = compress_state_flat[:, OUT_DIM:]
     state_block_table = tensors["compress_state_block_table"]
-    cmp_kv_flat = tensors["cmp_kv"].view(HCA_CMP_BLOCK_NUM * CMP_STORAGE_BLOCK_SIZE, HEAD_DIM)
+    # Leaf-composed CP callers intentionally pass a single physical cache
+    # block, while the standalone entry uses the full pool.
+    cmp_kv_flat = tensors["cmp_kv"].view(-1, HEAD_DIM)
 
     def state_row(abs_pos):
         if abs_pos < 0 or abs_pos >= MAX_SEQ_LEN:
@@ -445,8 +439,7 @@ if __name__ == "__main__":
     from golden import ratio_allclose, run
 
     parser = argparse.ArgumentParser(description="Standalone token-major DeepSeek V4 prefill compressor ratio128 validation.")
-    parser.add_argument("-p", "--platform", type=str, default="a2a3",
-                        choices=["a2a3", "a2a3sim", "a5", "a5sim"])
+    parser.add_argument("-p", "--platform", type=str, default="a2a3", choices=["a2a3", "a2a3sim", "a5", "a5sim"])
     parser.add_argument("-d", "--device", type=int, default=0)
     parser.add_argument(
         "--compile-only",
@@ -463,7 +456,7 @@ if __name__ == "__main__":
             "slot mapping; it is not a JIT kernel parameter."
         ),
     )
-    parser.add_argument("--enable-chip-swimlane", action="store_true", default=False)
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=range(5))
     parser.add_argument("--dump-passes", action="store_true", default=False)
     args = parser.parse_args()
 
@@ -471,8 +464,12 @@ if __name__ == "__main__":
         fn=prefill_compressor_ratio128_test,
         specs=build_tensor_specs(args.start_pos),
         golden_fn=golden_prefill_compressor_ratio128,
-        compile_cfg=dict(dump_passes=args.dump_passes),
-        runtime_cfg=dict(platform=args.platform, device_id=args.device, enable_chip_swimlane=args.enable_chip_swimlane),
+        config=dict(
+            dump_passes=args.dump_passes,
+            platform=args.platform,
+            device_id=args.device,
+            enable_chip_swimlane=args.enable_chip_swimlane,
+        ),
         rtol=1e-3,
         atol=1e-3,
         compile_only=args.compile_only,

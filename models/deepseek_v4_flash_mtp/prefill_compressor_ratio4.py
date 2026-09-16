@@ -97,12 +97,8 @@ def compressor_ratio4(
             # long bursts) instead of ND2NZ (strided short bursts). Matches ratio4/CSA/HCA layout.
             wkv_tile = wkv[o0 : o0 + OUT_TILE, k0 : k0 + K_TILE]
             wgate_tile = wgate[o0 : o0 + OUT_TILE, k0 : k0 + K_TILE]
-            if k0 == 0:
-                kv_acc = pl.matmul(x_tile, wkv_tile, out_dtype=pl.FP32, b_trans=True)
-                score_acc = pl.matmul(x_tile, wgate_tile, out_dtype=pl.FP32, b_trans=True)
-            else:
-                kv_acc = pl.matmul_acc(kv_acc, x_tile, wkv_tile, b_trans=True)
-                score_acc = pl.matmul_acc(score_acc, x_tile, wgate_tile, b_trans=True)
+            kv_acc = pl.matmul_acc(kv_acc, x_tile, wkv_tile, b_trans=True, init_cond=(k0 == 0))
+            score_acc = pl.matmul_acc(score_acc, x_tile, wgate_tile, b_trans=True, init_cond=(k0 == 0))
         cmp4_kv_proj_scratch[0:T, o0 : o0 + OUT_TILE] = kv_acc
         cmp4_score_proj_scratch[0:T, o0 : o0 + OUT_TILE] = score_acc
 
@@ -307,10 +303,7 @@ def compressor_ratio4(
                     pool_dep = pl.mul(pooled_kv[0:1, 0:STATE_UPDATE_OUT_TILE], 0.0)
                     for update_ob in pl.range(OUT_DIM // STATE_UPDATE_OUT_TILE):
                         update_o0 = update_ob * STATE_UPDATE_OUT_TILE
-                        ape_row = ape[
-                            ape_slot : ape_slot + 1,
-                            update_o0 : update_o0 + STATE_UPDATE_OUT_TILE,
-                        ]
+                        ape_row = ape[ape_slot : ape_slot + 1, update_o0 : update_o0 + STATE_UPDATE_OUT_TILE]
                         # Slices stay inline: naming one materializes an extra tile.
                         compress_state_flat[
                             state_row : state_row + 1,
@@ -349,10 +342,7 @@ def golden_prefill_compressor_ratio4(tensors):
     import torch
 
     x = tensors["x"].view(T, D).float()
-    compress_state_flat = tensors["compress_state"].view(
-        CSA_STATE_BLOCK_NUM * CSA_STATE_BLOCK_SIZE,
-        COMPRESS_STATE_DIM,
-    )
+    compress_state_flat = tensors["compress_state"].view(-1, COMPRESS_STATE_DIM)
     kv_state_flat = compress_state_flat[:, :OUT_DIM]
     score_state_flat = compress_state_flat[:, OUT_DIM:]
     state_block_table = tensors["compress_state_block_table"]
@@ -458,9 +448,7 @@ def golden_prefill_compressor_ratio4(tensors):
 @pl.jit
 def prefill_compressor_ratio4_test(
     x: pl.Tensor[[T, D], pl.BF16],
-    compress_state: pl.InOut[
-        pl.Tensor[[STATE_BLOCK_NUM_DYN, CSA_STATE_BLOCK_SIZE, COMPRESS_STATE_DIM], pl.FP32]
-    ],
+    compress_state: pl.InOut[pl.Tensor[[STATE_BLOCK_NUM_DYN, CSA_STATE_BLOCK_SIZE, COMPRESS_STATE_DIM], pl.FP32]],
     compress_state_block_table: pl.Tensor[[CSA_STATE_MAX_BLOCKS], pl.INT32],
     wkv: pl.Tensor[[OUT_DIM, D], pl.BF16],
     wgate: pl.Tensor[[OUT_DIM, D], pl.BF16],
@@ -577,7 +565,7 @@ if __name__ == "__main__":
                         help="Compile/codegen only; also the implicit behavior on *sim platforms used by CI.")
     parser.add_argument("--start-pos", type=int, default=START_POS,
                         help="Fixture-only absolute position for token 0, lowered into position_ids and cmp_slot_mapping.")
-    parser.add_argument("--enable-chip-swimlane", action="store_true", default=False)
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=range(5))
     parser.add_argument("--dump-passes", action="store_true", default=False)
     args = parser.parse_args()
 
@@ -585,8 +573,12 @@ if __name__ == "__main__":
         fn=prefill_compressor_ratio4_test,
         specs=build_tensor_specs(args.start_pos),
         golden_fn=golden_prefill_compressor_ratio4,
-        compile_cfg=dict(dump_passes=args.dump_passes),
-        runtime_cfg=dict(platform=args.platform, device_id=args.device, enable_chip_swimlane=args.enable_chip_swimlane),
+        config=dict(
+            dump_passes=args.dump_passes,
+            platform=args.platform,
+            device_id=args.device,
+            enable_chip_swimlane=args.enable_chip_swimlane,
+        ),
         compile_only=args.compile_only,
         compare_fn={
             "compress_state": ratio_allclose(atol=1e-3, rtol=1e-3, max_error_ratio=0.0),

@@ -29,7 +29,6 @@ from config import (
 from decode_o_proj import LOCAL_T_PAD
 from qkv_proj_rope import (
     kv_proj_rope,
-    materialize_rope_rows_dynamic,
     q_proj_rope,
     rope_prepare,
 )
@@ -61,6 +60,12 @@ VISIBLE_ROWS = WIN + S                   # trailing window + whole draft block
 
 # tiling
 ATTN_K_TILE = 64
+NUM_QK_CORES = 24
+QK_PRE_LAUNCH = 2
+QK_TRANSFER_SLOTS = QK_PRE_LAUNCH + 1
+QK_SCORE_READY_EVENT = 0
+QK_PROB_READY_EVENT = 1
+QK_PV_READY_EVENT = 2
 SPARSE_BLOCKS = (VISIBLE_ROWS + ATTN_K_TILE - 1) // ATTN_K_TILE
 INDEX_WIDTH = SPARSE_BLOCKS * ATTN_K_TILE
 BIAS_B_TILE = 8                          # 2 request blocks
@@ -78,8 +83,10 @@ def dspark_attention(
     wkv: pl.Tensor[[D, HEAD_DIM], pl.BF16],
     gamma_cq: pl.Tensor[[Q_LORA], pl.BF16],
     gamma_ckv: pl.Tensor[[HEAD_DIM], pl.BF16],
-    freqs_cos: pl.Tensor[[MAX_SEQ_LEN, ROPE_DIM], pl.BF16],
-    freqs_sin: pl.Tensor[[MAX_SEQ_LEN, ROPE_DIM], pl.BF16],
+    freqs_cos_local: pl.Tensor[[T, ROPE_DIM], pl.BF16],
+    freqs_sin_local: pl.Tensor[[T, ROPE_DIM], pl.BF16],
+    freqs_cos: pl.Tensor[[KV_T_DYN, ROPE_DIM], pl.BF16],
+    freqs_sin: pl.Tensor[[KV_T_DYN, ROPE_DIM], pl.BF16],
     position_ids: pl.Tensor[[T], pl.INT32],
     kv_position_ids: pl.Tensor[[KV_T_DYN], pl.INT32],
     kv_cache: pl.Tensor[[ORI_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
@@ -92,21 +99,16 @@ def dspark_attention(
     ],
 ):
     kv_tokens = pl.tensor.dim(kv_position_ids, 0)
-    rope_cos_t = pl.create_tensor([T, ROPE_DIM], dtype=pl.BF16)
-    rope_sin_t = pl.create_tensor([T, ROPE_DIM], dtype=pl.BF16)
-    for rope_t in pl.spmd(T, name_hint="dspark_q_rope_rows"):
-        rope_position = pl.cast(pl.read(position_ids, [rope_t]), pl.INDEX)
-        rope_cos_t[rope_t : rope_t + 1, :] = freqs_cos[
-            rope_position : rope_position + 1, :
-        ]
-        rope_sin_t[rope_t : rope_t + 1, :] = freqs_sin[
-            rope_position : rope_position + 1, :
-        ]
-
     rope_cos_il = pl.create_tensor([T, ROPE_DIM], dtype=pl.FP32)
     rope_sin_signed = pl.create_tensor([T, ROPE_DIM], dtype=pl.FP32)
     rope_swap_idx = pl.create_tensor([T, ROPE_DIM], dtype=pl.INT32)
-    rope_prepare(rope_cos_t, rope_sin_t, rope_cos_il, rope_sin_signed, rope_swap_idx)
+    rope_prepare(
+        freqs_cos_local,
+        freqs_sin_local,
+        rope_cos_il,
+        rope_sin_signed,
+        rope_swap_idx,
+    )
 
     q = pl.create_tensor([T, H, HEAD_DIM], dtype=pl.BF16)
     qr = pl.create_tensor([T, Q_LORA], dtype=pl.INT8)
@@ -117,21 +119,12 @@ def dspark_attention(
         q, qr, qr_scale,
     )
 
-    kv_rope_cos_t = pl.create_tensor([kv_tokens, ROPE_DIM], dtype=pl.BF16)
-    kv_rope_sin_t = pl.create_tensor([kv_tokens, ROPE_DIM], dtype=pl.BF16)
-    materialize_rope_rows_dynamic(
-        freqs_cos,
-        freqs_sin,
-        kv_position_ids,
-        kv_rope_cos_t,
-        kv_rope_sin_t,
-    )
     kv_rope_cos_il = pl.create_tensor([kv_tokens, ROPE_DIM], dtype=pl.FP32)
     kv_rope_sin_signed = pl.create_tensor([kv_tokens, ROPE_DIM], dtype=pl.FP32)
     kv_rope_swap_idx = pl.create_tensor([kv_tokens, ROPE_DIM], dtype=pl.INT32)
     rope_prepare(
-        kv_rope_cos_t,
-        kv_rope_sin_t,
+        freqs_cos,
+        freqs_sin,
         kv_rope_cos_il,
         kv_rope_sin_signed,
         kv_rope_swap_idx,
@@ -178,43 +171,149 @@ def dspark_attention(
         g_b = g_task // SPARSE_BLOCKS
         g_c0 = (g_task % SPARSE_BLOCKS) * ATTN_K_TILE
         g_base = g_b * INDEX_WIDTH
-        for g_c in pl.range(g_c0, g_c0 + ATTN_K_TILE):
-            g_slot_i32 = pl.read(swa_indices, [g_b, g_c])
-            g_dst = g_base + g_c
-            if g_slot_i32 >= 0:
-                g_slot = pl.cast(g_slot_i32, pl.INDEX)
-                visible_kv[g_dst : g_dst + 1, 0:HEAD_DIM] = kv_cache_flat[g_slot : g_slot + 1, 0:HEAD_DIM]
-            else:
-                visible_kv[g_dst : g_dst + 1, 0:HEAD_DIM] = pl.full([1, HEAD_DIM], dtype=pl.BF16, value=0.0)
+        if g_c0 < pl.read(swa_lens, [g_b]):
+            for g_c in pl.range(g_c0, g_c0 + ATTN_K_TILE):
+                g_slot_i32 = pl.read(swa_indices, [g_b, g_c])
+                g_dst = g_base + g_c
+                if g_slot_i32 >= 0:
+                    g_slot = pl.cast(g_slot_i32, pl.INDEX)
+                    visible_kv[g_dst : g_dst + 1, 0:HEAD_DIM] = kv_cache_flat[g_slot : g_slot + 1, 0:HEAD_DIM]
+                else:
+                    visible_kv[g_dst : g_dst + 1, 0:HEAD_DIM] = pl.full([1, HEAD_DIM], dtype=pl.BF16, value=0.0)
 
     q_flat = pl.reshape(q, [T * H, HEAD_DIM])
-    sparse_mi = pl.create_tensor([T * SPARSE_BLOCKS * H, 1], dtype=pl.FP32)
-    sparse_li = pl.create_tensor([T * SPARSE_BLOCKS * H, 1], dtype=pl.FP32)
-    sparse_oi = pl.create_tensor([T * SPARSE_BLOCKS * H, HEAD_DIM], dtype=pl.FP32)
-    for qk_idx in pl.spmd(T * SPARSE_BLOCKS, name_hint="dspark_qk_pv"):
-        qk_token_idx = qk_idx // SPARSE_BLOCKS
-        qk_sparse_block = qk_idx % SPARSE_BLOCKS
-        qk_batch_idx = qk_token_idx // S
-        qk_q_row = qk_token_idx * H
-        qk_s0 = qk_sparse_block * ATTN_K_TILE
-        kv_row = qk_batch_idx * INDEX_WIDTH + qk_s0
-        q_tile = q_flat[qk_q_row : qk_q_row + H, :]
-        kv_tile = visible_kv[kv_row : kv_row + ATTN_K_TILE, :]
-        bias_row = sparse_bias[qk_batch_idx : qk_batch_idx + 1, qk_s0 : qk_s0 + ATTN_K_TILE]
-        score_raw = pl.matmul(q_tile, kv_tile, b_trans=True, out_dtype=pl.FP32)
-        score_scaled = pl.mul(score_raw, SOFTMAX_SCALE)
-        # Masked lanes carry NEG_INF over zeroed kv rows and exp to ~0; an all-masked
-        # block dies in the merge scale below.
-        scores = pl.col_expand_add(score_scaled, bias_row)
-        score_max = pl.row_max(scores)
-        score_exp = pl.exp(pl.row_expand_sub(scores, score_max))
-        score_sum = pl.row_sum(score_exp)
-        score_prob = pl.cast(score_exp, target_type=pl.BF16, mode="rint")
-        attn_raw = pl.matmul(score_prob, kv_tile, out_dtype=pl.FP32)
-        qk_partial_row = (qk_token_idx * SPARSE_BLOCKS + qk_sparse_block) * H
-        sparse_mi[qk_partial_row : qk_partial_row + H, 0:1] = score_max
-        sparse_li[qk_partial_row : qk_partial_row + H, 0:1] = score_sum
-        sparse_oi[qk_partial_row : qk_partial_row + H, :] = attn_raw
+    sparse_mi = pl.create_tensor([T * H, 1], dtype=pl.FP32)
+    sparse_li = pl.create_tensor([T * H, 1], dtype=pl.FP32)
+    sparse_oi = pl.create_tensor([T * H, HEAD_DIM], dtype=pl.FP32)
+    attn_sink_col = pl.reshape(attn_sink, [H, 1])
+    transfer_slots = NUM_QK_CORES * QK_TRANSFER_SLOTS
+    transfer_heads = transfer_slots * H
+    score_transfer = pl.create_tensor([transfer_heads, ATTN_K_TILE], dtype=pl.FP32)
+    probability_transfer = pl.create_tensor([transfer_heads, ATTN_K_TILE], dtype=pl.BF16)
+    pv_transfer = pl.create_tensor([transfer_heads, HEAD_DIM], dtype=pl.FP32)
+    mi_transfer = pl.create_tensor([transfer_heads, 1], dtype=pl.FP32)
+    li_transfer = pl.create_tensor([transfer_heads, 1], dtype=pl.FP32)
+    ffts_workspace = pl.create_tensor([256], dtype=pl.INT64)
+    with pl.spmd(NUM_QK_CORES, name_hint="dspark_qk_pv") as qk_tid:
+        qk_core = pl.tile.get_block_idx()
+        pl.system.set_ffts(ffts_workspace)
+        for qk_t in pl.range(qk_core, T, NUM_QK_CORES):
+            qk_b = qk_t // S
+            qk_q = pl.load(
+                q_flat, [qk_t * H, 0], [H, HEAD_DIM], target_memory=pl.MemorySpace.Mat,
+            )
+            for qk_tick in pl.range(SPARSE_BLOCKS + QK_PRE_LAUNCH):
+                if qk_tick < SPARSE_BLOCKS:
+                    qk_sb = qk_tick
+                    if qk_sb * ATTN_K_TILE < pl.read(swa_lens, [qk_b]):
+                        qk_slot = qk_core * QK_TRANSFER_SLOTS + qk_sb % QK_TRANSFER_SLOTS
+                        qk_kv_row = qk_b * INDEX_WIDTH + qk_sb * ATTN_K_TILE
+                        qk_transfer_row = qk_slot * H
+                        qk_kv = pl.load(
+                            visible_kv, [qk_kv_row, 0], [ATTN_K_TILE, HEAD_DIM],
+                            target_memory=pl.MemorySpace.Mat,
+                        )
+                        qk_scores = pl.matmul(qk_q, pl.tile.transpose_view(qk_kv), out_dtype=pl.FP32)
+                        pl.store(qk_scores, [qk_transfer_row, 0], score_transfer)
+                        pl.system.sync_set(
+                            QK_SCORE_READY_EVENT, pipe=pl.PipeType.FIX,
+                            ffts_mode=2, core_type=pl.KernelType.AIC,
+                        )
+                if qk_tick >= QK_PRE_LAUNCH:
+                    pv_sb = qk_tick - QK_PRE_LAUNCH
+                    if pv_sb * ATTN_K_TILE < pl.read(swa_lens, [qk_b]):
+                        pv_slot = qk_core * QK_TRANSFER_SLOTS + pv_sb % QK_TRANSFER_SLOTS
+                        pv_kv_row = qk_b * INDEX_WIDTH + pv_sb * ATTN_K_TILE
+                        pv_transfer_row = pv_slot * H
+                        pl.system.sync_wait(QK_PROB_READY_EVENT, pipe=pl.PipeType.MTE2, core_type=pl.KernelType.AIC)
+                        pv_probability = pl.load(
+                            probability_transfer, [pv_transfer_row, 0], [H, ATTN_K_TILE],
+                            target_memory=pl.MemorySpace.Mat,
+                        )
+                        pv_kv = pl.load(
+                            visible_kv, [pv_kv_row, 0], [ATTN_K_TILE, HEAD_DIM],
+                            target_memory=pl.MemorySpace.Mat,
+                        )
+                        pv_output = pl.matmul(pv_probability, pv_kv, out_dtype=pl.FP32)
+                        pl.store(pv_output, [pv_transfer_row, 0], pv_transfer)
+                        pl.system.sync_set(
+                            QK_PV_READY_EVENT, pipe=pl.PipeType.FIX,
+                            ffts_mode=2, core_type=pl.KernelType.AIC,
+                        )
+
+            for qk_aiv in pl.split_aiv(2, mode=pl.SplitMode.NONE):
+                pl.system.set_ffts(ffts_workspace)
+                qk_lane_head = qk_aiv * (H // 2)
+                qk_reduce_tmp = pl.create_tile([H // 2, ATTN_K_TILE], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec)
+                running_m = pl.load(attn_sink_col, [qk_lane_head, 0], [H // 2, 1], target_memory=pl.MemorySpace.Vec)
+                running_l = pl.tile.muls(running_m, 0.0)
+                running_left = pl.tile.full([H // 2, HEAD_DIM // 2], dtype=pl.FP32, value=0.0)
+                running_right = pl.tile.full([H // 2, HEAD_DIM // 2], dtype=pl.FP32, value=0.0)
+                for qk_tick, (m_iter, l_iter, left_iter, right_iter) in pl.range(
+                    SPARSE_BLOCKS + QK_PRE_LAUNCH,
+                    init_values=(running_m, running_l, running_left, running_right),
+                ):
+                    if qk_tick < SPARSE_BLOCKS:
+                        qk_sb = qk_tick
+                        if qk_sb * ATTN_K_TILE < pl.read(swa_lens, [qk_b]):
+                            qk_slot = qk_core * QK_TRANSFER_SLOTS + qk_sb % QK_TRANSFER_SLOTS
+                            qk_transfer_row = qk_slot * H
+                            qk_s0 = qk_sb * ATTN_K_TILE
+                            pl.system.sync_wait(QK_SCORE_READY_EVENT, pipe=pl.PipeType.MTE2, core_type=pl.KernelType.AIV)
+                            qk_scores_half = pl.load(
+                                score_transfer, [qk_transfer_row + qk_lane_head, 0], [H // 2, ATTN_K_TILE],
+                                target_memory=pl.MemorySpace.Vec,
+                            )
+                            qk_bias = pl.load(
+                                sparse_bias, [qk_b, qk_s0], [1, ATTN_K_TILE], target_memory=pl.MemorySpace.Vec,
+                            )
+                            qk_scaled = pl.mul(qk_scores_half, SOFTMAX_SCALE)
+                            qk_masked = pl.col_expand_add(qk_scaled, qk_bias)
+                            qk_mi = pl.row_max(qk_masked, qk_reduce_tmp)
+                            qk_exp = pl.exp(pl.row_expand_sub(qk_masked, qk_mi))
+                            qk_li = pl.row_sum(qk_exp, qk_reduce_tmp)
+                            qk_probability = pl.cast(qk_exp, target_type=pl.BF16, mode="rint")
+                            pl.store(qk_probability, [qk_transfer_row + qk_lane_head, 0], probability_transfer)
+                            pl.store(qk_mi, [qk_transfer_row + qk_lane_head, 0], mi_transfer)
+                            pl.store(qk_li, [qk_transfer_row + qk_lane_head, 0], li_transfer)
+                            pl.system.sync_set(
+                                QK_PROB_READY_EVENT, pipe=pl.PipeType.MTE3,
+                                ffts_mode=2, core_type=pl.KernelType.AIV,
+                            )
+                    if qk_tick >= QK_PRE_LAUNCH:
+                        pv_sb = qk_tick - QK_PRE_LAUNCH
+                        if pv_sb * ATTN_K_TILE < pl.read(swa_lens, [qk_b]):
+                            pv_slot = qk_core * QK_TRANSFER_SLOTS + pv_sb % QK_TRANSFER_SLOTS
+                            pv_transfer_row = pv_slot * H
+                            pl.system.sync_wait(QK_PV_READY_EVENT, pipe=pl.PipeType.MTE2, core_type=pl.KernelType.AIV)
+                            pv_m = pl.load(mi_transfer, [pv_transfer_row + qk_lane_head, 0], [H // 2, 1], target_memory=pl.MemorySpace.Vec)
+                            pv_l = pl.load(li_transfer, [pv_transfer_row + qk_lane_head, 0], [H // 2, 1], target_memory=pl.MemorySpace.Vec)
+                            next_m = pl.maximum(m_iter, pv_m)
+                            alpha = pl.exp(pl.sub(m_iter, next_m))
+                            beta = pl.exp(pl.sub(pv_m, next_m))
+                            next_l = pl.add(pl.mul(alpha, l_iter), pl.mul(beta, pv_l))
+                            pv_left = pl.load(
+                                pv_transfer, [pv_transfer_row + qk_lane_head, 0], [H // 2, HEAD_DIM // 2],
+                                target_memory=pl.MemorySpace.Vec,
+                            )
+                            next_left = pl.add(pl.row_expand_mul(left_iter, alpha), pl.row_expand_mul(pv_left, beta))
+                            pv_right = pl.load(
+                                pv_transfer, [pv_transfer_row + qk_lane_head, HEAD_DIM // 2], [H // 2, HEAD_DIM // 2],
+                                target_memory=pl.MemorySpace.Vec,
+                            )
+                            next_right = pl.add(pl.row_expand_mul(right_iter, alpha), pl.row_expand_mul(pv_right, beta))
+                            m_valid, l_valid, left_valid, right_valid = pl.yield_(next_m, next_l, next_left, next_right)
+                        else:
+                            m_valid, l_valid, left_valid, right_valid = pl.yield_(m_iter, l_iter, left_iter, right_iter)
+                        m_after, l_after, left_after, right_after = pl.yield_(m_valid, l_valid, left_valid, right_valid)
+                    else:
+                        m_after, l_after, left_after, right_after = pl.yield_(m_iter, l_iter, left_iter, right_iter)
+                    running_m, running_l, running_left, running_right = pl.yield_(m_after, l_after, left_after, right_after)
+                qk_output_row = qk_t * H + qk_lane_head
+                pl.store(running_m, [qk_output_row, 0], sparse_mi)
+                pl.store(running_l, [qk_output_row, 0], sparse_li)
+                pl.store(running_left, [qk_output_row, 0], sparse_oi)
+                pl.store(running_right, [qk_output_row, HEAD_DIM // 2], sparse_oi)
 
     o_packed_flat = pl.reshape(
         o_packed_heads,
@@ -223,25 +322,10 @@ def dspark_attention(
     for merge_idx in pl.spmd(T * (H // H_TILE), name_hint="dspark_merge_norm"):
         merge_token_idx = merge_idx // (H // H_TILE)
         merge_head0 = (merge_idx % (H // H_TILE)) * H_TILE
-        merge_partial_row0 = merge_token_idx * SPARSE_BLOCKS * H + merge_head0
+        merge_partial_row0 = merge_token_idx * H + merge_head0
         running_max = sparse_mi[merge_partial_row0 : merge_partial_row0 + H_TILE, 0:1]
         running_sum = sparse_li[merge_partial_row0 : merge_partial_row0 + H_TILE, 0:1]
         running_out = sparse_oi[merge_partial_row0 : merge_partial_row0 + H_TILE, :]
-        for merge_sparse_block in pl.range(1, SPARSE_BLOCKS):
-            merge_partial_row = merge_partial_row0 + merge_sparse_block * H
-            block_max = sparse_mi[merge_partial_row : merge_partial_row + H_TILE, 0:1]
-            block_sum = sparse_li[merge_partial_row : merge_partial_row + H_TILE, 0:1]
-            block_out = sparse_oi[merge_partial_row : merge_partial_row + H_TILE, :]
-            merged_max = pl.maximum(running_max, block_max)
-            running_scale = pl.exp(pl.sub(running_max, merged_max))
-            block_scale = pl.exp(pl.sub(block_max, merged_max))
-            running_out_scaled = pl.row_expand_mul(running_out, running_scale)
-            block_out_scaled = pl.row_expand_mul(block_out, block_scale)
-            running_out = pl.add(running_out_scaled, block_out_scaled)
-            running_sum_scaled = pl.mul(running_sum, running_scale)
-            block_sum_scaled = pl.mul(block_sum, block_scale)
-            running_sum = pl.add(running_sum_scaled, block_sum_scaled)
-            running_max = merged_max
         sink_col = pl.reshape(attn_sink[merge_head0 : merge_head0 + H_TILE], [H_TILE, 1])
         sink_exp = pl.exp(pl.sub(sink_col, running_max))
         denominator = pl.add(running_sum, sink_exp)
@@ -252,8 +336,12 @@ def dspark_attention(
         attn_rope = attn_normed[:, NOPE_DIM:HEAD_DIM]
         rope_even = pl.gather(attn_rope, mask_pattern=pl.tile.MaskPattern.P0101)
         rope_odd = pl.gather(attn_rope, mask_pattern=pl.tile.MaskPattern.P1010)
-        cos_half = rope_cos_t[merge_token_idx : merge_token_idx + 1, 0:ROPE_HALF]
-        sin_half = rope_sin_t[merge_token_idx : merge_token_idx + 1, 0:ROPE_HALF]
+        cos_half = freqs_cos_local[
+            merge_token_idx : merge_token_idx + 1, 0:ROPE_HALF
+        ]
+        sin_half = freqs_sin_local[
+            merge_token_idx : merge_token_idx + 1, 0:ROPE_HALF
+        ]
         cos_fp32 = pl.cast(cos_half, target_type=pl.FP32, mode="none")
         sin_fp32 = pl.cast(sin_half, target_type=pl.FP32, mode="none")
         inverse_even_cos = pl.col_expand_mul(rope_even, cos_fp32)
@@ -293,8 +381,10 @@ def dspark_attention_test(
     wkv: pl.Tensor[[D, HEAD_DIM], pl.BF16],
     gamma_cq: pl.Tensor[[Q_LORA], pl.BF16],
     gamma_ckv: pl.Tensor[[HEAD_DIM], pl.BF16],
-    freqs_cos: pl.Tensor[[MAX_SEQ_LEN, ROPE_DIM], pl.BF16],
-    freqs_sin: pl.Tensor[[MAX_SEQ_LEN, ROPE_DIM], pl.BF16],
+    freqs_cos_local: pl.Tensor[[T, ROPE_DIM], pl.BF16],
+    freqs_sin_local: pl.Tensor[[T, ROPE_DIM], pl.BF16],
+    freqs_cos: pl.Tensor[[KV_T_DYN, ROPE_DIM], pl.BF16],
+    freqs_sin: pl.Tensor[[KV_T_DYN, ROPE_DIM], pl.BF16],
     position_ids: pl.Tensor[[T], pl.INT32],
     kv_cache: pl.InOut[pl.Tensor[[ORI_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
     slot_mapping: pl.Tensor[[T], pl.INT64],
@@ -305,6 +395,8 @@ def dspark_attention_test(
         pl.Tensor[[O_GROUPS, LOCAL_T_PAD * HEADS_PER_GROUP, HEAD_DIM], pl.BF16]
     ],
 ):
+    freqs_cos.bind_dynamic(0, KV_T_DYN)
+    freqs_sin.bind_dynamic(0, KV_T_DYN)
     kv_cache.bind_dynamic(0, ORI_BLOCK_NUM_DYN)
     o_packed_flat = pl.reshape(
         o_packed_heads,
@@ -314,7 +406,8 @@ def dspark_attention_test(
         x,
         x,
         wq_a, wq_b, wq_b_scale, wkv, gamma_cq, gamma_ckv,
-        freqs_cos, freqs_sin, position_ids, position_ids,
+        freqs_cos_local, freqs_sin_local, freqs_cos, freqs_sin,
+        position_ids, position_ids,
         kv_cache, slot_mapping, swa_indices, swa_lens,
         attn_sink, o_packed_flat,
     )
@@ -325,15 +418,13 @@ def golden_dspark_attention(tensors):
     import torch
     from qkv_proj_rope import golden_qkv_proj_rope
 
-    positions = tensors["position_ids"].long()
-    rope_cos = tensors["freqs_cos"].index_select(0, positions)
-    rope_sin = tensors["freqs_sin"].index_select(0, positions)
+    rope_cos = tensors["freqs_cos_local"]
+    rope_sin = tensors["freqs_sin_local"]
 
     q = torch.zeros(T, H, HEAD_DIM, dtype=torch.bfloat16)
-    kv = torch.zeros(T, HEAD_DIM, dtype=torch.bfloat16)
     qr = torch.zeros(T, Q_LORA, dtype=torch.int8)
     qr_scale = torch.zeros(T, 1, dtype=torch.float32)
-    golden_qkv_proj_rope({
+    local_projection = {
         "x": tensors["x"],
         "wq_a": tensors["wq_a"],
         "wq_b": tensors["wq_b"],
@@ -344,10 +435,23 @@ def golden_dspark_attention(tensors):
         "gamma_cq": tensors["gamma_cq"],
         "gamma_ckv": tensors["gamma_ckv"],
         "q": q,
-        "kv": kv,
+        "kv": torch.zeros(T, HEAD_DIM, dtype=torch.bfloat16),
         "qr": qr,
         "qr_scale": qr_scale,
+    }
+    golden_qkv_proj_rope(local_projection)
+
+    kv = torch.zeros(T, HEAD_DIM, dtype=torch.bfloat16)
+    group_projection = dict(local_projection)
+    group_projection.update({
+        "rope_cos": tensors["freqs_cos"],
+        "rope_sin": tensors["freqs_sin"],
+        "q": torch.zeros_like(q),
+        "kv": kv,
+        "qr": torch.zeros_like(qr),
+        "qr_scale": torch.zeros_like(qr_scale),
     })
+    golden_qkv_proj_rope(group_projection)
 
     kv_cache_flat = tensors["kv_cache"].view(-1, HEAD_DIM)
     slots = tensors["slot_mapping"]
@@ -398,15 +502,13 @@ def build_tensor_specs(start_pos=None):
     from golden import TensorSpec
     from utils import (
         block_table,
-        build_rope_tables,
         paged_slot_mapping,
         position_ids_from_starts,
         quant_w_per_channel,
         resolve_start_positions,
         swa_decode_start_set,
+        token_local_rope,
     )
-
-    freqs_cos, freqs_sin = build_rope_tables(M, 0, dtype=torch.bfloat16)
 
     def init_start_pos():
         return resolve_start_positions(
@@ -422,6 +524,36 @@ def build_tensor_specs(start_pos=None):
 
     def init_position_ids():
         return position_ids_from_starts(init_start_pos(), seq=S).reshape(-1).contiguous()
+
+    def init_freqs_cos():
+        cos, _ = token_local_rope(
+            M, 0, init_position_ids(), max_seq_len=MAX_SEQ_LEN, dtype=torch.bfloat16
+        )
+        return cos
+
+    def init_freqs_sin():
+        _, sin = token_local_rope(
+            M, 0, init_position_ids(), max_seq_len=MAX_SEQ_LEN, dtype=torch.bfloat16
+        )
+        return sin
+
+    def init_group_freqs_cos():
+        positions = torch.remainder(
+            init_position_ids().to(torch.int64) + 1, MAX_SEQ_LEN
+        )
+        cos, _ = token_local_rope(
+            M, 0, positions, max_seq_len=MAX_SEQ_LEN, dtype=torch.bfloat16
+        )
+        return cos
+
+    def init_group_freqs_sin():
+        positions = torch.remainder(
+            init_position_ids().to(torch.int64) + 1, MAX_SEQ_LEN
+        )
+        _, sin = token_local_rope(
+            M, 0, positions, max_seq_len=MAX_SEQ_LEN, dtype=torch.bfloat16
+        )
+        return sin
 
     def init_slot_mapping():
         return paged_slot_mapping(
@@ -473,8 +605,10 @@ def build_tensor_specs(start_pos=None):
         TensorSpec("wkv", [D, HEAD_DIM], torch.bfloat16, init_value=init_wkv),
         TensorSpec("gamma_cq", [Q_LORA], torch.bfloat16, init_value=lambda: torch.ones(Q_LORA)),
         TensorSpec("gamma_ckv", [HEAD_DIM], torch.bfloat16, init_value=lambda: torch.ones(HEAD_DIM)),
-        TensorSpec("freqs_cos", [MAX_SEQ_LEN, ROPE_DIM], torch.bfloat16, init_value=lambda: freqs_cos.clone()),
-        TensorSpec("freqs_sin", [MAX_SEQ_LEN, ROPE_DIM], torch.bfloat16, init_value=lambda: freqs_sin.clone()),
+        TensorSpec("freqs_cos_local", [T, ROPE_DIM], torch.bfloat16, init_value=init_freqs_cos),
+        TensorSpec("freqs_sin_local", [T, ROPE_DIM], torch.bfloat16, init_value=init_freqs_sin),
+        TensorSpec("freqs_cos", [T, ROPE_DIM], torch.bfloat16, init_value=init_group_freqs_cos),
+        TensorSpec("freqs_sin", [T, ROPE_DIM], torch.bfloat16, init_value=init_group_freqs_sin),
         TensorSpec("position_ids", [T], torch.int32, init_value=init_position_ids),
         TensorSpec(
             "kv_cache",
@@ -502,7 +636,9 @@ if __name__ == "__main__":
     parser.add_argument("-p", "--platform", type=str, default="a2a3", choices=["a2a3", "a2a3sim", "a5", "a5sim"])
     parser.add_argument("-d", "--device", type=int, default=0)
     parser.add_argument("--start-pos", type=int, default=None)
-    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2, 4))
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=range(5))
+    parser.add_argument("--save-data", action="store_true", help="Save inputs and golden outputs for replay.")
+    parser.add_argument("--golden-data", type=str, default=None)
     parser.add_argument("--dump-passes", action="store_true", default=False)
     args = parser.parse_args()
 
@@ -510,8 +646,10 @@ if __name__ == "__main__":
         fn=dspark_attention_test,
         specs=build_tensor_specs(args.start_pos),
         golden_fn=golden_dspark_attention,
-        compile_cfg=dict(dump_passes=args.dump_passes),
-        runtime_cfg=dict(
+        save_data=args.save_data,
+        golden_data=args.golden_data,
+        config=dict(
+            dump_passes=args.dump_passes,
             platform=args.platform,
             device_id=args.device,
             enable_chip_swimlane=args.enable_chip_swimlane,

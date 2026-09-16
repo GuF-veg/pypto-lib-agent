@@ -22,8 +22,7 @@ from config import (
     BLOCK_SIZE,
     DECODE_CMP_BLOCK_NUM,
     DECODE_ORI_BLOCK_NUM,
-    KV_CMP_MAX_BLOCKS,
-    KV_ORI_MAX_BLOCKS,
+    KV_ORI_TABLE_MAX_BLOCKS,
     INT8_SCALE_MAX,
     INT8_AMAX_EPS,
 )
@@ -32,6 +31,7 @@ from config import (
 # Dynamic shape variables.
 ORI_BLOCK_NUM_DYN = pl.dynamic("ORI_BLOCK_NUM_DYN")
 CMP_BLOCK_NUM_DYN = pl.dynamic("CMP_BLOCK_NUM_DYN")
+CMP_TABLE_BLOCKS_DYN = pl.dynamic("CSA_CMP_TABLE_BLOCKS_DYN")
 
 # model config
 B = DECODE_BATCH
@@ -55,14 +55,12 @@ O_GROUP_IN = HEADS_PER_GROUP * HEAD_DIM
 COMPRESS_RATIO = 4
 CMP_STORAGE_BLOCK_SIZE = BLOCK_SIZE // COMPRESS_RATIO
 COMPRESS_RATIO_INV = 1.0 / COMPRESS_RATIO
-INDEXER_SCORE_LEN = MAX_SEQ_LEN // 4
 CSA_CMP_GE_BIAS = 1.0  # raw + 1, folded for the ge clamp
 NEG_INF = -1.0e20
 
 # paged KV cache
-ORI_MAX_BLOCKS = KV_ORI_MAX_BLOCKS
+ORI_TABLE_MAX_BLOCKS = KV_ORI_TABLE_MAX_BLOCKS
 ORI_BLOCK_NUM = DECODE_ORI_BLOCK_NUM
-CMP_MAX_BLOCKS = KV_CMP_MAX_BLOCKS
 CMP_BLOCK_NUM = DECODE_CMP_BLOCK_NUM
 
 # tiling
@@ -102,8 +100,8 @@ def sparse_attn_csa(
     ori_kv: pl.Tensor[[ORI_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
     window_swa_indices: pl.Tensor[[T, WIN], pl.INT32],
     cmp_kv: pl.Tensor[[CMP_BLOCK_NUM_DYN, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
-    cmp_block_table: pl.Tensor[[B, CMP_MAX_BLOCKS], pl.INT32],
-    idx_topk: pl.Tensor[[T, INDEXER_SCORE_LEN], pl.INT32],
+    cmp_block_table: pl.Tensor[[B, CMP_TABLE_BLOCKS_DYN], pl.INT32],
+    idx_topk: pl.Tensor[[T, IDX_TOPK], pl.INT32],
     position_ids: pl.Tensor[[T, 1], pl.INT32],
     attn_sink: pl.Tensor[[H], pl.FP32],
     freqs_cos: pl.Tensor[[T, ROPE_DIM], pl.BF16],
@@ -407,14 +405,12 @@ def sparse_attn_csa(
                          allow_early_resolve=True) as pa_tid:
                 nf = pl.tile.get_block_idx()
                 n0 = nf * PROJ_A_MM_N_TILE
-                xa0_chunk = pl.slice(o_packed, [MM_T_TILE, A_K_TILE], [row_base_o, 0], valid_shape=[T, A_K_TILE])
-                wa0_chunk = wo_a[g : g + 1, n0 : n0 + PROJ_A_MM_N_TILE, 0:A_K_TILE]
-                acc_a = pl.matmul(xa0_chunk, wa0_chunk, b_trans=True, out_dtype=pl.FP32)
-                for kb in pl.pipeline(1, O_GROUP_IN // A_K_TILE, stage=2):
+                acc_a = pl.create_tensor([1, MM_T_TILE, PROJ_A_MM_N_TILE], dtype=pl.FP32)
+                for kb in pl.pipeline(0, O_GROUP_IN // A_K_TILE, stage=2):
                     k0 = kb * A_K_TILE
                     xa_k_chunk = pl.slice(o_packed, [MM_T_TILE, A_K_TILE], [row_base_o, k0], valid_shape=[T, A_K_TILE])
                     wa_k_chunk = wo_a[g : g + 1, n0 : n0 + PROJ_A_MM_N_TILE, k0 : k0 + A_K_TILE]
-                    acc_a = pl.matmul_acc(acc_a, xa_k_chunk, wa_k_chunk, b_trans=True)
+                    acc_a = pl.matmul_acc(acc_a, xa_k_chunk, wa_k_chunk, b_trans=True, init_cond=(kb == 0))
                 # acc_a is 3D (wo_a keeps its group axis), which subscript-write cannot express.
                 o_r_pad = pl.assemble(o_r_pad, acc_a, [0, out_col_g + n0])
 
@@ -450,14 +446,9 @@ def sparse_attn_csa(
                     acc_b = pl.create_tensor([MM_T_TILE, PROJ_B_MM_N_TILE], dtype=pl.INT32)
                     for kb in pl.pipeline(0, O_LORA // B_K_TILE, stage=2):
                         k0 = col_g + kb * B_K_TILE
-                        if kb == 0:
-                            b_act = o_r_i8_pad[:, col_g : col_g + B_K_TILE]
-                            b_weight = wo_b[n0 : n0 + PROJ_B_MM_N_TILE, col_g : col_g + B_K_TILE]
-                            acc_b = pl.matmul(b_act, b_weight, b_trans=True, out_dtype=pl.INT32)
-                        else:
-                            b_act = o_r_i8_pad[:, k0 : k0 + B_K_TILE]
-                            b_weight = wo_b[n0 : n0 + PROJ_B_MM_N_TILE, k0 : k0 + B_K_TILE]
-                            acc_b = pl.matmul_acc(acc_b, b_act, b_weight, b_trans=True)
+                        b_act = o_r_i8_pad[:, k0 : k0 + B_K_TILE]
+                        b_weight = wo_b[n0 : n0 + PROJ_B_MM_N_TILE, k0 : k0 + B_K_TILE]
+                        acc_b = pl.matmul_acc(acc_b, b_act, b_weight, b_trans=True, init_cond=(kb == 0))
                     partials[0:MM_T_TILE, g * D + n0 : g * D + n0 + PROJ_B_MM_N_TILE] = acc_b
             proj_b_tids[g] = pb_tid
 
@@ -495,8 +486,8 @@ def sparse_attn_test(
     ori_kv: pl.Tensor[[ORI_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
     window_swa_indices: pl.Tensor[[T, WIN], pl.INT32],
     cmp_kv: pl.Tensor[[CMP_BLOCK_NUM_DYN, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
-    cmp_block_table: pl.Tensor[[B, CMP_MAX_BLOCKS], pl.INT32],
-    idx_topk: pl.Tensor[[T, INDEXER_SCORE_LEN], pl.INT32],
+    cmp_block_table: pl.Tensor[[B, CMP_TABLE_BLOCKS_DYN], pl.INT32],
+    idx_topk: pl.Tensor[[T, IDX_TOPK], pl.INT32],
     position_ids: pl.Tensor[[T, 1], pl.INT32],
     attn_sink: pl.Tensor[[H], pl.FP32],
     freqs_cos: pl.Tensor[[T, ROPE_DIM], pl.BF16],
@@ -506,6 +497,7 @@ def sparse_attn_test(
     wo_b_scale: pl.Tensor[[D], pl.FP32],
     attn_out: pl.Out[pl.Tensor[[T, D], pl.BF16]],
 ):
+    cmp_block_table.bind_dynamic(1, CMP_TABLE_BLOCKS_DYN)
     sparse_attn_csa(
         q,
         ori_kv, window_swa_indices,
@@ -654,6 +646,7 @@ def build_tensor_specs(
     from utils import build_rope_tables, materialize_token_rope_tables
 
     cmp_valid = IDX_TOPK
+    cmp_table_blocks = (COMPRESS_RATIO * CMP_TOPK) // BLOCK_SIZE + 1
     shared_freqs_cos, shared_freqs_sin = build_rope_tables(M, COMPRESS_RATIO, dtype=torch.bfloat16)
     rope_positions = torch.arange(T, dtype=torch.int32)
     shared_rope_cos, shared_rope_sin = materialize_token_rope_tables(shared_freqs_cos, shared_freqs_sin, rope_positions)
@@ -702,11 +695,11 @@ def build_tensor_specs(
 
     def init_window_block_table():
         """Build the demo block table for the sliding-window cache pages."""
-        return block_table(batch=B, table_blocks=ORI_MAX_BLOCKS, physical_blocks=ORI_BLOCK_NUM)
+        return block_table(batch=B, table_blocks=ORI_TABLE_MAX_BLOCKS, physical_blocks=ORI_BLOCK_NUM)
 
     def init_cmp_block_table():
         """Build the demo block table for the compressed-cache pages."""
-        rows = torch.arange(CMP_MAX_BLOCKS, dtype=torch.int32) % CMP_BLOCK_NUM
+        rows = torch.arange(cmp_table_blocks, dtype=torch.int32) % CMP_BLOCK_NUM
         return rows.unsqueeze(0).expand(B, -1).clone()
 
     def init_cmp_sparse_indices():
@@ -731,9 +724,7 @@ def build_tensor_specs(
         """Raw indexer topk feeding sparse_attn's compressed-slot masking. Only the
         first CMP_TOPK cols are read; identity mask here (see init_position_ids), so
         the masked output equals this fixture pattern."""
-        topk = torch.full((T, INDEXER_SCORE_LEN), -1, dtype=torch.int32)
-        topk[:, :CMP_TOPK] = init_cmp_sparse_indices()
-        return topk
+        return init_cmp_sparse_indices()
 
     def init_position_ids():
         """Large enough that floor((pos + 1) / COMPRESS_RATIO) >= CMP_TOPK, so the
@@ -768,8 +759,8 @@ def build_tensor_specs(
         TensorSpec("ori_kv", [ORI_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], torch.bfloat16, init_value=init_ori_kv),
         TensorSpec("window_swa_indices", [T, WIN], torch.int32, init_value=init_window_swa_indices),
         TensorSpec("cmp_kv", [CMP_BLOCK_NUM, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], torch.bfloat16, init_value=init_cmp_kv),
-        TensorSpec("cmp_block_table", [B, CMP_MAX_BLOCKS], torch.int32, init_value=init_cmp_block_table),
-        TensorSpec("idx_topk", [T, INDEXER_SCORE_LEN], torch.int32, init_value=init_idx_topk),
+        TensorSpec("cmp_block_table", [B, cmp_table_blocks], torch.int32, init_value=init_cmp_block_table),
+        TensorSpec("idx_topk", [T, IDX_TOPK], torch.int32, init_value=init_idx_topk),
         TensorSpec("position_ids", [T, 1], torch.int32, init_value=init_position_ids),
         TensorSpec("attn_sink", [H], torch.float32, init_value=init_attn_sink),
         TensorSpec("freqs_cos", [T, ROPE_DIM], torch.bfloat16, init_value=init_cos),
@@ -797,7 +788,7 @@ if __name__ == "__main__":
     parser.add_argument("--cache-window-replacement-fixture", action="store_true", default=False,
                         help="Place a sentinel row inside the cache window prefix.")
     parser.add_argument("--golden-data", type=str, default=None)
-    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2))
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=range(5))
     parser.add_argument("--enable-dep-gen", action="store_true", default=False,
                         help="Capture PTO2 dependency edges (deps.json) for the swimlane converter.")
     parser.add_argument("--enable-pmu", nargs="?", const=2, default=0, type=int, choices=[0, 1, 2, 4])
@@ -816,8 +807,8 @@ if __name__ == "__main__":
         ),
         golden_fn=golden_sparse_attn,
         golden_data=args.golden_data,
-        compile_cfg=dict(dump_passes=args.dump_passes),
-        runtime_cfg=dict(
+        config=dict(
+            dump_passes=args.dump_passes,
             platform=args.platform,
             device_id=args.device,
             enable_chip_swimlane=args.enable_chip_swimlane,

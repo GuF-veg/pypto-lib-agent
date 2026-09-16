@@ -13,7 +13,7 @@ import pypto.language as pl
 from config import (
     FLASH as M,
     BLOCK_SIZE,
-    CSA_INNER_STATE_PHYSICAL_BLOCKS,
+    CSA_INNER_STATE_BLOCKS_PER_REQUEST,
     FP32_NEG_INF,
     INT8_SCALE_MAX,
     INT8_AMAX_EPS,
@@ -398,10 +398,7 @@ def _prefill_indexer_dense_tile(
                         q0 : q0 + Q_TILE,
                     ]
                     wq_tile = wq_b[q0 : q0 + Q_TILE, o0 : o0 + Q_OUT_TILE]
-                    if q0 == 0:
-                        qr_acc = pl.matmul(qr_tile, wq_tile, out_dtype=pl.INT32)
-                    else:
-                        qr_acc = pl.matmul_acc(qr_acc, qr_tile, wq_tile)
+                    qr_acc = pl.matmul_acc(qr_acc, qr_tile, wq_tile, init_cond=(q0 == 0))
                 wq_scale = pl.reshape(wq_b_scale[o0 : o0 + Q_OUT_TILE], [1, Q_OUT_TILE])
                 for rl in pl.range(0, QR_PROJ_MM_ROW_TILE, QR_PROJ_ROW_TILE):
                     acc_fp32 = pl.cast(
@@ -448,10 +445,7 @@ def _prefill_indexer_dense_tile(
                         tail_q0 : tail_q0 + Q_TILE,
                         tail_o0 : tail_o0 + Q_OUT_TILE,
                     ]
-                    if tail_q0 == 0:
-                        qr_tail_acc = pl.matmul(qr_tail, wq_tail, out_dtype=pl.INT32)
-                    else:
-                        qr_tail_acc = pl.matmul_acc(qr_tail_acc, qr_tail, wq_tail)
+                    qr_tail_acc = pl.matmul_acc(qr_tail_acc, qr_tail, wq_tail, init_cond=(tail_q0 == 0))
                 tail_acc_fp32 = pl.cast(qr_tail_acc, target_type=pl.FP32, mode="none")
                 tail_scale = pl.slice(
                     qr_scale_view,
@@ -573,10 +567,7 @@ def _prefill_indexer_dense_tile(
                     d0 : d0 + D_TILE,
                 ]
                 wp_tile = weights_proj[d0 : d0 + D_TILE, :]
-                if d0 == 0:
-                    weights_acc = pl.matmul(x_tile, wp_tile, out_dtype=pl.FP32)
-                else:
-                    weights_acc = pl.matmul_acc(weights_acc, x_tile, wp_tile)
+                weights_acc = pl.matmul_acc(weights_acc, x_tile, wp_tile, init_cond=(d0 == 0))
             weights[weights_t0 : weights_t0 + WEIGHTS_ROW_TILE, :] = pl.mul(
                 weights_acc,
                 WEIGHTS_SCALE,
@@ -607,10 +598,7 @@ def _prefill_indexer_dense_tile(
                         valid_shape=[weights_tail_valid, D_TILE],
                     )
                     wp_tail = weights_proj[tail_d0 : tail_d0 + D_TILE, :]
-                    if tail_d0 == 0:
-                        weights_tail_acc = pl.matmul(x_tail, wp_tail, out_dtype=pl.FP32)
-                    else:
-                        weights_tail_acc = pl.matmul_acc(weights_tail_acc, x_tail, wp_tail)
+                    weights_tail_acc = pl.matmul_acc(weights_tail_acc, x_tail, wp_tail, init_cond=(tail_d0 == 0))
                 weights[
                     weights_tail_t0 : weights_tail_t0 + WEIGHTS_TAIL_ROW_TILE,
                     :,
@@ -1041,14 +1029,16 @@ def build_tensor_specs(start_pos: int = START_POS, token_count: int = PREFILL_SE
 
     def init_inner_compress_state_block_table():
         blocks = torch.arange(INNER_STATE_MAX_BLOCKS, dtype=torch.int64)
-        return ((blocks * 17 + 3) % CSA_INNER_STATE_PHYSICAL_BLOCKS).to(torch.int32).unsqueeze(0)
+        physical_blocks = (blocks * 17 + 3) % CSA_INNER_STATE_BLOCKS_PER_REQUEST
+        physical_blocks = physical_blocks.to(torch.int32)
+        return physical_blocks.unsqueeze(0)
 
     def state_row(abs_pos):
         if abs_pos < 0 or abs_pos >= MAX_SEQ_LEN:
             return -1
         block = abs_pos // INNER_STATE_BLOCK_SIZE
         intra = abs_pos % INNER_STATE_BLOCK_SIZE
-        physical_block = (block * 17 + 3) % CSA_INNER_STATE_PHYSICAL_BLOCKS
+        physical_block = (block * 17 + 3) % CSA_INNER_STATE_BLOCKS_PER_REQUEST
         return physical_block * INNER_STATE_BLOCK_SIZE + intra
 
     def init_x():
@@ -1291,7 +1281,7 @@ if __name__ == "__main__":
         default=PREFILL_SEQ,
         help=f"Physical token length in [1, {PREFILL_MAX_TOKENS}].",
     )
-    parser.add_argument("--enable-chip-swimlane", action="store_true", default=False)
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=range(5))
     parser.add_argument("--dump-passes", action="store_true", default=False)
     args = parser.parse_args()
 
@@ -1403,9 +1393,11 @@ if __name__ == "__main__":
         fn=prefill_indexer_test,
         specs=build_tensor_specs(args.start_pos, args.token_count),
         golden_fn=golden_prefill_indexer,
-        compile_cfg=dict(dump_passes=args.dump_passes),
-        runtime_cfg=dict(
-            platform=args.platform, device_id=args.device, enable_chip_swimlane=args.enable_chip_swimlane
+        config=dict(
+            dump_passes=args.dump_passes,
+            platform=args.platform,
+            device_id=args.device,
+            enable_chip_swimlane=args.enable_chip_swimlane,
         ),
         rtol=1e-3,
         atol=1e-3,

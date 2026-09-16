@@ -37,10 +37,7 @@ def gemm(
                     k0 = kb * K_TILE
                     tile_a = a[mb : mb + M_TILE, k0 : k0 + K_TILE]
                     tile_b = b[k0 : k0 + K_TILE, nb : nb + N_TILE]
-                    if kb == 0:
-                        acc = pl.matmul(tile_a, tile_b)
-                    else:
-                        acc = pl.matmul_acc(acc, tile_a, tile_b)
+                    acc = pl.matmul_acc(acc, tile_a, tile_b, init_cond=(kb == 0))
                 c[mb : mb + M_TILE, nb : nb + N_TILE] = acc
     return c
 
@@ -72,14 +69,14 @@ if __name__ == "__main__":
     parser.add_argument("-p", "--platform", type=str, default="a2a3",
                         choices=["a2a3", "a2a3sim", "a5", "a5sim"])
     parser.add_argument("-d", "--device", type=int, default=0)
-    parser.add_argument("--enable-chip-swimlane", action="store_true", default=False)
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=range(5))
     args = parser.parse_args()
 
     result = run(
         fn=gemm,
         specs=build_tensor_specs(),
         golden_fn=golden_gemm,
-        runtime_cfg=dict(
+        config=dict(
             platform=args.platform,
             device_id=args.device,
             enable_chip_swimlane=args.enable_chip_swimlane,

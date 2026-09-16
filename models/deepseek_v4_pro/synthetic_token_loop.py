@@ -677,7 +677,7 @@ def _unique_storage_tensors(tensors):
 
 def _run_session(args, prefill_dir, decode_dir, model_dir):
     from pypto.backend import BackendType
-    from pypto.ir.distributed_compiled_program import (
+    from pypto.ir import (
         DistributedCompiledProgram,
         DistributedConfig,
     )
@@ -792,9 +792,9 @@ def _run_session(args, prefill_dir, decode_dir, model_dir):
 
         run_config_parameters = inspect.signature(RunConfig).parameters
         if "enable_chip_swimlane" in run_config_parameters:
-            swimlane_config = {"enable_chip_swimlane": False}
+            swimlane_config = {"enable_chip_swimlane": 0}
         elif "enable_l2_swimlane" in run_config_parameters:
-            swimlane_config = {"enable_l2_swimlane": False}
+            swimlane_config = {"enable_l2_swimlane": 0}
         else:
             raise TypeError(
                 "RunConfig supports neither enable_chip_swimlane nor "
@@ -804,14 +804,12 @@ def _run_session(args, prefill_dir, decode_dir, model_dir):
         prefill_config = RunConfig(
             platform=args.platform,
             device_id=0,
-            backend_type=BackendType.Ascend950,
             ring_heap=PREFILL_RING_HEAP,
             **swimlane_config,
         )
         decode_config = RunConfig(
             platform=args.platform,
             device_id=0,
-            backend_type=BackendType.Ascend950,
             **swimlane_config,
         )
 

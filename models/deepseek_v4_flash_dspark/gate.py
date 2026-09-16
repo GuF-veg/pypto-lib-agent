@@ -30,6 +30,7 @@ N_HASH_LAYERS = M.num_hash_layers
 
 # tiling
 T_TILE = 8
+NORM_TOKEN_TILE = 4
 GATE_T_TILE = 8
 GATE_M_TILE = 16        # cube M-tile: matmul rows must be a multiple of 16 (fractal)
 GATE_N_TILE = 16        # expert columns per gate spmd block
@@ -82,50 +83,60 @@ def gate(
     if active_tokens > T:
         active_tokens = pl.cast(T, pl.INDEX)
     active_gate_tiles = (active_tokens + GATE_M_TILE - 1) // GATE_M_TILE
+    # Keep one producer tile alive for an owner with zero local tokens.  The
+    # following pre-route task overwrites the whole fixed-capacity output with
+    # zeroes, while the rank still publishes zero route counts and participates
+    # in the EP barriers.  A zero-sized producer loop leaves x_norm_i8 without a
+    # producer and can stall its fixed-shape shared-expert consumer.
+    if active_gate_tiles < 1:
+        active_gate_tiles = pl.cast(1, pl.INDEX)
     active_gate_tokens = active_gate_tiles * GATE_M_TILE
     if active_gate_tokens > T:
         active_gate_tokens = pl.cast(T, pl.INDEX)
 
-    # One token per core with two-level full-row reductions.
+    # Each block normalizes a group of tokens with full-row reductions.
     norm_w_2d = pl.reshape(norm_w, [1, D])
-    for tok in pl.spmd(active_gate_tokens, name_hint="ffn_norm", allow_early_resolve=True):
-        rms_x = pl.cast(pl.tile.load(x_mixed, [tok, 0], [1, D]), pl.FP32)
-        rms_w = pl.cast(pl.tile.load(norm_w_2d, [0, 0], [1, D]), pl.FP32)
-        xg = pl.mul(rms_x, rms_w)
-        pl.tile.store(xg, [tok, 0], xg_buf, shapes=[1, D])
+    norm_blocks = (active_gate_tokens + NORM_TOKEN_TILE - 1) // NORM_TOKEN_TILE
+    for tok_block in pl.spmd(norm_blocks, name_hint="ffn_norm", allow_early_resolve=True):
+        tok0 = tok_block * NORM_TOKEN_TILE
+        for tok in pl.range(tok0, pl.min(tok0 + NORM_TOKEN_TILE, active_gate_tokens)):
+            rms_x = pl.cast(pl.tile.load(x_mixed, [tok, 0], [1, D]), pl.FP32)
+            rms_w = pl.cast(pl.tile.load(norm_w_2d, [0, 0], [1, D]), pl.FP32)
+            xg = pl.mul(rms_x, rms_w)
+            pl.tile.store(xg, [tok, 0], xg_buf, shapes=[1, D])
 
-        sq_rows = pl.reshape(pl.mul(rms_x, rms_x), [ROW_PAD, FFN_REDUCE_TILE])
-        sq_partial_tmp = pl.create_tile([ROW_PAD, FFN_REDUCE_TILE], dtype=pl.FP32)
-        sq_partial = pl.row_sum(sq_rows, sq_partial_tmp)
-        sq_reduce = pl.create_tile([ROW_PAD, ROW_PAD], dtype=pl.FP32)
-        sq_reduce[0:1, :] = pl.reshape(sq_partial, [1, ROW_PAD])
-        sq_reduce = pl.set_validshape(sq_reduce, 1, ROW_PAD)
-        sq_sum_tmp = pl.create_tile([ROW_PAD, ROW_PAD], dtype=pl.FP32)
-        sq_sum = pl.row_sum(sq_reduce, sq_sum_tmp)
-        sq_sum = pl.set_validshape(pl.reshape(sq_sum, [1, ROW_PAD]), 1, 1)
-        inv_rms = pl.recip(pl.sqrt(pl.add(pl.mul(sq_sum, 1.0 / D), NORM_EPS)))
-        pl.tile.store(inv_rms, [tok, 0], inv_rms_buf, shapes=[1, 1])
+            sq_rows = pl.reshape(pl.mul(rms_x, rms_x), [ROW_PAD, FFN_REDUCE_TILE])
+            sq_partial_tmp = pl.create_tile([ROW_PAD, FFN_REDUCE_TILE], dtype=pl.FP32)
+            sq_partial = pl.row_sum(sq_rows, sq_partial_tmp)
+            sq_reduce = pl.create_tile([ROW_PAD, ROW_PAD], dtype=pl.FP32)
+            sq_reduce[0:1, :] = pl.reshape(sq_partial, [1, ROW_PAD])
+            sq_reduce = pl.set_validshape(sq_reduce, 1, ROW_PAD)
+            sq_sum_tmp = pl.create_tile([ROW_PAD, ROW_PAD], dtype=pl.FP32)
+            sq_sum = pl.row_sum(sq_reduce, sq_sum_tmp)
+            sq_sum = pl.set_validshape(pl.reshape(sq_sum, [1, ROW_PAD]), 1, 1)
+            inv_rms = pl.recip(pl.sqrt(pl.add(pl.mul(sq_sum, 1.0 / D), NORM_EPS)))
+            pl.tile.store(inv_rms, [tok, 0], inv_rms_buf, shapes=[1, 1])
 
-        xg_abs_rows = pl.reshape(pl.abs(xg), [ROW_PAD, FFN_REDUCE_TILE])
-        amax_partial_tmp = pl.create_tile([ROW_PAD, FFN_REDUCE_TILE], dtype=pl.FP32)
-        amax_partial = pl.row_max(xg_abs_rows, amax_partial_tmp)
-        amax_reduce = pl.create_tile([ROW_PAD, ROW_PAD], dtype=pl.FP32)
-        amax_reduce[0:1, :] = pl.reshape(amax_partial, [1, ROW_PAD])
-        amax_reduce = pl.set_validshape(amax_reduce, 1, ROW_PAD)
-        amax_tmp = pl.create_tile([ROW_PAD, ROW_PAD], dtype=pl.FP32)
-        xg_amax = pl.row_max(amax_reduce, amax_tmp)
-        xg_amax = pl.set_validshape(pl.reshape(xg_amax, [1, ROW_PAD]), 1, 1)
-        amax_eps = pl.tile.full([1, ROW_PAD], dtype=pl.FP32, value=INT8_AMAX_EPS)
-        amax_eps = pl.set_validshape(amax_eps, 1, 1)
-        xg_amax = pl.maximum(xg_amax, amax_eps)
-        # quant scale = INT8_SCALE_MAX / amax(xg); dequant scale rides inv_rms.
-        scale_max = pl.tile.full([1, ROW_PAD], dtype=pl.FP32, value=INT8_SCALE_MAX)
-        scale_max = pl.set_validshape(scale_max, 1, 1)
-        xg_sq = pl.div(scale_max, xg_amax)
-        xg_dequant_scale = pl.mul(xg_amax, 1.0 / INT8_SCALE_MAX)
-        x_norm_dequant_scale = pl.mul(xg_dequant_scale, inv_rms)
-        pl.tile.store(x_norm_dequant_scale, [tok, 0], x_norm_scale, shapes=[1, 1])
-        pl.tile.store(xg_sq, [tok, 0], xn_scale_buf, shapes=[1, 1])
+            xg_abs_rows = pl.reshape(pl.abs(xg), [ROW_PAD, FFN_REDUCE_TILE])
+            amax_partial_tmp = pl.create_tile([ROW_PAD, FFN_REDUCE_TILE], dtype=pl.FP32)
+            amax_partial = pl.row_max(xg_abs_rows, amax_partial_tmp)
+            amax_reduce = pl.create_tile([ROW_PAD, ROW_PAD], dtype=pl.FP32)
+            amax_reduce[0:1, :] = pl.reshape(amax_partial, [1, ROW_PAD])
+            amax_reduce = pl.set_validshape(amax_reduce, 1, ROW_PAD)
+            amax_tmp = pl.create_tile([ROW_PAD, ROW_PAD], dtype=pl.FP32)
+            xg_amax = pl.row_max(amax_reduce, amax_tmp)
+            xg_amax = pl.set_validshape(pl.reshape(xg_amax, [1, ROW_PAD]), 1, 1)
+            amax_eps = pl.tile.full([1, ROW_PAD], dtype=pl.FP32, value=INT8_AMAX_EPS)
+            amax_eps = pl.set_validshape(amax_eps, 1, 1)
+            xg_amax = pl.maximum(xg_amax, amax_eps)
+            # quant scale = INT8_SCALE_MAX / amax(xg); dequant scale rides inv_rms.
+            scale_max = pl.tile.full([1, ROW_PAD], dtype=pl.FP32, value=INT8_SCALE_MAX)
+            scale_max = pl.set_validshape(scale_max, 1, 1)
+            xg_sq = pl.div(scale_max, xg_amax)
+            xg_dequant_scale = pl.mul(xg_amax, 1.0 / INT8_SCALE_MAX)
+            x_norm_dequant_scale = pl.mul(xg_dequant_scale, inv_rms)
+            pl.tile.store(x_norm_dequant_scale, [tok, 0], x_norm_scale, shapes=[1, 1])
+            pl.tile.store(xg_sq, [tok, 0], xn_scale_buf, shapes=[1, 1])
 
     seed_dummy = pl.system.task_dummy(deps=[])
 
@@ -182,10 +193,7 @@ def gate(
             gd_kd = kb * GATE_D_TILE
             gd_x = xg_buf[t1 : t1 + GATE_M_TILE, gd_kd : gd_kd + GATE_D_TILE]
             gd_w = gate_w[n0 : n0 + GATE_N_TILE, gd_kd : gd_kd + GATE_D_TILE]
-            if gd_kd == 0:
-                gate_logits_tile = pl.matmul(gd_x, gd_w, out_dtype=pl.FP32, b_trans=True)
-            else:
-                gate_logits_tile = pl.matmul_acc(gate_logits_tile, gd_x, gd_w, b_trans=True)
+            gate_logits_tile = pl.matmul_acc(gate_logits_tile, gd_x, gd_w, b_trans=True, init_cond=(gd_kd == 0))
         # xg omitted inv_rms; logits = inv_rms * (xg @ gate_w.T). Per-token row-scale.
         gate_logits_tile = pl.row_expand_mul(gate_logits_tile, inv_rms_buf[t1 : t1 + GATE_M_TILE, 0:1])
         gp_relu = pl.maximum(gate_logits_tile, 0.0)
@@ -202,6 +210,10 @@ def gate(
             biased_scores_buf[t1 : t1 + GATE_M_TILE, n0 : n0 + GATE_N_TILE] = gp_biased
 
     active_route_tiles = (active_tokens + GATE_T_TILE - 1) // GATE_T_TILE
+    # PyPTO cannot launch an SPMD task with zero blocks.  The guarded store in
+    # either routing path keeps this dummy tile from publishing any route.
+    if active_route_tiles < 1:
+        active_route_tiles = pl.cast(1, pl.INDEX)
     # Hash layers index via tid2eid[input_ids]; score layers sort+gather.
     if layer_id < N_HASH_LAYERS:
         for th_idx in pl.spmd(active_route_tiles, name_hint="route_hash", allow_early_resolve=True):
@@ -419,7 +431,7 @@ if __name__ == "__main__":
     parser.add_argument("-d", "--device", type=int, default=0)
     parser.add_argument("--layer-id", type=int, default=10)
     parser.add_argument("--num-tokens", type=int, default=T)
-    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2))
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=range(5))
     parser.add_argument("--dump-passes", action="store_true", default=False)
     args = parser.parse_args()
 
@@ -427,8 +439,8 @@ if __name__ == "__main__":
         fn=gate_test,
         specs=build_tensor_specs(layer_id=args.layer_id, num_tokens=args.num_tokens),
         golden_fn=golden_gate_core,
-        compile_cfg=dict(dump_passes=args.dump_passes),
-        runtime_cfg=dict(
+        config=dict(
+            dump_passes=args.dump_passes,
             platform=args.platform,
             device_id=args.device,
             enable_chip_swimlane=args.enable_chip_swimlane,

@@ -18,11 +18,10 @@ one; the converter now runs through :func:`main` instead, reading ``sys.argv``
 unchanged. That grep is a plain substring match over the whole file, so do not
 spell the guard's dunder name anywhere in this module, comments included.
 
-**Import order matters.** This module sets ``config.MOE_TOKENS`` and imports
-``moe`` plus the prefill attention modules at import time. A decode driver
-must import ``moe`` before it imports anything from here — every current call
-site does, because they all import from this module inside a function body
-rather than at module level. Keep it that way.
+The MXFP4/MXFP8 helpers in this module are intentionally lightweight to
+import. Full-network golden dependencies are loaded only by the functions
+that use them, so leaf MoE tests can reuse the helpers without freezing the
+prefill configuration or importing the distributed kernels.
 
 Full-network torch golden (packed-prefill forward)
 --------------------------------------------------
@@ -56,12 +55,12 @@ Converts the HuggingFace-style hybrid MXFP4-MXFP8 checkpoint (43 layers,
 the exact host-tensor ABI ``prefill_fwd.py`` / ``decode_fwd.py`` consume:
 
 - FP8 e4m3 weights (128x128-block UE8M0 scales) are dequantized, then either
-  kept BF16 (``wq_a``, ``wkv``, ``wo_a``) or re-quantized to the kernels'
-  W8A8 form: symmetric INT8 with a per-output-channel FP32 scale (amax/127,
-  the same round -> clamp +-127 -> fp16 -> int8 chain as the fixtures).
+  kept BF16 (``wq_a``, ``wkv``, ``wo_a``), re-quantized to the attention
+  kernels' W8A8 form, or quantized per input group to the shared experts'
+  native MXFP8 Cube ABI.
 - FP4 e2m1 routed-expert weights (packed two-per-byte, per-32-group UE8M0
-  scales along the input dim) are unpacked, dequantized and re-quantized to
-  the same INT8 + per-output-channel FP32 scale form.
+  scales along the input dim) are expanded exactly to FP8E4M3 values. Their
+  original E8M0 scales are preserved and packed for ``MX_B_NN``.
 - Per-layer tensors are stacked along dim 1 exactly like
   ``_make_stacked_spec`` (FWD stacks by model layer id 0..42; CSA/HCA stacks
   by kind order = ascending layer id of that compress-ratio kind), sharded
@@ -87,14 +86,11 @@ re-quantize ~280 GB), then run the drivers against the cache::
 while the harness builds its inputs.
 """
 
-# The prefill path runs PREFILL_TOKENS tokens. Set MOE_TOKENS before importing
-# moe, which freezes recv shapes and derives RECV_MAX at import time (mirrors
-# prefill_fwd.py; a no-op when prefill_fwd already imported moe).
 import config
-config.MOE_TOKENS = config.PREFILL_TOKENS
 
 import argparse
 import json
+import math
 import mmap
 import struct
 import warnings
@@ -103,31 +99,577 @@ from typing import Callable
 
 import torch
 
-# Import moe first: it applies the EP/active-preset override before the
-# attention modules bake config-derived shapes (matches prefill_fwd's order).
-# `D` comes from moe (moe.py defines it as M.hidden_size), so the converter
-# half no longer redefines it.
-from moe import D, HC_MULT, N_RANKS, T, golden_moe
-from config import (
-    ACTIVE as M,
-    ACTIVE as MODEL_CONFIG,
-    ACTIVE_BASE,
-    INT8_AMAX_EPS,
-    INT8_SCALE_MAX,
-)
-from prefill_attention_swa import golden_prefill_attention_swa
-from prefill_attention_hca import HCA_STATE_BLOCK_SIZE, golden_prefill_attention_hca
-from prefill_attention_csa import (
-    CSA_STATE_BLOCK_SIZE,
-    INNER_STATE_BLOCK_SIZE,
-    golden_prefill_attention_csa,
-)
-from input_pack import golden_pack_x_hc
-from hc_head import golden_hc_head_rows
-from lm_head import golden_lm_head_all_ranks
-from rmsnorm import golden_rms_norm
+M = config.ACTIVE
+MODEL_CONFIG = config.ACTIVE
+ACTIVE_BASE = config.ACTIVE_BASE
+INT8_AMAX_EPS = config.INT8_AMAX_EPS
+INT8_SCALE_MAX = config.INT8_SCALE_MAX
+D = M.hidden_size
 
-from golden import ratio_allclose
+# ===========================================================================
+# Host-side MXFP4/MXFP8 helpers
+# ===========================================================================
+MX_GROUP = 32
+SCALE_BLOCK_SIZE = 16
+SCALE_C0_SIZE = 2
+FP8_E4M3_MAX = 448.0
+FP4_MAX = 6.0
+TINY = 1e-20
+
+# Precomputed FP4 nibble -> FP8 E4M3 codes (Issue #238 MXFP4 magnitude table).
+NIBBLE_LUT = [
+    0x00,
+    0x30,
+    0x38,
+    0x3C,
+    0x40,
+    0x44,
+    0x48,
+    0x4C,
+    0x80,
+    0xB0,
+    0xB8,
+    0xBC,
+    0xC0,
+    0xC4,
+    0xC8,
+    0xCC,
+]
+
+
+def build_mxfp4_pair_lut():
+    """Build a packed-byte LUT whose INT16 entries contain two FP8 payloads."""
+    import torch
+
+    packed = torch.arange(256, dtype=torch.int64)
+    fp8_codes = torch.tensor(NIBBLE_LUT, dtype=torch.int64)
+    low_codes = fp8_codes[packed & 0x0F]
+    high_codes = fp8_codes[packed >> 4]
+    pairs_u16 = low_codes | (high_codes << 8)
+    pairs_i16 = torch.where(pairs_u16 < 0x8000, pairs_u16, pairs_u16 - 0x10000)
+    return pairs_i16.to(torch.int16).reshape(1, 256).repeat(2, 1).contiguous()
+
+
+def _pack_mxfp4_nibbles_kn_tiles(nibbles_kn, k_tile, n_tile, split_mode):
+    """Pack one ``[K, N]`` nibble grid into tile-major AIV lane rows."""
+    k, n = nibbles_kn.shape
+    if k % k_tile != 0 or n % n_tile != 0:
+        raise ValueError("MXFP4 tile packing requires K and N to divide their tiles")
+    if k_tile % 2 != 0 or n_tile % 2 != 0:
+        raise ValueError("MXFP4 tile packing requires even K and N tiles")
+
+    k_blocks = k // k_tile
+    n_blocks = n // n_tile
+    blocked = nibbles_kn.reshape(k_blocks, k_tile, n_blocks, n_tile)
+    blocked = blocked.permute(2, 0, 1, 3)
+    if split_mode == "up_down":
+        lanes = blocked.reshape(n_blocks, k_blocks, 2, k_tile // 2, n_tile)
+    elif split_mode == "left_right":
+        if n_tile % 4 != 0:
+            raise ValueError("left-right MXFP4 packing requires N tile divisible by four")
+        lanes = blocked.reshape(n_blocks, k_blocks, k_tile, 2, n_tile // 2)
+        lanes = lanes.permute(0, 1, 3, 2, 4)
+    else:
+        raise ValueError(f"unsupported MXFP4 split mode: {split_mode!r}")
+
+    low = lanes[..., 0::2] & 0x0F
+    high = lanes[..., 1::2] & 0x0F
+    packed = low | (high << 4)
+    lane_bytes = k_tile * n_tile // 4
+    return packed.contiguous().reshape(n_blocks * k_blocks * 2, lane_bytes)
+
+
+def _mxfp8_grid_to_mxfp4_nibbles(weight):
+    """Map an FP8 grid restricted to the MXFP4 value set back to nibble codes."""
+    import torch
+
+    codes = weight.contiguous().view(torch.uint8)
+    inverse = torch.zeros(256, dtype=torch.uint8)
+    valid = torch.zeros(256, dtype=torch.bool)
+    lut_codes = torch.tensor(NIBBLE_LUT, dtype=torch.uint8)
+    lut_indices = lut_codes.to(torch.int64)
+    inverse[lut_indices] = torch.arange(16, dtype=torch.uint8)
+    valid[lut_indices] = True
+    code_indices = codes.to(torch.int64)
+    if not bool(valid[code_indices].all()):
+        raise ValueError("MXFP8 fixture contains a code outside the MXFP4 LUT")
+    return inverse[code_indices]
+
+
+def pack_mxfp4_weight_tiles(weight, k_tile, n_tile, split_mode="up_down"):
+    """Pack ``[..., K, N]`` MXFP4-grid FP8 weights into tile-major lane rows."""
+    import torch
+
+    *leading, k, n = weight.shape
+    lane_bytes = k_tile * n_tile // 4
+    tile_rows = (k // k_tile) * (n // n_tile) * 2
+    weights = weight.reshape(-1, k, n)
+    packed = torch.empty(weights.shape[0], tile_rows, lane_bytes, dtype=torch.uint8)
+    for batch in range(weights.shape[0]):
+        nibbles_kn = _mxfp8_grid_to_mxfp4_nibbles(weights[batch])
+        packed[batch] = _pack_mxfp4_nibbles_kn_tiles(
+            nibbles_kn,
+            k_tile,
+            n_tile,
+            split_mode,
+        )
+    return packed.reshape(*leading, tile_rows, lane_bytes)
+
+
+def unpack_mxfp4_weight_tiles(
+    packed,
+    k,
+    n,
+    k_tile,
+    n_tile,
+    split_mode="up_down",
+):
+    """Expand tile-major lane rows into FP8 ``[..., K, N]`` weights."""
+    import torch
+
+    *leading, tile_rows, lane_bytes = packed.shape
+    k_blocks = k // k_tile
+    n_blocks = n // n_tile
+    expected_rows = n_blocks * k_blocks * 2
+    expected_bytes = k_tile * n_tile // 4
+    if tile_rows != expected_rows or lane_bytes != expected_bytes:
+        raise ValueError("MXFP4 tile-major payload does not match the requested matrix")
+
+    payloads = packed.contiguous().view(torch.uint8).reshape(-1, tile_rows, lane_bytes)
+    output = torch.empty(payloads.shape[0], k, n, dtype=torch.float8_e4m3fn)
+    for batch in range(payloads.shape[0]):
+        if split_mode == "up_down":
+            lane_shape = (n_blocks, k_blocks, 2, k_tile // 2, n_tile // 2)
+            lane_bytes_view = payloads[batch].reshape(lane_shape)
+            low = lane_bytes_view & 0x0F
+            high = lane_bytes_view >> 4
+            lanes = torch.stack((low, high), dim=-1)
+            blocked = lanes.reshape(n_blocks, k_blocks, k_tile, n_tile)
+        elif split_mode == "left_right":
+            lane_shape = (n_blocks, k_blocks, 2, k_tile, n_tile // 4)
+            lane_bytes_view = payloads[batch].reshape(lane_shape)
+            low = lane_bytes_view & 0x0F
+            high = lane_bytes_view >> 4
+            lanes = torch.stack((low, high), dim=-1)
+            lanes = lanes.reshape(n_blocks, k_blocks, 2, k_tile, n_tile // 2)
+            blocked = lanes.permute(0, 1, 3, 2, 4).reshape(
+                n_blocks,
+                k_blocks,
+                k_tile,
+                n_tile,
+            )
+        else:
+            raise ValueError(f"unsupported MXFP4 split mode: {split_mode!r}")
+        nibbles_kn = blocked.permute(1, 2, 0, 3).reshape(k, n)
+        output[batch] = nibble_indices_to_fp8(nibbles_kn)
+    return output.reshape(*leading, k, n)
+
+
+def pack_a_scale(scale_codes):
+    """Pack logical A scales ``[M, K/32]`` into the MX_A_ZZ physical layout."""
+    m, k_groups = scale_codes.shape
+    assert m % SCALE_BLOCK_SIZE == 0
+    assert k_groups % SCALE_C0_SIZE == 0
+    return (
+        scale_codes.reshape(
+            m // SCALE_BLOCK_SIZE,
+            SCALE_BLOCK_SIZE,
+            k_groups // SCALE_C0_SIZE,
+            SCALE_C0_SIZE,
+        )
+        .permute(0, 2, 1, 3)
+        .contiguous()
+        .reshape(m, k_groups)
+    )
+
+
+def unpack_a_scale(packed_codes):
+    """Restore MX_A_ZZ physical scale bytes to logical ``[M, K/32]``."""
+    m, k_groups = packed_codes.shape
+    return (
+        packed_codes.reshape(
+            m // SCALE_BLOCK_SIZE,
+            k_groups // SCALE_C0_SIZE,
+            SCALE_BLOCK_SIZE,
+            SCALE_C0_SIZE,
+        )
+        .permute(0, 2, 1, 3)
+        .contiguous()
+        .reshape(m, k_groups)
+    )
+
+
+def pack_b_scale(scale_codes):
+    """Pack logical B scales ``[K/32, N]`` into the MX_B_NN physical layout."""
+    k_groups, n = scale_codes.shape
+    assert k_groups % SCALE_C0_SIZE == 0
+    assert n % SCALE_BLOCK_SIZE == 0
+    return (
+        scale_codes.reshape(
+            k_groups // SCALE_C0_SIZE,
+            SCALE_C0_SIZE,
+            n // SCALE_BLOCK_SIZE,
+            SCALE_BLOCK_SIZE,
+        )
+        .permute(2, 0, 3, 1)
+        .contiguous()
+        .reshape(k_groups, n)
+    )
+
+
+def pack_b_scale_batched(scale_codes):
+    """Pack ``[..., K/32, N]`` E8M0 codes as independent MX_B_NN matrices."""
+    *lead, k_groups, n = scale_codes.shape
+    assert k_groups % SCALE_C0_SIZE == 0
+    assert n % SCALE_BLOCK_SIZE == 0
+    lead_axes = list(range(len(lead)))
+    base = len(lead)
+    return (
+        scale_codes.reshape(
+            *lead,
+            k_groups // SCALE_C0_SIZE,
+            SCALE_C0_SIZE,
+            n // SCALE_BLOCK_SIZE,
+            SCALE_BLOCK_SIZE,
+        )
+        .permute(*lead_axes, base + 2, base, base + 3, base + 1)
+        .contiguous()
+        .reshape(*lead, k_groups, n)
+    )
+
+
+def unpack_b_scale(packed_codes):
+    """Restore MX_B_NN physical scale bytes to logical ``[K/32, N]``."""
+    k_groups, n = packed_codes.shape
+    return (
+        packed_codes.reshape(
+            n // SCALE_BLOCK_SIZE,
+            k_groups // SCALE_C0_SIZE,
+            SCALE_BLOCK_SIZE,
+            SCALE_C0_SIZE,
+        )
+        .permute(1, 3, 0, 2)
+        .contiguous()
+        .reshape(k_groups, n)
+    )
+
+
+def unpack_b_scale_batched(packed_codes):
+    """Restore independently packed ``[..., K/32, N]`` MX_B_NN matrices."""
+    *lead, k_groups, n = packed_codes.shape
+    lead_axes = list(range(len(lead)))
+    base = len(lead)
+    return (
+        packed_codes.reshape(
+            *lead,
+            n // SCALE_BLOCK_SIZE,
+            k_groups // SCALE_C0_SIZE,
+            SCALE_BLOCK_SIZE,
+            SCALE_C0_SIZE,
+        )
+        .permute(*lead_axes, base + 1, base + 3, base, base + 2)
+        .contiguous()
+        .reshape(*lead, k_groups, n)
+    )
+
+
+def _e8m0_codes_from_amax(amax, fp_max: float):
+    """Ascend OCP shared-exponent E8M0 codes for each group maximum."""
+    format_emax = int(math.floor(math.log2(fp_max)))
+    _, exponent = torch.frexp(amax)
+    codes = exponent.to(torch.int32) - 1 - format_emax + 127
+    codes = codes.clamp(0, 255)
+    codes = torch.where(amax == 0, torch.zeros_like(codes), codes)
+    return codes.to(torch.uint8)
+
+
+def e8m0_codes_to_fp32(codes):
+    """Decode logical E8M0 uint8 codes to FP32 powers of two."""
+    return torch.exp2(codes.to(torch.float32) - 127.0)
+
+
+def host_quant_mxfp8(
+    x_bf16_or_fp32,
+    *,
+    pack_zz: bool = False,
+    return_e8m0: bool = False,
+):
+    """Per-row group-32 MXFP8 quant along the last dim.
+
+    Returns ``(data_fp8, scale)`` with logical shapes ``[..., K]`` /
+    ``[..., K/32]``. By default ``scale`` is decoded FP32 for the kernel ABI.
+    Pass ``return_e8m0=True`` for packed/logical E8M0 codes. ``pack_zz`` only
+    applies when returning E8M0 and the leading row dim is a multiple of 16
+    with even K/32.
+    """
+    x = x_bf16_or_fp32.float()
+    *lead, k = x.shape
+    assert k % MX_GROUP == 0
+    groups = k // MX_GROUP
+    xg = x.reshape(*lead, groups, MX_GROUP)
+    amax = xg.abs().amax(dim=-1)
+    codes = _e8m0_codes_from_amax(amax, FP8_E4M3_MAX)
+    scale_f = e8m0_codes_to_fp32(codes)
+    q = (xg / scale_f.unsqueeze(-1)).to(torch.float8_e4m3fn)
+    data = q.reshape(*lead, k)
+    if not return_e8m0:
+        return data, scale_f.contiguous()
+
+    scale = codes
+    if pack_zz and len(lead) == 1:
+        m = lead[0]
+        if m % SCALE_BLOCK_SIZE == 0 and groups % SCALE_C0_SIZE == 0:
+            scale = pack_a_scale(scale.reshape(m, groups)).reshape(m, groups)
+    scale_e8m0 = scale.contiguous().view(torch.float8_e8m0fnu)
+    return data, scale_e8m0
+
+
+def gen_mxfp8_weight_kn(
+    out: int,
+    inn: int,
+    dequant_std: float,
+    *,
+    chan_cv: float = 0.5,
+    seed: int = 0,
+):
+    """Simulate an MXFP8 weight grid in Cube ``[K, N]`` layout.
+
+    Returns FP8 data ``[inn, out]`` and decoded FP32 logical scales
+    ``[inn/32, out]``.
+    """
+    generator = torch.Generator().manual_seed(seed)
+    weight_base = torch.randn(out, inn, generator=generator)
+    channel_noise = torch.randn(out, 1, generator=generator)
+    channel_gain = torch.exp(chan_cv * channel_noise)
+    weight = weight_base * channel_gain
+    assert inn % MX_GROUP == 0
+    weight_groups = weight.reshape(out, inn // MX_GROUP, MX_GROUP)
+    amax = weight_groups.abs().amax(dim=-1)
+    codes_on = _e8m0_codes_from_amax(amax, FP8_E4M3_MAX)
+    scale_f = e8m0_codes_to_fp32(codes_on)
+    quantized = (weight_groups / scale_f.unsqueeze(-1)).to(torch.float8_e4m3fn)
+    data_on = quantized.reshape(out, inn)
+    data_kn = data_on.transpose(0, 1).contiguous()
+    codes_kn = codes_on.transpose(0, 1).contiguous()
+    decoded = data_kn.float() * e8m0_codes_to_fp32(codes_kn).repeat_interleave(
+        MX_GROUP, dim=0
+    )
+    current_std = decoded.std().clamp_min(TINY)
+    gain = dequant_std / current_std
+    exponent_shift = int(round(math.log2(float(gain))))
+    codes_kn = (
+        (codes_kn.to(torch.int32) + exponent_shift)
+        .clamp(0, 255)
+        .to(torch.uint8)
+    )
+    scale_fp32 = e8m0_codes_to_fp32(codes_kn).contiguous()
+    return data_kn.to(torch.float8_e4m3fn), scale_fp32
+
+
+def gen_mxfp8_weight_kn_device(
+    out,
+    inn,
+    dequant_std,
+    *,
+    chan_cv=0.5,
+    seed=0,
+):
+    """Return Cube-layout MXFP8 weights with MX_B_NN-packed E8M0 scales."""
+    data_kn, scale_fp32 = gen_mxfp8_weight_kn(
+        out,
+        inn,
+        dequant_std,
+        chan_cv=chan_cv,
+        seed=seed,
+    )
+    codes = (
+        (torch.log2(scale_fp32.clamp_min(TINY)) + 127.0)
+        .round()
+        .to(torch.int32)
+        .clamp(0, 255)
+        .to(torch.uint8)
+    )
+    scale_e8m0 = pack_b_scale(codes).contiguous().view(torch.float8_e8m0fnu)
+    return data_kn, scale_e8m0
+
+
+def host_mxfp8_activation(x_bf16_or_fp32):
+    """MXFP8 activation + MX_A_ZZ E8M0 scales for device ``matmul_mx`` lhs."""
+    return host_quant_mxfp8(
+        x_bf16_or_fp32,
+        pack_zz=True,
+        return_e8m0=True,
+    )
+
+
+def host_quant_mxfp8_weight_kn(weight_nk):
+    """Quantize ``[..., N, K]`` weights for the Cube MXFP8 rhs ABI."""
+    data_nk, scale_ng = host_quant_mxfp8(weight_nk, return_e8m0=True)
+    data_kn = data_nk.transpose(-2, -1).contiguous()
+    codes_kn = (
+        scale_ng.contiguous()
+        .view(torch.uint8)
+        .transpose(-2, -1)
+        .contiguous()
+    )
+    scale_nn = pack_b_scale_batched(codes_kn).view(torch.float8_e8m0fnu)
+    return data_kn, scale_nn
+
+
+def gen_mxfp4_weight_kn(
+    out: int,
+    inn: int,
+    dequant_std: float,
+    *,
+    seed: int = 0,
+):
+    """Simulate MXFP4 in Cube ``[inn, out]`` layout."""
+    fp4_magnitudes = torch.tensor([0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0])
+    fp4_midpoints = torch.tensor([0.25, 0.75, 1.25, 1.75, 2.5, 3.5, 5.0])
+
+    generator = torch.Generator().manual_seed(seed)
+    weight = torch.randn(out, inn, generator=generator)
+    assert inn % MX_GROUP == 0
+    weight_groups = weight.reshape(out, inn // MX_GROUP, MX_GROUP)
+    absolute_weight = weight_groups.abs()
+    codes_on = _e8m0_codes_from_amax(
+        absolute_weight.amax(dim=-1),
+        FP4_MAX,
+    )
+    scale_f = e8m0_codes_to_fp32(codes_on)
+    indices = torch.bucketize(
+        absolute_weight / scale_f.unsqueeze(-1),
+        fp4_midpoints,
+    ).clamp_max(7)
+    sign = (weight_groups < 0).to(torch.int64)
+    nibble = indices + sign * 8
+    nibble_flat = nibble.reshape(out, inn)
+
+    values = torch.sign(weight_groups) * fp4_magnitudes[indices]
+    decoded_on = (values * scale_f.unsqueeze(-1)).reshape(out, inn)
+    current_std = decoded_on.std().clamp_min(TINY)
+    gain = dequant_std / current_std
+    exponent_shift = int(round(math.log2(float(gain))))
+    codes_on = (
+        (codes_on.to(torch.int32) + exponent_shift)
+        .clamp(0, 255)
+        .to(torch.uint8)
+    )
+
+    nibble_kn = nibble_flat.transpose(0, 1).contiguous()
+    codes_kn = codes_on.transpose(0, 1).contiguous()
+
+    assert inn % 2 == 0
+    low = nibble_kn[0::2, :] & 0x0F
+    high = nibble_kn[1::2, :] & 0x0F
+    packed = (low | (high << 4)).to(torch.uint8).contiguous()
+
+    nibble_indices = nibble_kn.to(torch.int16)
+    scale_fp32 = e8m0_codes_to_fp32(codes_kn).contiguous()
+    return packed, scale_fp32, nibble_indices
+
+
+def nibble_indices_to_fp8(indices):
+    """Convert INT16 FP4 nibble indices to FP8E4M3FN payloads."""
+    lut = torch.tensor(NIBBLE_LUT, dtype=torch.int16)
+    codes = lut[indices.to(torch.int64).clamp(0, 15)]
+    return (codes & 0xFF).to(torch.uint8).view(torch.float8_e4m3fn)
+
+
+def mxfp4_to_mxfp8_weight_kn(weight_packed, scale_e8m0):
+    """Expand a checkpoint MXFP4 weight into the current Cube MXFP8 ABI.
+
+    ``weight_packed`` is ``[..., N, K/2]`` with adjacent K values stored low
+    nibble first. ``scale_e8m0`` is ``[..., N, K/32]``. The result is exact
+    FP8E4M3 data ``[..., K, N]`` plus the unchanged E8M0 codes transposed and
+    packed for ``MX_B_NN`` as ``[..., K/32, N]``.
+    """
+    packed_u8 = weight_packed.contiguous().view(torch.uint8)
+    scale_codes = scale_e8m0.contiguous().view(torch.uint8)
+    *weight_lead, n, half_k = packed_u8.shape
+    *scale_lead, scale_n, k_groups = scale_codes.shape
+    if (
+        weight_lead != scale_lead
+        or n != scale_n
+        or half_k * 2 != k_groups * MX_GROUP
+    ):
+        raise ValueError(
+            "MXFP4 weight/scale shapes must be [..., N, K/2] and "
+            "[..., N, K/32], "
+            f"got {tuple(weight_packed.shape)} and {tuple(scale_e8m0.shape)}"
+        )
+
+    low = packed_u8 & 0x0F
+    high = (packed_u8 >> 4) & 0x0F
+    indices_nk = torch.stack((low, high), dim=-1).reshape(
+        *weight_lead,
+        n,
+        half_k * 2,
+    )
+    data_kn = nibble_indices_to_fp8(indices_nk).transpose(-2, -1).contiguous()
+    codes_kn = scale_codes.transpose(-2, -1).contiguous()
+    packed_codes = pack_b_scale_batched(codes_kn)
+    return data_kn, packed_codes.view(torch.float8_e8m0fnu)
+
+
+def gen_mxfp4_weight_kn_device(
+    out: int,
+    inn: int,
+    dequant_std: float,
+    *,
+    seed: int = 0,
+):
+    """Generate checkpoint-shaped MXFP4 and expand it through the real bridge."""
+    packed_kn, scale_fp32, _ = gen_mxfp4_weight_kn(
+        out,
+        inn,
+        dequant_std,
+        seed=seed,
+    )
+    codes_kn = (
+        (torch.log2(scale_fp32.clamp_min(TINY)) + 127.0)
+        .round()
+        .to(torch.int32)
+        .clamp(0, 255)
+        .to(torch.uint8)
+    )
+    packed_nk = packed_kn.transpose(0, 1).contiguous()
+    codes_nk = (
+        codes_kn.transpose(0, 1)
+        .contiguous()
+        .view(torch.float8_e8m0fnu)
+    )
+    return mxfp4_to_mxfp8_weight_kn(packed_nk, codes_nk)
+
+
+def matmul_mx_golden(a, a_scale, b, b_scale):
+    """Compute an FP32 golden for MX-style matmul from data and scales."""
+    m, k = a.shape
+    k2, n = b.shape
+    assert k == k2
+    a_s = a_scale
+    b_s = b_scale
+    if a_s.dtype not in (torch.float32, torch.float64):
+        a_s = e8m0_codes_to_fp32(a_s.contiguous().view(torch.uint8))
+    if b_s.dtype not in (torch.float32, torch.float64):
+        b_s = e8m0_codes_to_fp32(b_s.contiguous().view(torch.uint8))
+    a_s = a_s.to(torch.float64)
+    b_s = b_s.to(torch.float64)
+    k_group = torch.arange(k) // MX_GROUP
+    a_scaled = a.to(torch.float64) * a_s[:, k_group]
+    b_scaled = b.to(torch.float64) * b_s[k_group, :]
+    return torch.matmul(a_scaled, b_scaled).to(torch.float32)
+
+
+def decode_e8m0_codes(scale_e8m0, *, side: str = "a"):
+    """Unpack ZZ/NN-packed E8M0 tensor to logical uint8 codes."""
+    codes = scale_e8m0.contiguous().view(torch.uint8)
+    if side == "a":
+        return unpack_a_scale(codes)
+    if side == "b":
+        return unpack_b_scale(codes)
+    raise ValueError(f"side must be 'a' or 'b', got {side!r}")
+
 
 # ===========================================================================
 # Real DeepSeek-V4-Flash checkpoint loader
@@ -220,7 +762,7 @@ class FlashCheckpoint:
 
 
 # ---------------------------------------------------------------------------
-# Dequantization (checkpoint grids) and requantization (kernel W8A8 ABI).
+# Dequantization (checkpoint grids) and conversion to kernel weight ABIs.
 # ---------------------------------------------------------------------------
 def _e8m0_to_fp32(scale_u8: torch.Tensor) -> torch.Tensor:
     """Decode UE8M0 bytes (unsigned power-of-two exponents) to fp32: 2^(x-127)."""
@@ -319,6 +861,17 @@ class FlashWeightConverter:
         self._stash[scale_name] = _replicate(torch.cat(scales, dim=0), self.ep)
         return _replicate(torch.cat(weights, dim=0), self.ep)
 
+    def _stacked_mx_pair(
+        self,
+        scale_name: str,
+        layers: list[int],
+        pair_of_layer: Callable[[int], tuple[torch.Tensor, torch.Tensor]],
+    ) -> torch.Tensor:
+        """Stack independently packed MX_B_NN matrices as contiguous layer blocks."""
+        weights, packed_scales = zip(*[pair_of_layer(layer) for layer in layers])
+        self._stash[scale_name] = _replicate(torch.cat(packed_scales, dim=0), self.ep)
+        return _replicate(torch.cat(weights, dim=0), self.ep)
+
     # ---- attention linears ----------------------------------------------
     def _wq_b(self, layer: int) -> tuple[torch.Tensor, torch.Tensor]:
         w_i8, scale = quant_int8_per_out_channel(self._deq_fp8(f"layers.{layer}.attn.wq_b"))
@@ -333,11 +886,12 @@ class FlashWeightConverter:
         return w_i8.t().contiguous(), scale  # kernel layout [Q_LORA, IDX_N_HEADS*IDX_HEAD_DIM]
 
     def _shared(self, layer: int, which: str) -> tuple[torch.Tensor, torch.Tensor]:
-        return quant_int8_per_out_channel(self._deq_fp8(f"layers.{layer}.ffn.shared_experts.{which}"))
+        weight_nk = self._deq_fp8(f"layers.{layer}.ffn.shared_experts.{which}")
+        return host_quant_mxfp8_weight_kn(weight_nk)
 
     # ---- routed experts (EP-sharded) ------------------------------------
     def _routed_layer(self, layer: int, which: str) -> tuple[torch.Tensor, torch.Tensor]:
-        """One layer's EP-sharded INT8 experts: ``([ep, n_local, out, in], [ep, n_local, out])``."""
+        """One layer's EP-sharded MXFP4-to-MXFP8 expert payloads."""
         weights, scales = [], []
         for rank in range(self.ep):
             experts = range(rank * self.n_local, (rank + 1) * self.n_local)
@@ -347,20 +901,30 @@ class FlashWeightConverter:
             scales_u8 = torch.stack(
                 [self.ckpt.get(f"layers.{layer}.ffn.experts.{e}.{which}.scale") for e in experts]
             )
-            w_i8, w_scale = quant_int8_per_out_channel(dequant_fp4(packed, scales_u8))
-            weights.append(w_i8)
+            weight_mx, w_scale = mxfp4_to_mxfp8_weight_kn(packed, scales_u8)
+            weights.append(weight_mx)
             scales.append(w_scale)
         return torch.stack(weights), torch.stack(scales)
 
     def _routed(self, scale_name: str, which: str) -> torch.Tensor:
-        out_dim, in_dim = (MOE_INTER, D) if which in ("w1", "w3") else (D, MOE_INTER)
-        weight = torch.empty([self.ep, NUM_LAYERS * self.n_local, out_dim, in_dim], dtype=torch.int8)
-        scale = torch.empty([self.ep, NUM_LAYERS * self.n_local, out_dim], dtype=torch.float32)
+        k_dim, n_dim = (D, MOE_INTER) if which in ("w1", "w3") else (MOE_INTER, D)
+        groups = k_dim // FP4_GROUP
+        weight = torch.empty(
+            [self.ep, NUM_LAYERS * self.n_local, k_dim, n_dim], dtype=torch.float8_e4m3fn
+        )
+        scale = torch.empty(
+            [self.ep, NUM_LAYERS * self.n_local * groups, n_dim], dtype=torch.float8_e8m0fnu
+        )
         for layer in range(NUM_LAYERS):
             block = slice(layer * self.n_local, (layer + 1) * self.n_local)
-            w_i8, w_scale = self._routed_layer(layer, which)
-            weight[:, block] = w_i8
-            scale[:, block] = w_scale
+            scale_block = slice(layer * self.n_local * groups, (layer + 1) * self.n_local * groups)
+            weight_mx, w_scale = self._routed_layer(layer, which)
+            weight[:, block] = weight_mx
+            logical_scale = unpack_b_scale_batched(w_scale.contiguous().view(torch.uint8))
+            layer_scale = pack_b_scale_batched(
+                logical_scale.reshape(self.ep, self.n_local * groups, n_dim)
+            ).view(torch.float8_e8m0fnu)
+            scale[:, scale_block] = layer_scale
         self._stash[scale_name] = scale
         return weight
 
@@ -444,7 +1008,7 @@ class FlashWeightConverter:
                 return self._stash.pop(name)
             case "shared_w1" | "shared_w2" | "shared_w3":
                 which = name.removeprefix("shared_")
-                return self._stacked_pair(
+                return self._stacked_mx_pair(
                     f"{name}_scale", list(range(NUM_LAYERS)), lambda l: self._shared(l, which))
             case "shared_w1_scale" | "shared_w2_scale" | "shared_w3_scale":
                 self.convert(name.removesuffix("_scale"))
@@ -527,8 +1091,13 @@ class FlashWeightConverter:
         out["gate_bias"] = rep(self._gate_bias(lyr))
         out["tid2eid"] = rep(self._tid2eid(lyr))
         for which in ("w1", "w2", "w3"):
-            w_i8, w_scale = self._routed_layer(lyr, which)
-            out[f"routed_{which}"], out[f"routed_{which}_scale"] = w_i8, w_scale
+            weight_mx, w_scale = self._routed_layer(lyr, which)
+            out[f"routed_{which}"] = weight_mx
+            logical_scale = unpack_b_scale_batched(w_scale.contiguous().view(torch.uint8))
+            flat_scale = logical_scale.flatten(1, 2)
+            out[f"routed_{which}_scale"] = pack_b_scale_batched(flat_scale).view(
+                torch.float8_e8m0fnu
+            )
             w, s = self._shared(lyr, which)
             out[f"shared_{which}"], out[f"shared_{which}_scale"] = rep(w), rep(s)
         if lyr in CSA_LAYERS:
@@ -865,11 +1434,6 @@ _ATTENTION_VIEWS = {
     "hca": _hca_attention_views,
     "csa": _csa_attention_views,
 }
-_ATTENTION_GOLDEN = {
-    "swa": golden_prefill_attention_swa,
-    "hca": golden_prefill_attention_hca,
-    "csa": golden_prefill_attention_csa,
-}
 
 _MOE_LAYER_STACKED = (
     "hc_ffn_fn", "hc_ffn_scale", "hc_ffn_base", "norm_w",
@@ -901,7 +1465,25 @@ def _moe_views(tensors, layer, x_hc, x_next, num_tokens):
 
 def golden_prefill_fwd(tensors):
     """Fill every output tensor of prefill_fwd's spec list in place."""
-    import torch
+    import sys
+
+    if "moe" not in sys.modules:
+        config.MOE_TOKENS = config.PREFILL_TOKENS
+    from moe import D, HC_MULT, N_RANKS, T, golden_moe
+
+    from hc_head import golden_hc_head_rows
+    from input_pack import golden_pack_x_hc
+    from lm_head import golden_lm_head_all_ranks
+    from prefill_attention_csa import golden_prefill_attention_csa
+    from prefill_attention_hca import golden_prefill_attention_hca
+    from prefill_attention_swa import golden_prefill_attention_swa
+    from rmsnorm import golden_rms_norm
+
+    attention_golden = {
+        "swa": golden_prefill_attention_swa,
+        "hca": golden_prefill_attention_hca,
+        "csa": golden_prefill_attention_csa,
+    }
 
     num_tokens = int(tensors["num_tokens"])
 
@@ -920,7 +1502,7 @@ def golden_prefill_fwd(tensors):
             views = _ATTENTION_VIEWS[kind](
                 tensors, rank, layer, x_hc[rank], attn_out[rank], num_tokens,
             )
-            _ATTENTION_GOLDEN[kind](views)
+            attention_golden[kind](views)
         # The trailing layer's MoE writes the fwd's pre-hc hidden output.
         if layer == FWD_NUM_LAYERS - 1:
             x_next = tensors["pre_hc_hidden_out"]
@@ -1135,6 +1717,8 @@ def input_prefix_ratio_allclose(
     exactly equal to the golden output.  The inactive rows therefore cannot
     dilute the active-region error ratio or hide a stray write.
     """
+    from golden import ratio_allclose
+
     prefix_compare = ratio_allclose(
         atol=atol,
         rtol=rtol,
@@ -1240,6 +1824,8 @@ def stacked_mapped_pool_ratio_allclose(
     to golden.  Failure diagnostics therefore identify the first bad logical
     layer/rank instead of reporting a ratio diluted by the unused pool.
     """
+    from golden import ratio_allclose
+
     if not layer_mapping_names:
         raise ValueError("layer_mapping_names must not be empty")
     if len(mapping_shape) != 2 or any(dim <= 0 for dim in mapping_shape):
@@ -1508,6 +2094,15 @@ def build_validate_compare_fn(num_tokens):
     only active mapped rows, independently per layer/rank, and require every
     other physical row to remain exactly equal to golden.
     """
+    import sys
+
+    if "moe" not in sys.modules:
+        config.MOE_TOKENS = config.PREFILL_TOKENS
+    from moe import N_RANKS, T
+
+    from prefill_attention_csa import CSA_STATE_BLOCK_SIZE, INNER_STATE_BLOCK_SIZE
+    from prefill_attention_hca import HCA_STATE_BLOCK_SIZE
+
     # Keep the public builder signature used by prefill_fwd. The comparator
     # intentionally reads the effective value from inputs["num_tokens"] at
     # validation time because golden-data replay overrides this initializer.

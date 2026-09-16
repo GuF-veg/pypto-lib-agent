@@ -6,8 +6,8 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
-# ci: devices=2  # CI: EP2/TP2 full decode forward
-# ci: no-sim    # CI marker: full multi-layer / multi-card forward — device-only, skip on *sim
+# ci: devices=2
+# ci: no-sim
 """DeepSeek-V4 D-Spark decode forward."""
 
 import sys
@@ -57,7 +57,7 @@ import decode_swa as swa
 import moe as moe_module
 import pypto.language as pl
 import pypto.language.distributed as pld
-from decode_cp_token_allgather import (
+from decode_cp_allgather import (
     KV_B_DYN,
     KV_T_DYN,
     DECODE_GROUP_CAP,
@@ -65,6 +65,7 @@ from decode_cp_token_allgather import (
 from decode_csa import decode_csa, decode_csa_tp1
 from decode_hca import decode_hca, decode_hca_tp1
 from decode_swa import decode_swa, decode_swa_tp1
+from dspark_proj import MAIN_HIDDEN_DIM, TARGET_LAYER_IDS
 from hc_head import hc_head
 from lm_head import (
     GROUP_LOGIT_ROWS,
@@ -94,7 +95,6 @@ FWD_CSA_IDX_BLOCKS_DYN = pl.dynamic("FWD_CSA_IDX_BLOCKS_DYN")
 
 # model config
 MODEL_CONFIG = config.FLASH
-DECODE_TOKENS = config.DECODE_TOKENS
 MAIN_LAYER_COUNT = MODEL_CONFIG.num_hidden_layers
 SWA_LAYER_COUNT = 2
 CSA_LAYER_COUNT = 21
@@ -106,6 +106,7 @@ D = swa.D
 HC_MULT = swa.HC_MULT
 HC_DIM = swa.HC_DIM
 LM_HEAD_COMM_EPOCH = 1
+LOGITS_ZERO_TILE = 256
 MIX_HC = swa.MIX_HC
 Q_LORA = swa.Q_LORA
 H = swa.H
@@ -169,16 +170,25 @@ def _validate_import_contract():
         raise ValueError(f"MoE world size {N_RANKS} does not match EP={EP_SIZE}")
     if MAIN_LAYER_COUNT != 43:
         raise ValueError(f"D-Spark decode forward expects 43 layers, got {MAIN_LAYER_COUNT}")
+    if CSA_LAYER_COUNT != HCA_LAYER_COUNT + 1:
+        raise ValueError(
+            f"alternating decode layers require one more CSA layer than HCA, got "
+            f"CSA={CSA_LAYER_COUNT}, HCA={HCA_LAYER_COUNT}",
+        )
+    if SWA_LAYER_COUNT + 2 * HCA_LAYER_COUNT + 1 != MAIN_LAYER_COUNT:
+        raise ValueError("SWA/CSA/HCA layer counts do not cover the 43-layer model")
+    if len(TARGET_LAYER_IDS) != 3 or TARGET_LAYER_IDS != tuple(
+        range(MAIN_LAYER_COUNT - len(TARGET_LAYER_IDS), MAIN_LAYER_COUNT)
+    ):
+        raise ValueError(f"D-Spark target layers must be the final three layers: {TARGET_LAYER_IDS}")
     if MODEL_CONFIG.vocab_size % TP_SIZE:
         raise ValueError(f"vocab size {MODEL_CONFIG.vocab_size} must be divisible by TP={TP_SIZE}")
     if LM_HEAD_TP_SIZE != TP_SIZE:
         raise ValueError(f"LM-head TP={LM_HEAD_TP_SIZE} does not match forward TP={TP_SIZE}")
     if LM_HEAD_VOCAB != MODEL_CONFIG.vocab_size:
         raise ValueError(f"LM-head vocab={LM_HEAD_VOCAB} does not match model vocab={MODEL_CONFIG.vocab_size}")
-    if MAX_LOGIT_ROWS != DECODE_TOKENS:
-        raise ValueError(f"LM-head rows={MAX_LOGIT_ROWS} do not match decode capacity={DECODE_TOKENS}")
-    if MOE_TOKENS > MAX_LOGIT_ROWS:
-        raise ValueError(f"MoE capacity {MOE_TOKENS} exceeds LM-head rows {MAX_LOGIT_ROWS}")
+    if MAX_LOGIT_ROWS != MOE_TOKENS:
+        raise ValueError(f"LM-head rows={MAX_LOGIT_ROWS} do not match owner capacity={MOE_TOKENS}")
 
 
 _validate_import_contract()
@@ -195,19 +205,58 @@ PACKED_POOL_LAYER_COUNTS = {
     "csa_idx_kv_scale": CSA_LAYER_COUNT,
 }
 
+MOE_INPUT_IDS_PER_CACHE_LINE = 8  # One 64-byte cache line of INT64 values.
+assert MOE_TOKENS % MOE_INPUT_IDS_PER_CACHE_LINE == 0
 
-def build_active_logit_row_indices_host(active_tokens):
-    """Build the host fixture for the terminal active-prefix row contract."""
+
+def build_num_tokens_per_owner_host(values, physical_tokens):
+    """Build and validate the per-owner active-prefix lengths."""
     import torch
 
-    active_tokens = int(active_tokens)
-    if active_tokens < 0 or active_tokens > min(MOE_TOKENS, MAX_LOGIT_ROWS):
-        max_active_tokens = min(MOE_TOKENS, MAX_LOGIT_ROWS)
-        raise ValueError(f"active token count must be in [0, {max_active_tokens}], got {active_tokens}")
+    physical_tokens = int(physical_tokens)
+    if physical_tokens <= 0 or physical_tokens > MOE_TOKENS:
+        raise ValueError(
+            f"physical tokens per owner must be in [1, {MOE_TOKENS}], got {physical_tokens}",
+        )
+    if physical_tokens % config.DECODE_SEQ:
+        raise ValueError(
+            f"physical tokens per owner must be divisible by S={config.DECODE_SEQ}, got {physical_tokens}",
+        )
+    if values is None:
+        counts = torch.full((N_RANKS,), physical_tokens, dtype=torch.int32)
+    elif isinstance(values, int):
+        counts = torch.full((N_RANKS,), int(values), dtype=torch.int32)
+    else:
+        counts = torch.as_tensor(values, dtype=torch.int32).reshape(-1)
+    if counts.numel() != N_RANKS:
+        raise ValueError(f"num_tokens_per_owner needs {N_RANKS} entries, got {counts.numel()}")
+    if bool(((counts < 0) | (counts > physical_tokens)).any()):
+        raise ValueError(
+            f"num_tokens_per_owner values must be in [0, {physical_tokens}], got {counts.tolist()}",
+        )
+    if bool((counts % config.DECODE_SEQ != 0).any()):
+        raise ValueError(
+            f"num_tokens_per_owner values must be divisible by S={config.DECODE_SEQ}: {counts.tolist()}",
+        )
+    return counts.contiguous()
+
+
+def build_active_logit_row_indices_host(num_tokens_per_owner):
+    """Build rank-local logit rows for each owner's active token prefix."""
+    import torch
+
+    counts = torch.as_tensor(num_tokens_per_owner, dtype=torch.int32).reshape(-1)
+    if counts.numel() != N_RANKS:
+        raise ValueError(f"num_tokens_per_owner needs {N_RANKS} entries, got {counts.numel()}")
     indices = torch.full((N_RANKS, MAX_LOGIT_ROWS), -1, dtype=torch.int32)
-    if active_tokens:
-        active_rows = torch.arange(active_tokens, dtype=torch.int32)
-        indices[:, :active_tokens] = active_rows
+    for rank, active_tokens in enumerate(counts.tolist()):
+        if active_tokens < 0 or active_tokens > min(MOE_TOKENS, MAX_LOGIT_ROWS):
+            max_active_tokens = min(MOE_TOKENS, MAX_LOGIT_ROWS)
+            raise ValueError(
+                f"rank {rank} active tokens must be in [0, {max_active_tokens}], got {active_tokens}",
+            )
+        if active_tokens:
+            indices[rank, :active_tokens] = torch.arange(active_tokens, dtype=torch.int32)
     return indices
 
 
@@ -218,28 +267,24 @@ def decode_embedding_preamble(
     hidden_states: pl.Tensor[[T_DYN, D], pl.BF16],
     x_hc: pl.Tensor[[T_DYN, HC_MULT, D], pl.FP32],
     moe_input_ids: pl.Tensor[[MOE_TOKENS], pl.INT64],
+    owner_tokens: pl.Scalar[pl.INT32],
 ):
-    """Embed active rows and pad their token ids to the fixed MoE capacity."""
-    active_tokens = pl.tensor.dim(input_ids, 0)
-    for token_idx in pl.spmd(MOE_TOKENS, name_hint="decode_fwd_pack_moe_input_ids"):
-        token_id = pl.cast(0, pl.INT64)
-        if token_idx < active_tokens:
-            token_id = pl.read(input_ids, [token_idx])
-        pl.write(moe_input_ids, [token_idx], token_id)
+    """Prepare one owner's fixed-capacity embedding and MoE token-id buffers."""
+    for token_block in pl.spmd(MOE_TOKENS // MOE_INPUT_IDS_PER_CACHE_LINE, name_hint="decode_fwd_pack_moe_input_ids"):
+        token_begin = token_block * MOE_INPUT_IDS_PER_CACHE_LINE
+        for token_offset in pl.range(MOE_INPUT_IDS_PER_CACHE_LINE):
+            token_idx = token_begin + token_offset
+            token_id = pl.cast(0, pl.INT64)
+            if token_idx < owner_tokens:
+                token_id = pl.read(input_ids, [token_idx])
+            pl.write(moe_input_ids, [token_idx], token_id)
     lookup_embedding(input_ids, embed_weight, hidden_states, x_hc)
+    physical_tokens = pl.tensor.dim(input_ids, 0)
+    for token in pl.spmd(MOE_TOKENS, name_hint="decode_fwd_embedding_active_mask"):
+        if token < physical_tokens and token >= owner_tokens:
+            zero_hc_row = pl.full([1, HC_MULT, D], dtype=pl.FP32, value=0.0)
+            x_hc[token : token + 1, 0 : HC_MULT, 0 : D] = zero_hc_row
     return x_hc
-
-
-@pl.jit.inline
-def mask_inactive_sample_rows(
-    logit_row_indices: pl.Tensor[[MAX_LOGIT_ROWS], pl.INT32],
-    sampled_ids: pl.Tensor[[MAX_LOGIT_ROWS, SAMPLED_IDS_PAD], pl.INT32],
-):
-    """Make inactive terminal rows observable as -1 after greedy sampling."""
-    for row in pl.spmd(MAX_LOGIT_ROWS, name_hint="decode_fwd_sample_mask"):
-        if pl.read(logit_row_indices, [row]) < 0:
-            sampled_ids[row:row + 1, :] = pl.full([1, SAMPLED_IDS_PAD], dtype=pl.INT32, value=-1)
-    return sampled_ids
 
 
 @pl.jit(auto_scope=False)
@@ -256,10 +301,10 @@ def decode_fwd(
     gamma_cq: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * Q_LORA], pl.BF16],
     gamma_ckv: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * HEAD_DIM], pl.BF16],
     raw_kv_pool: pl.InOut[pl.Tensor[[FWD_PACKED_RAW_BLOCKS_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
-    freqs_cos_local: pl.Tensor[[T_DYN, ROPE_HEAD_DIM], pl.BF16],
-    freqs_sin_local: pl.Tensor[[T_DYN, ROPE_HEAD_DIM], pl.BF16],
-    freqs_cos: pl.Tensor[[KV_T_DYN, ROPE_HEAD_DIM], pl.BF16],
-    freqs_sin: pl.Tensor[[KV_T_DYN, ROPE_HEAD_DIM], pl.BF16],
+    freqs_cos: pl.Tensor[[T_DYN, ROPE_HEAD_DIM], pl.BF16],
+    freqs_sin: pl.Tensor[[T_DYN, ROPE_HEAD_DIM], pl.BF16],
+    compressed_freqs_cos: pl.Tensor[[T_DYN, ROPE_HEAD_DIM], pl.BF16],
+    compressed_freqs_sin: pl.Tensor[[T_DYN, ROPE_HEAD_DIM], pl.BF16],
     swa_slot_mapping: pl.Tensor[[KV_T_DYN], pl.INT64],
     swa_indices: pl.Tensor[[T_DYN, WIN], pl.INT32],
     swa_lens: pl.Tensor[[T_DYN], pl.INT32],
@@ -324,6 +369,7 @@ def decode_fwd(
     gate_bias: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * N_EXPERTS_GLOBAL], pl.FP32],
     tid2eid: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * VOCAB, TOPK], pl.INT32],
     input_ids: pl.Tensor[[T_DYN], pl.INT64],
+    num_tokens_per_owner: pl.Tensor[[N_RANKS], pl.INT32],
     hc_head_fn: pl.Tensor[[HC_MULT, HC_DIM], pl.FP32],
     hc_head_scale: pl.Tensor[[1], pl.FP32],
     hc_head_base: pl.Tensor[[HC_MULT], pl.FP32],
@@ -348,6 +394,7 @@ def decode_fwd(
     x_attn_active: pl.InOut[pl.Tensor[[T_DYN, HC_MULT, D], pl.FP32]],
     x_moe_next: pl.InOut[pl.Tensor[[MOE_TOKENS, HC_MULT, D], pl.FP32]],
     pre_hc_hidden_out: pl.Out[pl.Tensor[[T_DYN, HC_MULT, D], pl.FP32]],
+    dspark_target_hidden: pl.Out[pl.Tensor[[T_DYN, MAIN_HIDDEN_DIM], pl.BF16]],
     x_out: pl.Out[pl.Tensor[[T_DYN, D], pl.BF16]],
     logits: pl.Out[pl.Tensor[[MAX_LOGIT_ROWS, LM_HEAD_VOCAB], pl.FP32]],
     sampled_ids: pl.Out[pl.Tensor[[MAX_LOGIT_ROWS, SAMPLED_IDS_PAD], pl.INT32]],
@@ -367,7 +414,7 @@ def decode_fwd(
     combine_arrived: pld.DistributedTensor[[N_RANKS, 1], pl.INT32],
     lm_head_hidden_window: pld.DistributedTensor[[GROUP_LOGIT_ROWS, D], pl.BF16],
     lm_head_hidden_done: pld.DistributedTensor[[LM_HEAD_TP_SIZE, 1], pl.INT32],
-    lm_head_logits_window: pld.DistributedTensor[[MAX_LOGIT_ROWS * LM_HEAD_VOCAB], pl.FP32],
+    lm_head_logits_window: pld.DistributedTensor[[MAX_LOGIT_ROWS, LM_HEAD_VOCAB], pl.FP32],
     lm_head_logits_done: pld.DistributedTensor[[LM_HEAD_TP_SIZE, 1], pl.INT32],
     group_base: pl.Scalar[pl.INT32],
     tp_rank: pl.Scalar[pl.INT32],
@@ -377,12 +424,13 @@ def decode_fwd(
     embed_weight.bind_dynamic(0, EMBED_VOCAB_DYN)
     input_ids.bind_dynamic(0, T_DYN)
     hidden_workspace.bind_dynamic(0, T_DYN)
+    dspark_target_hidden.bind_dynamic(0, T_DYN)
     x_ping.bind_dynamic(0, T_DYN)
     raw_kv_pool.bind_dynamic(0, FWD_PACKED_RAW_BLOCKS_DYN)
-    freqs_cos_local.bind_dynamic(0, T_DYN)
-    freqs_sin_local.bind_dynamic(0, T_DYN)
-    freqs_cos.bind_dynamic(0, KV_T_DYN)
-    freqs_sin.bind_dynamic(0, KV_T_DYN)
+    freqs_cos.bind_dynamic(0, T_DYN)
+    freqs_sin.bind_dynamic(0, T_DYN)
+    compressed_freqs_cos.bind_dynamic(0, T_DYN)
+    compressed_freqs_sin.bind_dynamic(0, T_DYN)
     swa_slot_mapping.bind_dynamic(0, KV_T_DYN)
     swa_indices.bind_dynamic(0, T_DYN)
     swa_lens.bind_dynamic(0, T_DYN)
@@ -423,11 +471,25 @@ def decode_fwd(
     pre_hc_hidden_out.bind_dynamic(0, T_DYN)
     x_out.bind_dynamic(0, T_DYN)
 
+    local_t = pl.cast(pl.tensor.dim(input_ids, 0), pl.INT32)
+    owner_tokens = pl.read(num_tokens_per_owner, [my_rank])
+    if owner_tokens < 0:
+        owner_tokens = pl.cast(0, pl.INT32)
+    if owner_tokens > local_t:
+        owner_tokens = local_t
+    group_tokens = pl.cast(0, pl.INT32)
+    for owner_offset in pl.range(TP_SIZE):
+        group_owner_tokens = pl.read(num_tokens_per_owner, [group_base + owner_offset])
+        if group_owner_tokens > 0:
+            group_tokens = group_tokens + group_owner_tokens
+
     moe_input_ids = pl.create_tensor([MOE_TOKENS], dtype=pl.INT64)
     with pl.scope():
-        decode_embedding_preamble(input_ids, embed_weight, hidden_workspace, x_ping, moe_input_ids)
+        decode_embedding_preamble(
+            input_ids, embed_weight, hidden_workspace, x_ping, moe_input_ids,
+            owner_tokens,
+        )
 
-    local_t = pl.cast(pl.tensor.dim(input_ids, 0), pl.INT32)
     raw_blocks_per_layer = pl.tensor.dim(raw_kv_pool, 0) // MAIN_LAYER_COUNT
     csa_state_blocks_per_layer = pl.tensor.dim(csa_compress_state, 0) // CSA_LAYER_COUNT
     csa_cmp_blocks_per_layer = pl.tensor.dim(csa_cmp_kv, 0) // CSA_LAYER_COUNT
@@ -473,39 +535,43 @@ def decode_fwd(
         routed_w2_layer_swa0: pl.Tensor[[N_LOCAL, D, MOE_INTER], pl.INT8] = pl.slice(routed_w2, [N_LOCAL, D, MOE_INTER], [weight_layer_swa0 * N_LOCAL, 0, 0])
         raw_kv_layer_swa0 = pl.slice(raw_kv_pool, [raw_blocks_per_layer, BLOCK_SIZE, 1, HEAD_DIM], [0, 0, 0, 0])
         with pl.scope():
-            if TP_SIZE == 1:
-                decode_swa_tp1(
-                    x_ping,
-                    hc_attn_fn_layer_swa0, hc_attn_scale_layer_swa0, hc_attn_base_layer_swa0,
-                    attn_norm_w_layer_swa0, wq_a_layer_swa0, wq_b_layer_swa0, wq_b_scale_layer_swa0,
-                    wkv_layer_swa0, gamma_cq_layer_swa0, gamma_ckv_layer_swa0,
-                    freqs_cos_local, freqs_sin_local,
-                    raw_kv_layer_swa0, swa_slot_mapping, swa_indices, swa_lens, position_ids_local,
-                    attn_sink_layer_swa0, wo_a_layer_swa0, wo_b_layer_swa0, wo_b_scale_layer_swa0,
-                    x_attn_active,
-                )
-            else:
-                decode_swa(
-                    x_ping,
-                    hc_attn_fn_layer_swa0, hc_attn_scale_layer_swa0, hc_attn_base_layer_swa0,
-                    attn_norm_w_layer_swa0, wq_a_layer_swa0, wq_b_layer_swa0, wq_b_scale_layer_swa0,
-                    wkv_layer_swa0, gamma_cq_layer_swa0, gamma_ckv_layer_swa0,
-                    freqs_cos_local, freqs_sin_local, freqs_cos, freqs_sin,
-                    raw_kv_layer_swa0, swa_slot_mapping, swa_indices, swa_lens, position_ids_local,
-                    attn_sink_layer_swa0, wo_a_layer_swa0, wo_b_layer_swa0, wo_b_scale_layer_swa0,
-                    x_attn_active,
-                    gather_window, gather_signal,
-                    attention_window, attention_signal, o_window, o_signal,
-                    group_base, tp_rank, local_t,
-                )
+            if group_tokens > 0:
+                if TP_SIZE == 1:
+                    decode_swa_tp1(
+                        x_ping,
+                        hc_attn_fn_layer_swa0, hc_attn_scale_layer_swa0, hc_attn_base_layer_swa0,
+                        attn_norm_w_layer_swa0, wq_a_layer_swa0, wq_b_layer_swa0, wq_b_scale_layer_swa0,
+                        wkv_layer_swa0, gamma_cq_layer_swa0, gamma_ckv_layer_swa0,
+                        freqs_cos, freqs_sin,
+                        raw_kv_layer_swa0, swa_slot_mapping, swa_indices, swa_lens, position_ids_local,
+                        attn_sink_layer_swa0, wo_a_layer_swa0, wo_b_layer_swa0, wo_b_scale_layer_swa0,
+                        x_attn_active,
+                    )
+                else:
+                    gather_signal_step_swa0 = gather_signal
+                    attention_signal_step_swa0 = attention_signal
+                    o_signal_step_swa0 = o_signal
+                    decode_swa(
+                        x_ping,
+                        hc_attn_fn_layer_swa0, hc_attn_scale_layer_swa0, hc_attn_base_layer_swa0,
+                        attn_norm_w_layer_swa0, wq_a_layer_swa0, wq_b_layer_swa0, wq_b_scale_layer_swa0,
+                        wkv_layer_swa0, gamma_cq_layer_swa0, gamma_ckv_layer_swa0,
+                        freqs_cos, freqs_sin,
+                        raw_kv_layer_swa0, swa_slot_mapping, swa_indices, swa_lens, position_ids_local,
+                        attn_sink_layer_swa0, wo_a_layer_swa0, wo_b_layer_swa0, wo_b_scale_layer_swa0,
+                        x_attn_active,
+                        gather_window, gather_signal_step_swa0,
+                        attention_window, attention_signal_step_swa0,
+                        o_window, o_signal_step_swa0,
+                        group_base, tp_rank, local_t,
+                    )
 
         with pl.scope():
             x_attn_moe_swa0 = pl.create_tensor([MOE_TOKENS, HC_MULT, D], dtype=pl.FP32)
             for token in pl.spmd(MOE_TOKENS, name_hint="decode_fwd_swa0_attn_pack"):
-                if token < local_t:
-                    x_attn_moe_swa0[token : token + 1, 0 : HC_MULT, 0 : D] = x_attn_active[
-                        token : token + 1, 0 : HC_MULT, 0 : D,
-                    ]
+                if token < owner_tokens:
+                    attn_row_swa0 = x_attn_active[token : token + 1, 0 : HC_MULT, 0 : D]
+                    x_attn_moe_swa0[token : token + 1, 0 : HC_MULT, 0 : D] = attn_row_swa0
                 else:
                     zero_moe_row_swa0 = pl.full([1, HC_MULT, D], dtype=pl.FP32, value=0.0)
                     x_attn_moe_swa0[token : token + 1, 0 : HC_MULT, 0 : D] = zero_moe_row_swa0
@@ -523,11 +589,16 @@ def decode_fwd(
                 x_moe_next,
                 recv_meta, recv_x, recv_aux, recv_route, arrived, data_arrived,
                 routed_y_buf, combine_arrived,
-                pl.const(0, pl.INT32), local_t, my_rank, pl.const(1, pl.INT32),
+                pl.const(0, pl.INT32), owner_tokens, my_rank, pl.const(1, pl.INT32),
             )
             for token in pl.spmd(MOE_TOKENS, name_hint="decode_fwd_swa0_active_trim"):
                 if token < local_t:
-                    x_pong[token : token + 1, 0 : HC_MULT, 0 : D] = x_moe_next[token : token + 1, 0 : HC_MULT, 0 : D]
+                    if token < owner_tokens:
+                        next_row_swa0 = x_moe_next[token : token + 1, 0 : HC_MULT, 0 : D]
+                        x_pong[token : token + 1, 0 : HC_MULT, 0 : D] = next_row_swa0
+                    else:
+                        zero_next_row_swa0 = pl.full([1, HC_MULT, D], dtype=pl.FP32, value=0.0)
+                        x_pong[token : token + 1, 0 : HC_MULT, 0 : D] = zero_next_row_swa0
 
     with pl.scope():
         weight_layer_swa1 = pl.const(1, pl.INT32) % FWD_WEIGHT_BANK_SIZE
@@ -566,39 +637,43 @@ def decode_fwd(
         routed_w2_layer_swa1: pl.Tensor[[N_LOCAL, D, MOE_INTER], pl.INT8] = pl.slice(routed_w2, [N_LOCAL, D, MOE_INTER], [weight_layer_swa1 * N_LOCAL, 0, 0])
         raw_kv_layer_swa1 = pl.slice(raw_kv_pool, [raw_blocks_per_layer, BLOCK_SIZE, 1, HEAD_DIM], [raw_blocks_per_layer, 0, 0, 0])
         with pl.scope():
-            if TP_SIZE == 1:
-                decode_swa_tp1(
-                    x_pong,
-                    hc_attn_fn_layer_swa1, hc_attn_scale_layer_swa1, hc_attn_base_layer_swa1,
-                    attn_norm_w_layer_swa1, wq_a_layer_swa1, wq_b_layer_swa1, wq_b_scale_layer_swa1,
-                    wkv_layer_swa1, gamma_cq_layer_swa1, gamma_ckv_layer_swa1,
-                    freqs_cos_local, freqs_sin_local,
-                    raw_kv_layer_swa1, swa_slot_mapping, swa_indices, swa_lens, position_ids_local,
-                    attn_sink_layer_swa1, wo_a_layer_swa1, wo_b_layer_swa1, wo_b_scale_layer_swa1,
-                    x_attn_active,
-                )
-            else:
-                decode_swa(
-                    x_pong,
-                    hc_attn_fn_layer_swa1, hc_attn_scale_layer_swa1, hc_attn_base_layer_swa1,
-                    attn_norm_w_layer_swa1, wq_a_layer_swa1, wq_b_layer_swa1, wq_b_scale_layer_swa1,
-                    wkv_layer_swa1, gamma_cq_layer_swa1, gamma_ckv_layer_swa1,
-                    freqs_cos_local, freqs_sin_local, freqs_cos, freqs_sin,
-                    raw_kv_layer_swa1, swa_slot_mapping, swa_indices, swa_lens, position_ids_local,
-                    attn_sink_layer_swa1, wo_a_layer_swa1, wo_b_layer_swa1, wo_b_scale_layer_swa1,
-                    x_attn_active,
-                    gather_window, gather_signal,
-                    attention_window, attention_signal, o_window, o_signal,
-                    group_base, tp_rank, local_t,
-                )
+            if group_tokens > 0:
+                if TP_SIZE == 1:
+                    decode_swa_tp1(
+                        x_pong,
+                        hc_attn_fn_layer_swa1, hc_attn_scale_layer_swa1, hc_attn_base_layer_swa1,
+                        attn_norm_w_layer_swa1, wq_a_layer_swa1, wq_b_layer_swa1, wq_b_scale_layer_swa1,
+                        wkv_layer_swa1, gamma_cq_layer_swa1, gamma_ckv_layer_swa1,
+                        freqs_cos, freqs_sin,
+                        raw_kv_layer_swa1, swa_slot_mapping, swa_indices, swa_lens, position_ids_local,
+                        attn_sink_layer_swa1, wo_a_layer_swa1, wo_b_layer_swa1, wo_b_scale_layer_swa1,
+                        x_attn_active,
+                    )
+                else:
+                    gather_signal_step_swa1 = gather_signal
+                    attention_signal_step_swa1 = attention_signal
+                    o_signal_step_swa1 = o_signal
+                    decode_swa(
+                        x_pong,
+                        hc_attn_fn_layer_swa1, hc_attn_scale_layer_swa1, hc_attn_base_layer_swa1,
+                        attn_norm_w_layer_swa1, wq_a_layer_swa1, wq_b_layer_swa1, wq_b_scale_layer_swa1,
+                        wkv_layer_swa1, gamma_cq_layer_swa1, gamma_ckv_layer_swa1,
+                        freqs_cos, freqs_sin,
+                        raw_kv_layer_swa1, swa_slot_mapping, swa_indices, swa_lens, position_ids_local,
+                        attn_sink_layer_swa1, wo_a_layer_swa1, wo_b_layer_swa1, wo_b_scale_layer_swa1,
+                        x_attn_active,
+                        gather_window, gather_signal_step_swa1,
+                        attention_window, attention_signal_step_swa1,
+                        o_window, o_signal_step_swa1,
+                        group_base, tp_rank, local_t,
+                    )
 
         with pl.scope():
             x_attn_moe_swa1 = pl.create_tensor([MOE_TOKENS, HC_MULT, D], dtype=pl.FP32)
             for token in pl.spmd(MOE_TOKENS, name_hint="decode_fwd_swa1_attn_pack"):
-                if token < local_t:
-                    x_attn_moe_swa1[token : token + 1, 0 : HC_MULT, 0 : D] = x_attn_active[
-                        token : token + 1, 0 : HC_MULT, 0 : D,
-                    ]
+                if token < owner_tokens:
+                    attn_row_swa1 = x_attn_active[token : token + 1, 0 : HC_MULT, 0 : D]
+                    x_attn_moe_swa1[token : token + 1, 0 : HC_MULT, 0 : D] = attn_row_swa1
                 else:
                     zero_moe_row_swa1 = pl.full([1, HC_MULT, D], dtype=pl.FP32, value=0.0)
                     x_attn_moe_swa1[token : token + 1, 0 : HC_MULT, 0 : D] = zero_moe_row_swa1
@@ -616,11 +691,16 @@ def decode_fwd(
                 x_moe_next,
                 recv_meta, recv_x, recv_aux, recv_route, arrived, data_arrived,
                 routed_y_buf, combine_arrived,
-                pl.const(1, pl.INT32), local_t, my_rank, pl.const(2, pl.INT32),
+                pl.const(1, pl.INT32), owner_tokens, my_rank, pl.const(2, pl.INT32),
             )
             for token in pl.spmd(MOE_TOKENS, name_hint="decode_fwd_swa1_active_trim"):
                 if token < local_t:
-                    x_ping[token : token + 1, 0 : HC_MULT, 0 : D] = x_moe_next[token : token + 1, 0 : HC_MULT, 0 : D]
+                    if token < owner_tokens:
+                        next_row_swa1 = x_moe_next[token : token + 1, 0 : HC_MULT, 0 : D]
+                        x_ping[token : token + 1, 0 : HC_MULT, 0 : D] = next_row_swa1
+                    else:
+                        zero_next_row_swa1 = pl.full([1, HC_MULT, D], dtype=pl.FP32, value=0.0)
+                        x_ping[token : token + 1, 0 : HC_MULT, 0 : D] = zero_next_row_swa1
 
     for ordinal in pl.range(HCA_LAYER_COUNT):
         csa_model_layer = pl.cast(ordinal * 2 + 2, pl.INT32)
@@ -683,65 +763,71 @@ def decode_fwd(
             shared_w2_layer_csa = pl.slice(shared_w2, [D, MOE_INTER], [csa_weight_layer * D, 0])
             shared_w2_scale_layer_csa = pl.slice(shared_w2_scale, [D], [csa_weight_layer * D])
             with pl.scope():
-                if TP_SIZE == 1:
-                    decode_csa_tp1(
-                        x_ping,
-                        hc_attn_fn_layer_csa, hc_attn_scale_layer_csa, hc_attn_base_layer_csa,
-                        attn_norm_w_layer_csa, wq_a_layer_csa, wq_b_layer_csa, wq_b_scale_layer_csa,
-                        wkv_layer_csa, gamma_cq_layer_csa, gamma_ckv_layer_csa,
-                        freqs_cos_local, freqs_sin_local, csa_cmp_freqs_cos, csa_cmp_freqs_sin,
-                        csa_cmp_wkv_layer_csa, csa_cmp_wgate_layer_csa,
-                        csa_cmp_ape_layer_csa, csa_cmp_norm_w_layer_csa,
-                        csa_state_layer_csa, csa_compress_state_block_table,
-                        csa_idx_wq_b_layer_csa, csa_idx_wq_b_scale_layer_csa,
-                        csa_weights_proj_layer_csa, csa_hadamard_idx_layer_csa,
-                        csa_inner_wkv_layer_csa, csa_inner_wgate_layer_csa,
-                        csa_inner_ape_layer_csa, csa_inner_norm_w_layer_csa,
-                        csa_inner_state_layer_csa, csa_inner_compress_state_block_table,
-                        raw_kv_layer_csa, csa_cmp_kv_layer_csa, csa_cmp_block_table,
-                        csa_idx_cache_layer_csa, csa_idx_scale_layer_csa, csa_idx_block_table,
-                        csa_ori_slot_mapping, csa_window_swa_indices, csa_window_swa_lens,
-                        csa_cmp_slot_mapping, csa_idx_slot_mapping,
-                        csa_state_slot_mapping, csa_inner_state_slot_mapping,
-                        position_ids_local, csa_kv_seq_lens,
-                        attn_sink_layer_csa, wo_a_layer_csa, wo_b_layer_csa, wo_b_scale_layer_csa,
-                        x_attn_active,
-                    )
-                else:
-                    decode_csa(
-                        x_ping,
-                        hc_attn_fn_layer_csa, hc_attn_scale_layer_csa, hc_attn_base_layer_csa,
-                        attn_norm_w_layer_csa, wq_a_layer_csa, wq_b_layer_csa, wq_b_scale_layer_csa,
-                        wkv_layer_csa, gamma_cq_layer_csa, gamma_ckv_layer_csa,
-                        freqs_cos_local, freqs_sin_local, freqs_cos, freqs_sin, csa_cmp_freqs_cos, csa_cmp_freqs_sin,
-                        csa_cmp_wkv_layer_csa, csa_cmp_wgate_layer_csa,
-                        csa_cmp_ape_layer_csa, csa_cmp_norm_w_layer_csa,
-                        csa_state_layer_csa, csa_compress_state_block_table,
-                        csa_idx_wq_b_layer_csa, csa_idx_wq_b_scale_layer_csa,
-                        csa_weights_proj_layer_csa, csa_hadamard_idx_layer_csa,
-                        csa_inner_wkv_layer_csa, csa_inner_wgate_layer_csa,
-                        csa_inner_ape_layer_csa, csa_inner_norm_w_layer_csa,
-                        csa_inner_state_layer_csa, csa_inner_compress_state_block_table,
-                        raw_kv_layer_csa, csa_cmp_kv_layer_csa, csa_cmp_block_table,
-                        csa_idx_cache_layer_csa, csa_idx_scale_layer_csa, csa_idx_block_table,
-                        csa_ori_slot_mapping, csa_window_swa_indices, csa_window_swa_lens,
-                        csa_cmp_slot_mapping, csa_idx_slot_mapping,
-                        csa_state_slot_mapping, csa_inner_state_slot_mapping,
-                        position_ids_local, position_ids, csa_kv_seq_lens,
-                        attn_sink_layer_csa, wo_a_layer_csa, wo_b_layer_csa, wo_b_scale_layer_csa,
-                        x_attn_active,
-                        gather_window, gather_signal,
-                    attention_window, attention_signal, o_window, o_signal,
-                        group_base, tp_rank, local_t,
-                    )
+                if group_tokens > 0:
+                    if TP_SIZE == 1:
+                        decode_csa_tp1(
+                            x_ping,
+                            hc_attn_fn_layer_csa, hc_attn_scale_layer_csa, hc_attn_base_layer_csa,
+                            attn_norm_w_layer_csa, wq_a_layer_csa, wq_b_layer_csa, wq_b_scale_layer_csa,
+                            wkv_layer_csa, gamma_cq_layer_csa, gamma_ckv_layer_csa,
+                            compressed_freqs_cos, compressed_freqs_sin,
+                            csa_cmp_freqs_cos, csa_cmp_freqs_sin,
+                            csa_cmp_wkv_layer_csa, csa_cmp_wgate_layer_csa,
+                            csa_cmp_ape_layer_csa, csa_cmp_norm_w_layer_csa,
+                            csa_state_layer_csa, csa_compress_state_block_table,
+                            csa_idx_wq_b_layer_csa, csa_idx_wq_b_scale_layer_csa,
+                            csa_weights_proj_layer_csa, csa_hadamard_idx_layer_csa,
+                            csa_inner_wkv_layer_csa, csa_inner_wgate_layer_csa,
+                            csa_inner_ape_layer_csa, csa_inner_norm_w_layer_csa,
+                            csa_inner_state_layer_csa, csa_inner_compress_state_block_table,
+                            raw_kv_layer_csa, csa_cmp_kv_layer_csa, csa_cmp_block_table,
+                            csa_idx_cache_layer_csa, csa_idx_scale_layer_csa, csa_idx_block_table,
+                            csa_ori_slot_mapping, csa_window_swa_indices, csa_window_swa_lens,
+                            csa_cmp_slot_mapping, csa_idx_slot_mapping,
+                            csa_state_slot_mapping, csa_inner_state_slot_mapping,
+                            position_ids_local, csa_kv_seq_lens,
+                            attn_sink_layer_csa, wo_a_layer_csa, wo_b_layer_csa, wo_b_scale_layer_csa,
+                            x_attn_active,
+                        )
+                    else:
+                        gather_signal_step_csa = gather_signal
+                        attention_signal_step_csa = attention_signal
+                        o_signal_step_csa = o_signal
+                        decode_csa(
+                            x_ping,
+                            hc_attn_fn_layer_csa, hc_attn_scale_layer_csa, hc_attn_base_layer_csa,
+                            attn_norm_w_layer_csa, wq_a_layer_csa, wq_b_layer_csa, wq_b_scale_layer_csa,
+                            wkv_layer_csa, gamma_cq_layer_csa, gamma_ckv_layer_csa,
+                            compressed_freqs_cos, compressed_freqs_sin,
+                            csa_cmp_freqs_cos, csa_cmp_freqs_sin,
+                            csa_cmp_wkv_layer_csa, csa_cmp_wgate_layer_csa,
+                            csa_cmp_ape_layer_csa, csa_cmp_norm_w_layer_csa,
+                            csa_state_layer_csa, csa_compress_state_block_table,
+                            csa_idx_wq_b_layer_csa, csa_idx_wq_b_scale_layer_csa,
+                            csa_weights_proj_layer_csa, csa_hadamard_idx_layer_csa,
+                            csa_inner_wkv_layer_csa, csa_inner_wgate_layer_csa,
+                            csa_inner_ape_layer_csa, csa_inner_norm_w_layer_csa,
+                            csa_inner_state_layer_csa, csa_inner_compress_state_block_table,
+                            raw_kv_layer_csa, csa_cmp_kv_layer_csa, csa_cmp_block_table,
+                            csa_idx_cache_layer_csa, csa_idx_scale_layer_csa, csa_idx_block_table,
+                            csa_ori_slot_mapping, csa_window_swa_indices, csa_window_swa_lens,
+                            csa_cmp_slot_mapping, csa_idx_slot_mapping,
+                            csa_state_slot_mapping, csa_inner_state_slot_mapping,
+                            position_ids_local, position_ids, csa_kv_seq_lens,
+                            attn_sink_layer_csa, wo_a_layer_csa, wo_b_layer_csa, wo_b_scale_layer_csa,
+                            x_attn_active,
+                            gather_window, gather_signal_step_csa,
+                            attention_window, attention_signal_step_csa,
+                            o_window, o_signal_step_csa,
+                            group_base, tp_rank, local_t,
+                        )
 
             with pl.scope():
                 x_attn_moe_csa = pl.create_tensor([MOE_TOKENS, HC_MULT, D], dtype=pl.FP32)
                 for token in pl.spmd(MOE_TOKENS, name_hint="decode_fwd_csa_attn_pack"):
-                    if token < local_t:
-                        x_attn_moe_csa[token : token + 1, 0 : HC_MULT, 0 : D] = x_attn_active[
-                            token : token + 1, 0 : HC_MULT, 0 : D,
-                        ]
+                    if token < owner_tokens:
+                        attn_row_csa = x_attn_active[token : token + 1, 0 : HC_MULT, 0 : D]
+                        x_attn_moe_csa[token : token + 1, 0 : HC_MULT, 0 : D] = attn_row_csa
                     else:
                         zero_moe_row_csa = pl.full([1, HC_MULT, D], dtype=pl.FP32, value=0.0)
                         x_attn_moe_csa[token : token + 1, 0 : HC_MULT, 0 : D] = zero_moe_row_csa
@@ -759,13 +845,16 @@ def decode_fwd(
                     x_moe_next,
                     recv_meta, recv_x, recv_aux, recv_route, arrived, data_arrived,
                     routed_y_buf, combine_arrived,
-                    csa_model_layer, local_t, my_rank, csa_model_layer + 1,
+                    csa_model_layer, owner_tokens, my_rank, csa_model_layer + 1,
                 )
                 for token in pl.spmd(MOE_TOKENS, name_hint="decode_fwd_csa_active_trim"):
                     if token < local_t:
-                        x_pong[token : token + 1, 0 : HC_MULT, 0 : D] = x_moe_next[
-                            token : token + 1, 0 : HC_MULT, 0 : D,
-                        ]
+                        if token < owner_tokens:
+                            next_row_csa = x_moe_next[token : token + 1, 0 : HC_MULT, 0 : D]
+                            x_pong[token : token + 1, 0 : HC_MULT, 0 : D] = next_row_csa
+                        else:
+                            zero_next_row_csa = pl.full([1, HC_MULT, D], dtype=pl.FP32, value=0.0)
+                            x_pong[token : token + 1, 0 : HC_MULT, 0 : D] = zero_next_row_csa
 
         with pl.scope():
             hc_attn_fn_layer_hca = pl.slice(hc_attn_fn, [MIX_HC, HC_DIM], [hca_weight_layer * HC_FN_STORAGE_ROWS, 0])
@@ -809,51 +898,57 @@ def decode_fwd(
             shared_w2_layer_hca = pl.slice(shared_w2, [D, MOE_INTER], [hca_weight_layer * D, 0])
             shared_w2_scale_layer_hca = pl.slice(shared_w2_scale, [D], [hca_weight_layer * D])
             with pl.scope():
-                if TP_SIZE == 1:
-                    decode_hca_tp1(
-                        x_pong,
-                        hc_attn_fn_layer_hca, hc_attn_scale_layer_hca, hc_attn_base_layer_hca,
-                        attn_norm_w_layer_hca, wq_a_layer_hca, wq_b_layer_hca, wq_b_scale_layer_hca,
-                        wkv_layer_hca, gamma_cq_layer_hca, gamma_ckv_layer_hca,
-                        freqs_cos_local, freqs_sin_local, hca_cmp_freqs_cos, hca_cmp_freqs_sin,
-                        hca_cmp_wkv_layer_hca, hca_cmp_wgate_layer_hca,
-                        hca_cmp_ape_layer_hca, hca_cmp_norm_w_layer_hca,
-                        hca_state_layer_hca, hca_compress_state_block_table,
-                        raw_kv_layer_hca, hca_cmp_kv_layer_hca, hca_cmp_block_table,
-                        hca_ori_slot_mapping, hca_window_swa_indices, hca_window_swa_lens,
-                        hca_cmp_slot_mapping, hca_state_slot_mapping,
-                        position_ids_local, hca_kv_seq_lens,
-                        attn_sink_layer_hca, wo_a_layer_hca, wo_b_layer_hca, wo_b_scale_layer_hca,
-                        x_attn_active,
-                    )
-                else:
-                    decode_hca(
-                        x_pong,
-                        hc_attn_fn_layer_hca, hc_attn_scale_layer_hca, hc_attn_base_layer_hca,
-                        attn_norm_w_layer_hca, wq_a_layer_hca, wq_b_layer_hca, wq_b_scale_layer_hca,
-                        wkv_layer_hca, gamma_cq_layer_hca, gamma_ckv_layer_hca,
-                        freqs_cos_local, freqs_sin_local, freqs_cos, freqs_sin, hca_cmp_freqs_cos, hca_cmp_freqs_sin,
-                        hca_cmp_wkv_layer_hca, hca_cmp_wgate_layer_hca,
-                        hca_cmp_ape_layer_hca, hca_cmp_norm_w_layer_hca,
-                        hca_state_layer_hca, hca_compress_state_block_table,
-                        raw_kv_layer_hca, hca_cmp_kv_layer_hca, hca_cmp_block_table,
-                        hca_ori_slot_mapping, hca_window_swa_indices, hca_window_swa_lens,
-                        hca_cmp_slot_mapping, hca_state_slot_mapping,
-                        position_ids_local, position_ids, hca_kv_seq_lens,
-                        attn_sink_layer_hca, wo_a_layer_hca, wo_b_layer_hca, wo_b_scale_layer_hca,
-                        x_attn_active,
-                        gather_window, gather_signal,
-                    attention_window, attention_signal, o_window, o_signal,
-                        group_base, tp_rank, local_t,
-                    )
+                if group_tokens > 0:
+                    if TP_SIZE == 1:
+                        decode_hca_tp1(
+                            x_pong,
+                            hc_attn_fn_layer_hca, hc_attn_scale_layer_hca, hc_attn_base_layer_hca,
+                            attn_norm_w_layer_hca, wq_a_layer_hca, wq_b_layer_hca, wq_b_scale_layer_hca,
+                            wkv_layer_hca, gamma_cq_layer_hca, gamma_ckv_layer_hca,
+                            compressed_freqs_cos, compressed_freqs_sin,
+                            hca_cmp_freqs_cos, hca_cmp_freqs_sin,
+                            hca_cmp_wkv_layer_hca, hca_cmp_wgate_layer_hca,
+                            hca_cmp_ape_layer_hca, hca_cmp_norm_w_layer_hca,
+                            hca_state_layer_hca, hca_compress_state_block_table,
+                            raw_kv_layer_hca, hca_cmp_kv_layer_hca, hca_cmp_block_table,
+                            hca_ori_slot_mapping, hca_window_swa_indices, hca_window_swa_lens,
+                            hca_cmp_slot_mapping, hca_state_slot_mapping,
+                            position_ids_local, hca_kv_seq_lens,
+                            attn_sink_layer_hca, wo_a_layer_hca, wo_b_layer_hca, wo_b_scale_layer_hca,
+                            x_attn_active,
+                        )
+                    else:
+                        gather_signal_step_hca = gather_signal
+                        attention_signal_step_hca = attention_signal
+                        o_signal_step_hca = o_signal
+                        decode_hca(
+                            x_pong,
+                            hc_attn_fn_layer_hca, hc_attn_scale_layer_hca, hc_attn_base_layer_hca,
+                            attn_norm_w_layer_hca, wq_a_layer_hca, wq_b_layer_hca, wq_b_scale_layer_hca,
+                            wkv_layer_hca, gamma_cq_layer_hca, gamma_ckv_layer_hca,
+                            compressed_freqs_cos, compressed_freqs_sin,
+                            hca_cmp_freqs_cos, hca_cmp_freqs_sin,
+                            hca_cmp_wkv_layer_hca, hca_cmp_wgate_layer_hca,
+                            hca_cmp_ape_layer_hca, hca_cmp_norm_w_layer_hca,
+                            hca_state_layer_hca, hca_compress_state_block_table,
+                            raw_kv_layer_hca, hca_cmp_kv_layer_hca, hca_cmp_block_table,
+                            hca_ori_slot_mapping, hca_window_swa_indices, hca_window_swa_lens,
+                            hca_cmp_slot_mapping, hca_state_slot_mapping,
+                            position_ids_local, position_ids, hca_kv_seq_lens,
+                            attn_sink_layer_hca, wo_a_layer_hca, wo_b_layer_hca, wo_b_scale_layer_hca,
+                            x_attn_active,
+                            gather_window, gather_signal_step_hca,
+                            attention_window, attention_signal_step_hca,
+                            o_window, o_signal_step_hca,
+                            group_base, tp_rank, local_t,
+                        )
 
             with pl.scope():
                 x_attn_moe_hca = pl.create_tensor([MOE_TOKENS, HC_MULT, D], dtype=pl.FP32)
                 for token in pl.spmd(MOE_TOKENS, name_hint="decode_fwd_hca_attn_pack"):
-                    if token < local_t:
-                        x_attn_moe_hca[token : token + 1, 0 : HC_MULT, 0 : D] = x_attn_active[
-                            token : token + 1, 0 : HC_MULT, 0 : D,
-                        ]
+                    if token < owner_tokens:
+                        attn_row_hca = x_attn_active[token : token + 1, 0 : HC_MULT, 0 : D]
+                        x_attn_moe_hca[token : token + 1, 0 : HC_MULT, 0 : D] = attn_row_hca
                     else:
                         zero_moe_row_hca = pl.full([1, HC_MULT, D], dtype=pl.FP32, value=0.0)
                         x_attn_moe_hca[token : token + 1, 0 : HC_MULT, 0 : D] = zero_moe_row_hca
@@ -871,13 +966,16 @@ def decode_fwd(
                     x_moe_next,
                     recv_meta, recv_x, recv_aux, recv_route, arrived, data_arrived,
                     routed_y_buf, combine_arrived,
-                    hca_model_layer, local_t, my_rank, hca_model_layer + 1,
+                    hca_model_layer, owner_tokens, my_rank, hca_model_layer + 1,
                 )
                 for token in pl.spmd(MOE_TOKENS, name_hint="decode_fwd_hca_active_trim"):
                     if token < local_t:
-                        x_ping[token : token + 1, 0 : HC_MULT, 0 : D] = x_moe_next[
-                            token : token + 1, 0 : HC_MULT, 0 : D,
-                        ]
+                        if token < owner_tokens:
+                            next_row_hca = x_moe_next[token : token + 1, 0 : HC_MULT, 0 : D]
+                            x_ping[token : token + 1, 0 : HC_MULT, 0 : D] = next_row_hca
+                        else:
+                            zero_next_row_hca = pl.full([1, HC_MULT, D], dtype=pl.FP32, value=0.0)
+                            x_ping[token : token + 1, 0 : HC_MULT, 0 : D] = zero_next_row_hca
 
     with pl.scope():
         csa_ordinal_last = pl.const(20, pl.INT32)
@@ -936,65 +1034,71 @@ def decode_fwd(
         shared_w2_layer_last = pl.slice(shared_w2, [D, MOE_INTER], [weight_layer_last * D, 0])
         shared_w2_scale_layer_last = pl.slice(shared_w2_scale, [D], [weight_layer_last * D])
         with pl.scope():
-            if TP_SIZE == 1:
-                decode_csa_tp1(
-                    x_ping,
-                    hc_attn_fn_layer_last, hc_attn_scale_layer_last, hc_attn_base_layer_last,
-                    attn_norm_w_layer_last, wq_a_layer_last, wq_b_layer_last, wq_b_scale_layer_last,
-                    wkv_layer_last, gamma_cq_layer_last, gamma_ckv_layer_last,
-                    freqs_cos_local, freqs_sin_local, csa_cmp_freqs_cos, csa_cmp_freqs_sin,
-                    csa_cmp_wkv_layer_last, csa_cmp_wgate_layer_last,
-                    csa_cmp_ape_layer_last, csa_cmp_norm_w_layer_last,
-                    csa_state_layer_last, csa_compress_state_block_table,
-                    csa_idx_wq_b_layer_last, csa_idx_wq_b_scale_layer_last,
-                    csa_weights_proj_layer_last, csa_hadamard_idx_layer_last,
-                    csa_inner_wkv_layer_last, csa_inner_wgate_layer_last,
-                    csa_inner_ape_layer_last, csa_inner_norm_w_layer_last,
-                    csa_inner_state_layer_last, csa_inner_compress_state_block_table,
-                    raw_kv_layer_last, csa_cmp_kv_layer_last, csa_cmp_block_table,
-                    csa_idx_cache_layer_last, csa_idx_scale_layer_last, csa_idx_block_table,
-                    csa_ori_slot_mapping, csa_window_swa_indices, csa_window_swa_lens,
-                    csa_cmp_slot_mapping, csa_idx_slot_mapping,
-                    csa_state_slot_mapping, csa_inner_state_slot_mapping,
-                    position_ids_local, csa_kv_seq_lens,
-                    attn_sink_layer_last, wo_a_layer_last, wo_b_layer_last, wo_b_scale_layer_last,
-                    x_attn_active,
-                )
-            else:
-                decode_csa(
-                    x_ping,
-                    hc_attn_fn_layer_last, hc_attn_scale_layer_last, hc_attn_base_layer_last,
-                    attn_norm_w_layer_last, wq_a_layer_last, wq_b_layer_last, wq_b_scale_layer_last,
-                    wkv_layer_last, gamma_cq_layer_last, gamma_ckv_layer_last,
-                    freqs_cos_local, freqs_sin_local, freqs_cos, freqs_sin, csa_cmp_freqs_cos, csa_cmp_freqs_sin,
-                    csa_cmp_wkv_layer_last, csa_cmp_wgate_layer_last,
-                    csa_cmp_ape_layer_last, csa_cmp_norm_w_layer_last,
-                    csa_state_layer_last, csa_compress_state_block_table,
-                    csa_idx_wq_b_layer_last, csa_idx_wq_b_scale_layer_last,
-                    csa_weights_proj_layer_last, csa_hadamard_idx_layer_last,
-                    csa_inner_wkv_layer_last, csa_inner_wgate_layer_last,
-                    csa_inner_ape_layer_last, csa_inner_norm_w_layer_last,
-                    csa_inner_state_layer_last, csa_inner_compress_state_block_table,
-                    raw_kv_layer_last, csa_cmp_kv_layer_last, csa_cmp_block_table,
-                    csa_idx_cache_layer_last, csa_idx_scale_layer_last, csa_idx_block_table,
-                    csa_ori_slot_mapping, csa_window_swa_indices, csa_window_swa_lens,
-                    csa_cmp_slot_mapping, csa_idx_slot_mapping,
-                    csa_state_slot_mapping, csa_inner_state_slot_mapping,
-                    position_ids_local, position_ids, csa_kv_seq_lens,
-                    attn_sink_layer_last, wo_a_layer_last, wo_b_layer_last, wo_b_scale_layer_last,
-                    x_attn_active,
-                    gather_window, gather_signal,
-                    attention_window, attention_signal, o_window, o_signal,
-                    group_base, tp_rank, local_t,
-                )
+            if group_tokens > 0:
+                if TP_SIZE == 1:
+                    decode_csa_tp1(
+                        x_ping,
+                        hc_attn_fn_layer_last, hc_attn_scale_layer_last, hc_attn_base_layer_last,
+                        attn_norm_w_layer_last, wq_a_layer_last, wq_b_layer_last, wq_b_scale_layer_last,
+                        wkv_layer_last, gamma_cq_layer_last, gamma_ckv_layer_last,
+                        compressed_freqs_cos, compressed_freqs_sin,
+                        csa_cmp_freqs_cos, csa_cmp_freqs_sin,
+                        csa_cmp_wkv_layer_last, csa_cmp_wgate_layer_last,
+                        csa_cmp_ape_layer_last, csa_cmp_norm_w_layer_last,
+                        csa_state_layer_last, csa_compress_state_block_table,
+                        csa_idx_wq_b_layer_last, csa_idx_wq_b_scale_layer_last,
+                        csa_weights_proj_layer_last, csa_hadamard_idx_layer_last,
+                        csa_inner_wkv_layer_last, csa_inner_wgate_layer_last,
+                        csa_inner_ape_layer_last, csa_inner_norm_w_layer_last,
+                        csa_inner_state_layer_last, csa_inner_compress_state_block_table,
+                        raw_kv_layer_last, csa_cmp_kv_layer_last, csa_cmp_block_table,
+                        csa_idx_cache_layer_last, csa_idx_scale_layer_last, csa_idx_block_table,
+                        csa_ori_slot_mapping, csa_window_swa_indices, csa_window_swa_lens,
+                        csa_cmp_slot_mapping, csa_idx_slot_mapping,
+                        csa_state_slot_mapping, csa_inner_state_slot_mapping,
+                        position_ids_local, csa_kv_seq_lens,
+                        attn_sink_layer_last, wo_a_layer_last, wo_b_layer_last, wo_b_scale_layer_last,
+                        x_attn_active,
+                    )
+                else:
+                    gather_signal_step_last = gather_signal
+                    attention_signal_step_last = attention_signal
+                    o_signal_step_last = o_signal
+                    decode_csa(
+                        x_ping,
+                        hc_attn_fn_layer_last, hc_attn_scale_layer_last, hc_attn_base_layer_last,
+                        attn_norm_w_layer_last, wq_a_layer_last, wq_b_layer_last, wq_b_scale_layer_last,
+                        wkv_layer_last, gamma_cq_layer_last, gamma_ckv_layer_last,
+                        compressed_freqs_cos, compressed_freqs_sin,
+                        csa_cmp_freqs_cos, csa_cmp_freqs_sin,
+                        csa_cmp_wkv_layer_last, csa_cmp_wgate_layer_last,
+                        csa_cmp_ape_layer_last, csa_cmp_norm_w_layer_last,
+                        csa_state_layer_last, csa_compress_state_block_table,
+                        csa_idx_wq_b_layer_last, csa_idx_wq_b_scale_layer_last,
+                        csa_weights_proj_layer_last, csa_hadamard_idx_layer_last,
+                        csa_inner_wkv_layer_last, csa_inner_wgate_layer_last,
+                        csa_inner_ape_layer_last, csa_inner_norm_w_layer_last,
+                        csa_inner_state_layer_last, csa_inner_compress_state_block_table,
+                        raw_kv_layer_last, csa_cmp_kv_layer_last, csa_cmp_block_table,
+                        csa_idx_cache_layer_last, csa_idx_scale_layer_last, csa_idx_block_table,
+                        csa_ori_slot_mapping, csa_window_swa_indices, csa_window_swa_lens,
+                        csa_cmp_slot_mapping, csa_idx_slot_mapping,
+                        csa_state_slot_mapping, csa_inner_state_slot_mapping,
+                        position_ids_local, position_ids, csa_kv_seq_lens,
+                        attn_sink_layer_last, wo_a_layer_last, wo_b_layer_last, wo_b_scale_layer_last,
+                        x_attn_active,
+                        gather_window, gather_signal_step_last,
+                        attention_window, attention_signal_step_last,
+                        o_window, o_signal_step_last,
+                        group_base, tp_rank, local_t,
+                    )
 
         with pl.scope():
             x_attn_moe_last = pl.create_tensor([MOE_TOKENS, HC_MULT, D], dtype=pl.FP32)
             for token in pl.spmd(MOE_TOKENS, name_hint="decode_fwd_last_attn_pack"):
-                if token < local_t:
-                    x_attn_moe_last[token : token + 1, 0 : HC_MULT, 0 : D] = x_attn_active[
-                        token : token + 1, 0 : HC_MULT, 0 : D,
-                    ]
+                if token < owner_tokens:
+                    attn_row_last = x_attn_active[token : token + 1, 0 : HC_MULT, 0 : D]
+                    x_attn_moe_last[token : token + 1, 0 : HC_MULT, 0 : D] = attn_row_last
                 else:
                     zero_moe_row_last = pl.full([1, HC_MULT, D], dtype=pl.FP32, value=0.0)
                     x_attn_moe_last[token : token + 1, 0 : HC_MULT, 0 : D] = zero_moe_row_last
@@ -1012,34 +1116,76 @@ def decode_fwd(
                 x_moe_next,
                 recv_meta, recv_x, recv_aux, recv_route, arrived, data_arrived,
                 routed_y_buf, combine_arrived,
-                model_layer_last, local_t, my_rank, pl.const(43, pl.INT32),
+                model_layer_last, owner_tokens, my_rank, pl.const(43, pl.INT32),
             )
             for token in pl.spmd(MOE_TOKENS, name_hint="decode_fwd_last_active_trim"):
                 if token < local_t:
-                    pre_hc_hidden_out[token : token + 1, 0 : HC_MULT, 0 : D] = x_moe_next[
-                        token : token + 1, 0 : HC_MULT, 0 : D,
-                    ]
+                    if token < owner_tokens:
+                        next_row_last = x_moe_next[token : token + 1, 0 : HC_MULT, 0 : D]
+                        pre_hc_hidden_out[token : token + 1, 0 : HC_MULT, 0 : D] = next_row_last
+                    else:
+                        zero_next_row_last = pl.full([1, HC_MULT, D], dtype=pl.FP32, value=0.0)
+                        pre_hc_hidden_out[token : token + 1, 0 : HC_MULT, 0 : D] = zero_next_row_last
     clear_moe_signals(x_moe_next, arrived, data_arrived, combine_arrived)
 
     with pl.scope():
-        hc_head(pre_hc_hidden_out, hc_head_fn, hc_head_scale, hc_head_base, hidden_workspace)
-        final_norm_tid = rms_norm(hidden_workspace, final_norm_w, x_out)
-        lm_head(
-            x_out,
-            lm_head_weight,
-            logit_row_indices,
-            logits,
-            lm_head_hidden_window,
-            lm_head_hidden_done,
-            lm_head_logits_window,
-            lm_head_logits_done,
-            group_base,
-            tp_rank,
-            pl.const(LM_HEAD_COMM_EPOCH, pl.INT32),
-            final_norm_tid,
-        )
-        greedy_sample(logits, sampled_ids)
-        mask_inactive_sample_rows(logit_row_indices, sampled_ids)
+        if group_tokens > 0:
+            target_hc_stack = pl.create_tensor([MOE_TOKENS * 3, HC_MULT, D], dtype=pl.FP32)
+            for token in pl.spmd(MOE_TOKENS, name_hint="decode_fwd_pack_target_hc"):
+                if token < local_t:
+                    target_row = token * 3
+                    pong_row = x_pong[token : token + 1, 0 : HC_MULT, 0 : D]
+                    target_hc_stack[target_row : target_row + 1, 0 : HC_MULT, 0 : D] = pong_row
+                    ping_row = x_ping[token : token + 1, 0 : HC_MULT, 0 : D]
+                    target_hc_stack[target_row + 1 : target_row + 2, 0 : HC_MULT, 0 : D] = ping_row
+                    hidden_out_row = pre_hc_hidden_out[token : token + 1, 0 : HC_MULT, 0 : D]
+                    target_hc_stack[target_row + 2 : target_row + 3, 0 : HC_MULT, 0 : D] = hidden_out_row
+            target_rows = local_t * 3
+            target_hc_active = pl.slice(target_hc_stack, [target_rows, HC_MULT, D], [0, 0, 0])
+            target_hidden_stack = pl.create_tensor([MOE_TOKENS * 3, D], dtype=pl.BF16)
+            target_hidden_active = pl.slice(target_hidden_stack, [target_rows, D], [0, 0])
+            hc_head(target_hc_active, hc_head_fn, hc_head_scale, hc_head_base, target_hidden_active)
+            for token in pl.spmd(MOE_TOKENS, name_hint="decode_fwd_store_target_hidden"):
+                if token < local_t:
+                    target_row = token * 3
+                    target_hidden_l40 = target_hidden_stack[target_row : target_row + 1, 0:D]
+                    target_hidden_l41 = target_hidden_stack[target_row + 1 : target_row + 2, 0:D]
+                    target_hidden_l42 = target_hidden_stack[target_row + 2 : target_row + 3, 0:D]
+                    dspark_target_hidden[token : token + 1, 0:D] = target_hidden_l40
+                    dspark_target_hidden[token : token + 1, D : 2 * D] = target_hidden_l41
+                    dspark_target_hidden[token : token + 1, 2 * D : 3 * D] = target_hidden_l42
+            for token in pl.spmd(MOE_TOKENS, name_hint="decode_fwd_store_final_hidden"):
+                if token < local_t:
+                    target_row = token * 3
+                    target_hidden_l42 = target_hidden_stack[target_row + 2 : target_row + 3, 0:D]
+                    hidden_workspace[token : token + 1, 0:D] = target_hidden_l42
+            final_norm_tid = rms_norm(hidden_workspace, final_norm_w, x_out)
+            lm_head(
+                x_out,
+                lm_head_weight,
+                logit_row_indices,
+                logits,
+                lm_head_hidden_window,
+                lm_head_hidden_done,
+                lm_head_logits_window,
+                lm_head_logits_done,
+                group_base,
+                tp_rank,
+                pl.const(LM_HEAD_COMM_EPOCH, pl.INT32),
+                final_norm_tid,
+            )
+            greedy_sample(logits, logit_row_indices, sampled_ids)
+        else:
+            for row in pl.spmd(MAX_LOGIT_ROWS, name_hint="decode_fwd_inactive_sample_rows"):
+                for col in pl.range(LM_HEAD_VOCAB // LOGITS_ZERO_TILE):
+                    col_begin = col * LOGITS_ZERO_TILE
+                    zero_logits_tile = pl.full([1, LOGITS_ZERO_TILE], dtype=pl.FP32, value=0.0)
+                    logits[row : row + 1, col_begin : col_begin + LOGITS_ZERO_TILE] = zero_logits_tile
+                if LM_HEAD_VOCAB % LOGITS_ZERO_TILE != 0:
+                    zero_logits_tail = pl.full([1, LM_HEAD_VOCAB % LOGITS_ZERO_TILE], dtype=pl.FP32, value=0.0)
+                    logits[row : row + 1, LM_HEAD_VOCAB // LOGITS_ZERO_TILE * LOGITS_ZERO_TILE :] = zero_logits_tail
+                unset_ids_row = pl.full([1, SAMPLED_IDS_PAD], dtype=pl.INT32, value=-1)
+                sampled_ids[row : row + 1, :] = unset_ids_row
     return x_out
 
 
@@ -1057,10 +1203,10 @@ def l3_decode_fwd(
     gamma_cq: pl.Tensor[[N_RANKS, FWD_WEIGHT_BANK_SIZE * Q_LORA], pl.BF16],
     gamma_ckv: pl.Tensor[[N_RANKS, FWD_WEIGHT_BANK_SIZE * HEAD_DIM], pl.BF16],
     raw_kv_pool: pl.InOut[pl.Tensor[[N_RANKS, FWD_PACKED_RAW_BLOCKS_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
-    freqs_cos_local: pl.Tensor[[N_RANKS, T_DYN, ROPE_HEAD_DIM], pl.BF16],
-    freqs_sin_local: pl.Tensor[[N_RANKS, T_DYN, ROPE_HEAD_DIM], pl.BF16],
-    freqs_cos: pl.Tensor[[N_RANKS, KV_T_DYN, ROPE_HEAD_DIM], pl.BF16],
-    freqs_sin: pl.Tensor[[N_RANKS, KV_T_DYN, ROPE_HEAD_DIM], pl.BF16],
+    freqs_cos: pl.Tensor[[N_RANKS, T_DYN, ROPE_HEAD_DIM], pl.BF16],
+    freqs_sin: pl.Tensor[[N_RANKS, T_DYN, ROPE_HEAD_DIM], pl.BF16],
+    compressed_freqs_cos: pl.Tensor[[N_RANKS, T_DYN, ROPE_HEAD_DIM], pl.BF16],
+    compressed_freqs_sin: pl.Tensor[[N_RANKS, T_DYN, ROPE_HEAD_DIM], pl.BF16],
     swa_slot_mapping: pl.Tensor[[N_RANKS, KV_T_DYN], pl.INT64],
     swa_indices: pl.Tensor[[N_RANKS, T_DYN, WIN], pl.INT32],
     swa_lens: pl.Tensor[[N_RANKS, T_DYN], pl.INT32],
@@ -1125,6 +1271,7 @@ def l3_decode_fwd(
     gate_bias: pl.Tensor[[N_RANKS, FWD_WEIGHT_BANK_SIZE * N_EXPERTS_GLOBAL], pl.FP32],
     tid2eid: pl.Tensor[[N_RANKS, FWD_WEIGHT_BANK_SIZE * VOCAB, TOPK], pl.INT32],
     input_ids: pl.Tensor[[N_RANKS, T_DYN], pl.INT64],
+    num_tokens_per_owner: pl.Tensor[[N_RANKS], pl.INT32],
     hc_head_fn: pl.Tensor[[N_RANKS, HC_MULT, HC_DIM], pl.FP32],
     hc_head_scale: pl.Tensor[[N_RANKS, 1], pl.FP32],
     hc_head_base: pl.Tensor[[N_RANKS, HC_MULT], pl.FP32],
@@ -1149,6 +1296,7 @@ def l3_decode_fwd(
     x_attn_active: pl.InOut[pl.Tensor[[N_RANKS, T_DYN, HC_MULT, D], pl.FP32]],
     x_moe_next: pl.InOut[pl.Tensor[[N_RANKS, MOE_TOKENS, HC_MULT, D], pl.FP32]],
     pre_hc_hidden_out: pl.Out[pl.Tensor[[N_RANKS, T_DYN, HC_MULT, D], pl.FP32]],
+    dspark_target_hidden: pl.Out[pl.Tensor[[N_RANKS, T_DYN, MAIN_HIDDEN_DIM], pl.BF16]],
     x_out: pl.Out[pl.Tensor[[N_RANKS, T_DYN, D], pl.BF16]],
     logits: pl.Out[pl.Tensor[[N_RANKS, MAX_LOGIT_ROWS, LM_HEAD_VOCAB], pl.FP32]],
     sampled_ids: pl.Out[pl.Tensor[[N_RANKS, MAX_LOGIT_ROWS, SAMPLED_IDS_PAD], pl.INT32]],
@@ -1157,12 +1305,13 @@ def l3_decode_fwd(
     embed_weight.bind_dynamic(1, EMBED_VOCAB_DYN)
     input_ids.bind_dynamic(1, T_DYN)
     hidden_workspace.bind_dynamic(1, T_DYN)
+    dspark_target_hidden.bind_dynamic(1, T_DYN)
     x_ping.bind_dynamic(1, T_DYN)
     raw_kv_pool.bind_dynamic(1, FWD_PACKED_RAW_BLOCKS_DYN)
-    freqs_cos_local.bind_dynamic(1, T_DYN)
-    freqs_sin_local.bind_dynamic(1, T_DYN)
-    freqs_cos.bind_dynamic(1, KV_T_DYN)
-    freqs_sin.bind_dynamic(1, KV_T_DYN)
+    freqs_cos.bind_dynamic(1, T_DYN)
+    freqs_sin.bind_dynamic(1, T_DYN)
+    compressed_freqs_cos.bind_dynamic(1, T_DYN)
+    compressed_freqs_sin.bind_dynamic(1, T_DYN)
     swa_slot_mapping.bind_dynamic(1, KV_T_DYN)
     swa_indices.bind_dynamic(1, T_DYN)
     swa_lens.bind_dynamic(1, T_DYN)
@@ -1219,7 +1368,7 @@ def l3_decode_fwd(
     combine_arrived_buf = pld.alloc_window_buffer([N_RANKS, 1], dtype=pl.INT32)
     lm_head_hidden_window_buf = pld.alloc_window_buffer([GROUP_LOGIT_ROWS, D], dtype=pl.BF16)
     lm_head_hidden_done_buf = pld.alloc_window_buffer([LM_HEAD_TP_SIZE, 1], dtype=pl.INT32)
-    lm_head_logits_window_buf = pld.alloc_window_buffer([MAX_LOGIT_ROWS * LM_HEAD_VOCAB], dtype=pl.FP32)
+    lm_head_logits_window_buf = pld.alloc_window_buffer([MAX_LOGIT_ROWS, LM_HEAD_VOCAB], dtype=pl.FP32)
     lm_head_logits_done_buf = pld.alloc_window_buffer([LM_HEAD_TP_SIZE, 1], dtype=pl.INT32)
 
     for rank in pl.range(pld.world_size()):
@@ -1239,7 +1388,7 @@ def l3_decode_fwd(
         combine_arrived = pld.window(combine_arrived_buf, [N_RANKS, 1], dtype=pl.INT32)
         lm_head_hidden_window = pld.window(lm_head_hidden_window_buf, [GROUP_LOGIT_ROWS, D], dtype=pl.BF16)
         lm_head_hidden_done = pld.window(lm_head_hidden_done_buf, [LM_HEAD_TP_SIZE, 1], dtype=pl.INT32)
-        lm_head_logits_window = pld.window(lm_head_logits_window_buf, [MAX_LOGIT_ROWS * LM_HEAD_VOCAB], dtype=pl.FP32)
+        lm_head_logits_window = pld.window(lm_head_logits_window_buf, [MAX_LOGIT_ROWS, LM_HEAD_VOCAB], dtype=pl.FP32)
         lm_head_logits_done = pld.window(lm_head_logits_done_buf, [LM_HEAD_TP_SIZE, 1], dtype=pl.INT32)
         tp_rank = rank % TP_SIZE
         group_base = rank - tp_rank
@@ -1248,8 +1397,8 @@ def l3_decode_fwd(
             hc_attn_fn[rank], hc_attn_scale[rank], hc_attn_base[rank],
             attn_norm_w[rank], wq_a[rank], wq_b[rank],
             wq_b_scale[rank], wkv[rank], gamma_cq[rank], gamma_ckv[rank],
-            raw_kv_pool[rank], freqs_cos_local[rank], freqs_sin_local[rank],
-            freqs_cos[rank], freqs_sin[rank],
+            raw_kv_pool[rank], freqs_cos[rank], freqs_sin[rank],
+            compressed_freqs_cos[rank], compressed_freqs_sin[rank],
             swa_slot_mapping[rank], swa_indices[rank], swa_lens[rank],
             position_ids_local[rank], position_ids[rank],
             csa_cmp_freqs_cos[rank], csa_cmp_freqs_sin[rank],
@@ -1281,7 +1430,7 @@ def l3_decode_fwd(
             wo_b_scale[rank],
             hc_ffn_fn[rank], hc_ffn_scale[rank], hc_ffn_base[rank],
             norm_w[rank], gate_w[rank], gate_bias[rank], tid2eid[rank],
-            input_ids[rank],
+            input_ids[rank], num_tokens_per_owner,
             hc_head_fn[rank], hc_head_scale[rank], hc_head_base[rank],
             final_norm_w[rank], lm_head_weight[rank],
             logit_row_indices[rank],
@@ -1294,7 +1443,8 @@ def l3_decode_fwd(
             hidden_workspace[rank],
             x_ping[rank], x_pong[rank],
             x_attn_active[rank], x_moe_next[rank],
-            pre_hc_hidden_out[rank], x_out[rank], logits[rank],
+            pre_hc_hidden_out[rank], dspark_target_hidden[rank],
+            x_out[rank], logits[rank],
             sampled_ids[rank],
             gather_window, gather_signal,
             attention_window, attention_signal, o_window, o_signal,
@@ -1305,7 +1455,7 @@ def l3_decode_fwd(
             group_base, tp_rank, rank,
             device=rank,
         )
-    return x_out, logits, sampled_ids
+    return x_out, logits, sampled_ids, dspark_target_hidden
 
 
 _COMMON_ATTN_WEIGHT_NAMES = (
@@ -1331,7 +1481,7 @@ _LAYER_WEIGHT_NAMES = (
 )
 
 _SWA_METADATA_NAMES = (
-    "freqs_cos_local", "freqs_sin_local", "freqs_cos", "freqs_sin",
+    "freqs_cos", "freqs_sin",
     "swa_slot_mapping", "swa_indices", "swa_lens",
 )
 
@@ -1449,24 +1599,41 @@ def _make_packed_pool_spec(name, source, layer_count, *, sentinel=False):
     return spec
 
 
-def build_tensor_specs(start_pos=None, *, weight_bank_size=RUNTIME_WEIGHT_BANK, runtime_case="full_active"):
+def _validate_packed_pool_specs(packed_specs, layer_specs):
+    """Check the rank axis, per-layer extent and shared index-cache geometry."""
+    for name, layer_count in PACKED_POOL_LAYER_COUNTS.items():
+        layer_shape = list(layer_specs[name].shape)
+        if not 2 <= len(layer_shape) <= MAX_PUBLIC_TENSOR_DIMS or layer_shape[0] != N_RANKS:
+            raise ValueError(f"invalid rank-local pool source {name!r}: {layer_shape}")
+        if layer_shape[1] <= 0:
+            raise ValueError(f"pool {name!r} must have a positive per-layer extent")
+        expected = [N_RANKS, layer_count * layer_shape[1], *layer_shape[2:]]
+        if list(packed_specs[name].shape) != expected:
+            raise ValueError(f"packed pool {name!r} must have shape {expected}")
+    if packed_specs["csa_idx_kv_cache"].shape[:2] != packed_specs["csa_idx_kv_scale"].shape[:2]:
+        raise ValueError("CSA index cache and scale packed extents must match")
+
+
+def build_tensor_specs(
+    start_pos=None,
+    *,
+    num_tokens_per_owner=None,
+    weight_bank_size=RUNTIME_WEIGHT_BANK,
+    runtime_case="full_active",
+):
     """Build the production or bounded-runtime decode forward L3 fixture."""
     import inspect
 
     import torch
     from golden import TensorSpec
+    from utils import swa_decode_start_set
 
     if weight_bank_size != FWD_WEIGHT_BANK_SIZE:
         raise ValueError(f"weight bank froze at module import as {FWD_WEIGHT_BANK_SIZE}, got {weight_bank_size}")
     compile_only = runtime_case is None
     if not compile_only and weight_bank_size != RUNTIME_WEIGHT_BANK:
         raise ValueError("decode forward runtime witnesses use one reusable weight bank")
-    if runtime_case not in {
-        None,
-        "full_active",
-        "packed_pool_sentinel",
-        "long_context_tail",
-    }:
+    if runtime_case not in {None, "full_active", "packed_pool_sentinel", "long_context_tail"}:
         raise ValueError(f"unknown decode forward runtime case: {runtime_case!r}")
 
     use_default_long_context = runtime_case == "long_context_tail" and start_pos is None
@@ -1482,8 +1649,11 @@ def build_tensor_specs(start_pos=None, *, weight_bank_size=RUNTIME_WEIGHT_BANK, 
     else:
         raise ValueError("start_pos must be None, an int, or a non-empty list/tuple")
     local_t = active_batch * config.DECODE_SEQ
+    owner_token_counts = build_num_tokens_per_owner_host(num_tokens_per_owner, local_t)
 
     attention_start_pos = start_pos
+    if attention_start_pos is None:
+        attention_start_pos = swa_decode_start_set(batch=TP_SIZE * active_batch).tolist()
     if use_default_long_context and TP_SIZE > 1:
         attention_start_pos = list(start_pos) + [0] * ((TP_SIZE - 1) * active_batch)
 
@@ -1513,9 +1683,9 @@ def build_tensor_specs(start_pos=None, *, weight_bank_size=RUNTIME_WEIGHT_BANK, 
         if isinstance(spec, TensorSpec) and spec.name not in {"x_hc", "x_next"}:
             swa_specs.setdefault(spec.name, spec)
 
-    if int(csa_specs["freqs_cos_local"].shape[1]) != local_t:
+    if int(csa_specs["freqs_cos"].shape[1]) != local_t:
         raise ValueError("CSA and SWA decode forward fixtures disagree on active rows")
-    if int(hca_specs["freqs_cos_local"].shape[1]) != local_t:
+    if int(hca_specs["freqs_cos"].shape[1]) != local_t:
         raise ValueError("HCA and SWA decode forward fixtures disagree on active rows")
 
     def zero_active():
@@ -1531,6 +1701,16 @@ def build_tensor_specs(start_pos=None, *, weight_bank_size=RUNTIME_WEIGHT_BANK, 
         return (torch.randn(N_RANKS, embedding_vocab, D) * 0.05).to(torch.bfloat16)
 
     sentinel = runtime_case == "packed_pool_sentinel"
+    packed_layer_specs = {
+        "raw_kv_pool": swa_specs["kv_cache"],
+        "hca_compress_state": hca_specs["compress_state"],
+        "hca_cmp_kv": hca_specs["cmp_kv"],
+        "csa_compress_state": csa_specs["compress_state"],
+        "csa_cmp_kv": csa_specs["cmp_kv"],
+        "csa_inner_compress_state": csa_specs["inner_compress_state"],
+        "csa_idx_kv_cache": csa_specs["idx_kv_cache"],
+        "csa_idx_kv_scale": csa_specs["idx_kv_scale"],
+    }
     specs_by_name = {
         "embed_weight": TensorSpec(
             "embed_weight", [N_RANKS, embedding_vocab, D], torch.bfloat16,
@@ -1557,6 +1737,10 @@ def build_tensor_specs(start_pos=None, *, weight_bank_size=RUNTIME_WEIGHT_BANK, 
             "csa_idx_kv_scale", csa_specs["idx_kv_scale"], CSA_LAYER_COUNT, sentinel=sentinel,
         ),
         "input_ids": TensorSpec("input_ids", [N_RANKS, local_t], torch.int64, init_value=init_input_ids),
+        "num_tokens_per_owner": TensorSpec(
+            "num_tokens_per_owner", [N_RANKS], torch.int32,
+            init_value=lambda: owner_token_counts.clone(),
+        ),
         "hc_head_fn": TensorSpec("hc_head_fn", [N_RANKS, HC_MULT, HC_DIM], torch.float32, init_value=0),
         "hc_head_scale": TensorSpec("hc_head_scale", [N_RANKS, 1], torch.float32, init_value=1.0),
         "hc_head_base": TensorSpec("hc_head_base", [N_RANKS, HC_MULT], torch.float32, init_value=0),
@@ -1564,7 +1748,7 @@ def build_tensor_specs(start_pos=None, *, weight_bank_size=RUNTIME_WEIGHT_BANK, 
         "lm_head_weight": TensorSpec("lm_head_weight", [N_RANKS, VOCAB_PER_TP, D], torch.bfloat16, init_value=0),
         "logit_row_indices": TensorSpec(
             "logit_row_indices", [N_RANKS, MAX_LOGIT_ROWS], torch.int32,
-            init_value=lambda: build_active_logit_row_indices_host(local_t),
+            init_value=lambda: build_active_logit_row_indices_host(owner_token_counts),
         ),
         "hidden_workspace": TensorSpec("hidden_workspace", [N_RANKS, local_t, D], torch.bfloat16),
         "x_ping": TensorSpec(
@@ -1586,6 +1770,9 @@ def build_tensor_specs(start_pos=None, *, weight_bank_size=RUNTIME_WEIGHT_BANK, 
         "pre_hc_hidden_out": TensorSpec(
             "pre_hc_hidden_out", [N_RANKS, local_t, HC_MULT, D], torch.float32, 
         ),
+        "dspark_target_hidden": TensorSpec(
+            "dspark_target_hidden", [N_RANKS, local_t, MAIN_HIDDEN_DIM], torch.bfloat16,
+        ),
         "x_out": TensorSpec("x_out", [N_RANKS, local_t, D], torch.bfloat16),
         "logits": TensorSpec("logits", [N_RANKS, MAX_LOGIT_ROWS, LM_HEAD_VOCAB], torch.float32),
         "sampled_ids": TensorSpec(
@@ -1593,10 +1780,16 @@ def build_tensor_specs(start_pos=None, *, weight_bank_size=RUNTIME_WEIGHT_BANK, 
         ),
     }
 
+    _validate_packed_pool_specs(specs_by_name, packed_layer_specs)
+
     for name in _LAYER_WEIGHT_NAMES:
         specs_by_name[name] = _make_weight_bank_spec(name, swa_specs[name], weight_bank_size, compile_only=compile_only)
     for name in _SWA_METADATA_NAMES:
         specs_by_name[name] = _copy_spec(name, swa_specs[name])
+    # HCA and CSA share the compressed YaRN profile at ordinary token positions.
+    for name in ("freqs_cos", "freqs_sin"):
+        public_name = f"compressed_{name}"
+        specs_by_name[public_name] = _copy_spec(public_name, csa_specs[name])
     # SWA names its token-local positions bare because it has no gathered twin;
     # at this level the bare name is the group stream, so it is sourced from CSA.
     specs_by_name["position_ids_local"] = _copy_spec("position_ids_local", swa_specs["position_ids"])
@@ -1625,6 +1818,71 @@ def build_tensor_specs(start_pos=None, *, weight_bank_size=RUNTIME_WEIGHT_BANK, 
             continue
         specs_by_name[public_name] = _copy_spec(public_name, hca_specs[source_name])
 
+    def transform_spec(name, transform):
+        source = specs_by_name[name]
+
+        def init_value():
+            return transform(source.create_tensor())
+
+        transformed = TensorSpec(name, list(source.shape), source.dtype, init_value=init_value)
+        transformed.resident = source.resident
+        specs_by_name[name] = transformed
+
+    def mask_group_write_slots(value):
+        value = value.clone()
+        expected_group_tokens = TP_SIZE * local_t
+        if value.ndim != 2 or value.shape != (N_RANKS, expected_group_tokens):
+            raise ValueError(
+                f"group write-slot tensor must have shape "
+                f"({N_RANKS}, {expected_group_tokens}), got {tuple(value.shape)}",
+            )
+        for rank in range(N_RANKS):
+            group_base = rank - rank % TP_SIZE
+            for owner_offset in range(TP_SIZE):
+                owner_rank = group_base + owner_offset
+                active_tokens = int(owner_token_counts[owner_rank])
+                segment_begin = owner_offset * local_t
+                value[rank, segment_begin + active_tokens : segment_begin + local_t] = -1
+        return value.contiguous()
+
+    def mask_local_token_rows(value, fill_value):
+        value = value.clone()
+        if value.shape[0] != N_RANKS or value.shape[1] != local_t:
+            raise ValueError(
+                f"rank-local token tensor must start with ({N_RANKS}, {local_t}), "
+                f"got {tuple(value.shape)}",
+            )
+        for rank, active_tokens in enumerate(owner_token_counts.tolist()):
+            value[rank, active_tokens:] = fill_value
+        return value.contiguous()
+
+    def mask_local_request_rows(value):
+        value = value.clone()
+        local_requests = local_t // config.DECODE_SEQ
+        if value.ndim != 2 or value.shape != (N_RANKS, local_requests):
+            raise ValueError(
+                f"rank-local request tensor must have shape ({N_RANKS}, {local_requests}), "
+                f"got {tuple(value.shape)}",
+            )
+        for rank, active_tokens in enumerate(owner_token_counts.tolist()):
+            value[rank, active_tokens // config.DECODE_SEQ :] = 0
+        return value.contiguous()
+
+    for name in (
+        "swa_slot_mapping",
+        "csa_ori_slot_mapping", "csa_cmp_slot_mapping", "csa_idx_slot_mapping",
+        "csa_state_slot_mapping", "csa_inner_state_slot_mapping",
+        "hca_ori_slot_mapping", "hca_cmp_slot_mapping", "hca_state_slot_mapping",
+    ):
+        transform_spec(name, mask_group_write_slots)
+    transform_spec("input_ids", lambda value: mask_local_token_rows(value, 0))
+    for name in ("swa_indices", "csa_window_swa_indices", "hca_window_swa_indices"):
+        transform_spec(name, lambda value: mask_local_token_rows(value, -1))
+    for name in ("swa_lens", "csa_window_swa_lens", "hca_window_swa_lens"):
+        transform_spec(name, lambda value: mask_local_token_rows(value, 0))
+    for name in ("csa_kv_seq_lens", "hca_kv_seq_lens"):
+        transform_spec(name, mask_local_request_rows)
+
     parameter_names = list(inspect.signature(l3_decode_fwd._func).parameters)
     missing = [name for name in parameter_names if name not in specs_by_name]
     extra = [name for name in specs_by_name if name not in parameter_names]
@@ -1647,11 +1905,94 @@ def _parse_start_pos(raw):
     return values[0] if len(values) == 1 else values
 
 
+def _parse_num_tokens_per_owner(raw):
+    if raw is None:
+        return None
+    values = [int(part.strip()) for part in raw.split(",") if part.strip()]
+    if not values:
+        raise ValueError("--num-tokens-per-owner must contain at least one integer")
+    return values[0] if len(values) == 1 else values
+
+
+def golden_decode_fwd(_tensors):
+    """Leave full-forward outputs to output-specific behavioral comparators."""
+
+
+def finite_tensor_compare(actual, _expected, **_kwargs):
+    """Require a completed finite device result for full-forward state outputs."""
+    import torch
+
+    if actual.numel() == 0:
+        return False, "    decode forward output is empty"
+    if actual.is_floating_point() and not bool(torch.isfinite(actual).all()):
+        return False, "    decode forward output contains NaN or Inf"
+    return True, ""
+
+
+def dspark_target_hidden_compare(actual, _expected, **kwargs):
+    """Recompute all three target-layer projections from their HC outputs."""
+    import torch
+    from hc_head import golden_hc_head
+
+    inputs = kwargs.get("inputs", {})
+    outputs = kwargs.get("actual_outputs", {})
+    sources = (outputs.get("x_pong"), outputs.get("x_ping"), outputs.get("pre_hc_hidden_out"))
+    if any(source is None for source in sources):
+        return False, "    missing layer-40/41/42 HC source output"
+    owner_counts = inputs.get("num_tokens_per_owner")
+    if owner_counts is None:
+        return False, "    missing per-owner active token counts"
+
+    for rank in range(actual.shape[0]):
+        active_tokens = int(owner_counts[rank].item())
+        if active_tokens < 0 or active_tokens > actual.shape[1]:
+            return False, f"    rank {rank} active token count is out of range: {active_tokens}"
+        if active_tokens == 0:
+            continue
+        if not bool(torch.isfinite(actual[rank, :active_tokens]).all()):
+            return False, f"    rank {rank} active DSpark target hidden contains NaN or Inf"
+        for slot, (layer_id, source) in enumerate(zip(TARGET_LAYER_IDS, sources, strict=True)):
+            expected_part = torch.empty(active_tokens, D, dtype=torch.bfloat16)
+            golden_hc_head({
+                "x_hc": source[rank, :active_tokens].cpu(),
+                "hc_head_fn": inputs["hc_head_fn"][rank],
+                "hc_head_scale": inputs["hc_head_scale"][rank],
+                "hc_head_base": inputs["hc_head_base"][rank],
+                "y": expected_part,
+            })
+            expected_part = expected_part.float()
+            actual_part = actual[rank, :active_tokens, slot * D : (slot + 1) * D].float()
+            error = (actual_part - expected_part).abs()
+            tolerance = 1e-4 + (1.0 / 128) * expected_part.abs()
+            ratio = float((error > tolerance).float().mean())
+            if ratio > 0.005:
+                worst = float(error.max())
+                return False, (
+                    f"    rank {rank} layer {layer_id} target hidden mismatch: "
+                    f"ratio={ratio:.2%}, max |err|={worst:.3e}"
+                )
+    return True, ""
+
+
+def compare_functions():
+    """Validate every output for completion and the DSpark tap mathematically."""
+    finite_names = {
+        "raw_kv_pool",
+        "csa_compress_state", "csa_inner_compress_state", "csa_cmp_kv", "csa_idx_kv_cache", "csa_idx_kv_scale",
+        "hca_compress_state", "hca_cmp_kv",
+        "hidden_workspace", "x_ping", "x_pong", "x_attn_active", "x_moe_next",
+        "pre_hc_hidden_out", "x_out", "logits", "sampled_ids",
+    }
+    compare = {name: finite_tensor_compare for name in finite_names}
+    compare["dspark_target_hidden"] = dspark_target_hidden_compare
+    return compare
+
+
 def main():
     import argparse
 
     from golden import run
-    from pypto.ir.distributed_compiled_program import DistributedConfig
+    from pypto.ir import DistributedConfig
 
     parser = argparse.ArgumentParser(description="DeepSeek-V4 D-Spark decode-forward integration")
     parser.add_argument("-p", "--platform", type=str, default="a2a3", choices=("a2a3", "a2a3sim", "a5", "a5sim"))
@@ -1665,6 +2006,10 @@ def main():
         "--start-pos", type=str, default=None,
         help="a scalar selects batch=1; a comma-separated list sets the batch",
     )
+    parser.add_argument(
+        "--num-tokens-per-owner", type=str, default=None,
+        help=f"one broadcast count or {N_RANKS} comma-separated active-prefix lengths",
+    )
     parser.add_argument("--compile-only", action="store_true", default=False)
     parser.add_argument(
         "--weight-bank-size", type=int, default=FWD_WEIGHT_BANK_SIZE, choices=(1, MAIN_LAYER_COUNT),
@@ -1675,6 +2020,7 @@ def main():
         choices=("full_active", "packed_pool_sentinel", "long_context_tail"),
     )
     parser.add_argument("--enable-scope-stats", action="store_true", default=False)
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=range(5))
     parser.add_argument("--runtime-dir", type=str, default=None)
     parser.add_argument("--save-data", action="store_true", default=False)
     parser.add_argument("--dump-passes", action="store_true", default=False)
@@ -1684,6 +2030,7 @@ def main():
     if args.tp != TP_SIZE or args.ep != EP_SIZE:
         parser.error(f"parallel sizes froze at import as TP={TP_SIZE}, EP={EP_SIZE}")
     start_pos = _parse_start_pos(args.start_pos)
+    num_tokens_per_owner = _parse_num_tokens_per_owner(args.num_tokens_per_owner)
     weight_bank_size = args.weight_bank_size
     if weight_bank_size != FWD_WEIGHT_BANK_SIZE:
         parser.error(f"weight bank froze at import as {FWD_WEIGHT_BANK_SIZE}, got {weight_bank_size}")
@@ -1702,27 +2049,31 @@ def main():
         parser.error(f"device IDs must be distinct and non-negative: {device_ids}")
 
     runtime_case = None if weight_bank_size == MAIN_LAYER_COUNT else args.runtime_case
-    specs = build_tensor_specs(start_pos=start_pos, weight_bank_size=weight_bank_size, runtime_case=runtime_case)
+    specs = build_tensor_specs(
+        start_pos=start_pos, num_tokens_per_owner=num_tokens_per_owner,
+        weight_bank_size=weight_bank_size, runtime_case=runtime_case,
+    )
     result = run(
         fn=l3_decode_fwd,
         specs=specs,
+        golden_fn=golden_decode_fwd,
         save_data=args.save_data,
         compile_only=args.compile_only,
         runtime_dir=args.runtime_dir,
-        compile_cfg=dict(
+        config=dict(
             dump_passes=args.dump_passes,
             distributed_config=DistributedConfig(
                 device_ids=device_ids, num_sub_workers=0,
             ),
-        ),
-        runtime_cfg=dict(
             platform=args.platform,
             enable_scope_stats=args.enable_scope_stats,
+            enable_chip_swimlane=args.enable_chip_swimlane,
             log_level=args.log_level,
             ring_heap=DECODE_RING_HEAP,
         ),
         rtol=1e-2,
         atol=1e-2,
+        compare_fn=compare_functions(),
     )
     if not result.passed:
         if result.error:

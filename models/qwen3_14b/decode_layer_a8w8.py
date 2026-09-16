@@ -203,17 +203,14 @@ def _decode_layer(  # noqa: PLR0913 — model signature is intrinsic
         q_on = q_grid // N_SUB
         n_sub = q_grid - q_on * N_SUB
         q_n0 = q_on * QKV_N_TILE + n_sub * TN
-        q_acc = pl.matmul(
-            pl.tensor.set_validshape(normed_i8[:, 0:TK], ACTIVE_BATCH, TK),
-            wq[layer_hidden_base + 0 : layer_hidden_base + TK, q_n0 : q_n0 + TN],
-            out_dtype=pl.INT32,
-        )
-        for kc in pl.range(1, QKV_K_CHUNKS - 1):
+        q_acc = pl.create_tensor([BATCH_PAD, TN], dtype=pl.INT32)
+        for kc in pl.range(0, QKV_K_CHUNKS - 1):
             q_kk = kc * TK
             q_acc = pl.matmul_acc(
                 q_acc,
                 pl.tensor.set_validshape(normed_i8[:, q_kk : q_kk + TK], ACTIVE_BATCH, TK),
                 wq[layer_hidden_base + q_kk : layer_hidden_base + q_kk + TK, q_n0 : q_n0 + TN],
+                init_cond=(kc == 0),
             )
         q_w_scale = pl.reshape(pl.slice(wq_scale, [1, TN], [layer_idx, q_n0]), [1, TN])
         q_last_kk = (QKV_K_CHUNKS - 1) * TK
@@ -231,17 +228,14 @@ def _decode_layer(  # noqa: PLR0913 — model signature is intrinsic
         k_on = k_grid // N_SUB
         n_sub = k_grid - k_on * N_SUB
         k_n0 = k_on * QKV_N_TILE + n_sub * TN
-        k_acc = pl.matmul(
-            pl.tensor.set_validshape(normed_i8[:, 0:TK], ACTIVE_BATCH, TK),
-            wk[layer_hidden_base + 0 : layer_hidden_base + TK, k_n0 : k_n0 + TN],
-            out_dtype=pl.INT32,
-        )
-        for kc in pl.range(1, QKV_K_CHUNKS - 1):
+        k_acc = pl.create_tensor([BATCH_PAD, TN], dtype=pl.INT32)
+        for kc in pl.range(0, QKV_K_CHUNKS - 1):
             k_kk = kc * TK
             k_acc = pl.matmul_acc(
                 k_acc,
                 pl.tensor.set_validshape(normed_i8[:, k_kk : k_kk + TK], ACTIVE_BATCH, TK),
                 wk[layer_hidden_base + k_kk : layer_hidden_base + k_kk + TK, k_n0 : k_n0 + TN],
+                init_cond=(kc == 0),
             )
         k_w_scale = pl.reshape(pl.slice(wk_scale, [1, TN], [layer_idx, k_n0]), [1, TN])
         k_last_kk = (QKV_K_CHUNKS - 1) * TK
@@ -262,17 +256,14 @@ def _decode_layer(  # noqa: PLR0913 — model signature is intrinsic
         v_on = v_grid // N_SUB
         n_sub = v_grid - v_on * N_SUB
         v_n0 = v_on * QKV_N_TILE + n_sub * TN
-        v_acc = pl.matmul(
-            pl.tensor.set_validshape(normed_i8[:, 0:TK], ACTIVE_BATCH, TK),
-            wv[layer_hidden_base + 0 : layer_hidden_base + TK, v_n0 : v_n0 + TN],
-            out_dtype=pl.INT32,
-        )
-        for kc in pl.range(1, QKV_K_CHUNKS - 1):
+        v_acc = pl.create_tensor([BATCH_PAD, TN], dtype=pl.INT32)
+        for kc in pl.range(0, QKV_K_CHUNKS - 1):
             v_kk = kc * TK
             v_acc = pl.matmul_acc(
                 v_acc,
                 pl.tensor.set_validshape(normed_i8[:, v_kk : v_kk + TK], ACTIVE_BATCH, TK),
                 wv[layer_hidden_base + v_kk : layer_hidden_base + v_kk + TK, v_n0 : v_n0 + TN],
+                init_cond=(kc == 0),
             )
         v_w_scale = pl.reshape(pl.slice(wv_scale, [1, TN], [layer_idx, v_n0]), [1, TN])
         v_last_kk = (QKV_K_CHUNKS - 1) * TK
@@ -565,12 +556,8 @@ def _decode_layer(  # noqa: PLR0913 — model signature is intrinsic
         out_c_acc = pl.full([BATCH_PAD, OUT_TN], dtype=pl.INT32, value=0)
         for k_split_out in pl.range(K_SPLITS_OUT):
             k_op = k_split_out * OUT_TK
-            out_acc_k = pl.matmul(
-                pl.tensor.set_validshape(attn_out_i8[:, k_op : k_op + OUT_INNER_TK], ACTIVE_BATCH, OUT_INNER_TK),
-                wo[layer_hidden_base + k_op : layer_hidden_base + OUT_INNER_TK + k_op, n_op : n_op + OUT_TN],
-                out_dtype=pl.INT32,
-            )
-            for out_lk in pl.range(1, OUT_N_SUB_K):
+            out_acc_k = pl.create_tensor([BATCH_PAD, OUT_TN], dtype=pl.INT32)
+            for out_lk in pl.range(0, OUT_N_SUB_K):
                 out_ks_off = out_lk * OUT_INNER_TK
                 out_a_k = pl.tensor.set_validshape(
                     attn_out_i8[:, k_op + out_ks_off : k_op + out_ks_off + OUT_INNER_TK],
@@ -586,7 +573,7 @@ def _decode_layer(  # noqa: PLR0913 — model signature is intrinsic
                     + OUT_INNER_TK,
                     n_op : n_op + OUT_TN,
                 ]
-                out_acc_k = pl.matmul_acc(out_acc_k, out_a_k, out_w_k)
+                out_acc_k = pl.matmul_acc(out_acc_k, out_a_k, out_w_k, init_cond=(out_lk == 0))
             out_c_acc = pl.add(out_c_acc, out_acc_k)
         w_scale_col = pl.reshape(pl.slice(wo_scale, [1, OUT_TN], [layer_idx, n_op]), [1, OUT_TN])
         out_fp32 = pl.mul(pl.col_expand_mul(pl.cast(out_c_acc, target_type=pl.FP32), w_scale_col), attn_out_scales)
@@ -831,68 +818,6 @@ def _decode_layer(  # noqa: PLR0913 — model signature is intrinsic
 
 
 @pl.jit
-def _decode_layer_test_entry(  # noqa: PLR0913 - mirrors the model layer signature
-    hidden_states: pl.Tensor,
-    input_rms_weight: pl.Tensor,
-    wq: pl.Tensor,
-    wk: pl.Tensor,
-    wv: pl.Tensor,
-    wq_scale: pl.Tensor,
-    wk_scale: pl.Tensor,
-    wv_scale: pl.Tensor,
-    q_norm_weight: pl.Tensor,
-    k_norm_weight: pl.Tensor,
-    seq_lens: pl.Tensor,
-    active_batch: pl.Tensor,
-    block_table: pl.Tensor,
-    slot_mapping: pl.Tensor,
-    rope_cos: pl.Tensor,
-    rope_sin: pl.Tensor,
-    k_cache: pl.Tensor,
-    v_cache: pl.Tensor,
-    wo: pl.Tensor,
-    wo_scale: pl.Tensor,
-    w_gate: pl.Tensor,
-    w_up: pl.Tensor,
-    w_gate_scale: pl.Tensor,
-    w_up_scale: pl.Tensor,
-    w_down: pl.Tensor,
-    post_rms_weight: pl.Tensor,
-    out: pl.Out[pl.Tensor],
-):
-    return _decode_layer(
-        hidden_states,
-        input_rms_weight,
-        wq,
-        wk,
-        wv,
-        wq_scale,
-        wk_scale,
-        wv_scale,
-        q_norm_weight,
-        k_norm_weight,
-        seq_lens,
-        active_batch,
-        block_table,
-        slot_mapping,
-        rope_cos,
-        rope_sin,
-        k_cache,
-        v_cache,
-        wo,
-        wo_scale,
-        w_gate,
-        w_up,
-        w_gate_scale,
-        w_up_scale,
-        w_down,
-        post_rms_weight,
-        out,
-        0,
-    )
-
-
-@pl.jit
 def decode_fwd(  # noqa: PLR0913 — device-side fused NUM_LAYERS decode + LM head
     hidden_states: pl.Tensor,
     input_rms_weight: pl.Tensor,
@@ -946,128 +871,3 @@ def decode_fwd(  # noqa: PLR0913 — device-side fused NUM_LAYERS decode + LM he
         )
     out = rms_lm_head(cur, final_norm_weight, lm_head_weight, seq_lens, out)
     return out
-
-
-def _decode_layer_test_inputs(initialize: bool):
-    """Build one-layer inputs for CI compile and device smoke tests."""
-    import torch
-
-    torch.manual_seed(1234)
-
-    def tensor(shape, dtype, *, scale=1.0):
-        value = torch.empty(shape, dtype=dtype)
-        if not initialize:
-            return value
-        if dtype == torch.int8:
-            return torch.randint(-2, 3, shape, dtype=dtype)
-        return value.normal_(mean=0.0, std=scale)
-
-    seq_lens = torch.arange(1, BATCH_PAD + 1, dtype=torch.int32)
-    active_batch = torch.tensor([BATCH_PAD], dtype=torch.int32)
-    block_table = torch.arange(BATCH_PAD, dtype=torch.int32)
-    slot_mapping = torch.arange(BATCH_PAD, dtype=torch.int32) * BLOCK_SIZE + seq_lens - 1
-    cache_rows = BATCH_PAD * NUM_KV_HEADS * BLOCK_SIZE
-    weight_scale = 1.0 / INT8_SCALE_MAX
-
-    return [
-        tensor([BATCH_PAD, HIDDEN], torch.bfloat16, scale=0.1),
-        torch.ones([1, HIDDEN], dtype=torch.float32),
-        tensor([HIDDEN, HIDDEN], torch.int8),
-        tensor([HIDDEN, KV_HIDDEN], torch.int8),
-        tensor([HIDDEN, KV_HIDDEN], torch.int8),
-        torch.full([1, HIDDEN], weight_scale, dtype=torch.float32),
-        torch.full([1, KV_HIDDEN], weight_scale, dtype=torch.float32),
-        torch.full([1, KV_HIDDEN], weight_scale, dtype=torch.float32),
-        torch.ones([1, HEAD_DIM], dtype=torch.float32),
-        torch.ones([1, HEAD_DIM], dtype=torch.float32),
-        seq_lens,
-        active_batch,
-        block_table,
-        slot_mapping,
-        torch.ones([BLOCK_SIZE, HEAD_DIM], dtype=torch.float32),
-        torch.zeros([BLOCK_SIZE, HEAD_DIM], dtype=torch.float32),
-        tensor([cache_rows, HEAD_DIM], torch.bfloat16, scale=0.02),
-        tensor([cache_rows, HEAD_DIM], torch.bfloat16, scale=0.02),
-        tensor([HIDDEN, HIDDEN], torch.int8),
-        torch.full([1, HIDDEN], weight_scale, dtype=torch.float32),
-        tensor([HIDDEN, INTERMEDIATE], torch.int8),
-        tensor([HIDDEN, INTERMEDIATE], torch.int8),
-        torch.full([1, INTERMEDIATE], weight_scale, dtype=torch.float32),
-        torch.full([1, INTERMEDIATE], weight_scale, dtype=torch.float32),
-        tensor([INTERMEDIATE, HIDDEN], torch.bfloat16, scale=0.002),
-        torch.ones([1, HIDDEN], dtype=torch.float32),
-    ]
-
-
-def _patch_test_aicore_bitcast_helpers(work_dir) -> int:
-    """Make generated bitcast helpers callable from AICore test kernels."""
-    from pathlib import Path
-
-    needle = "static inline To ptoas_bitcast(From from) {"
-    replacement = "static __aicore__ inline To ptoas_bitcast(From from) {"
-    patched = 0
-    for cpp in Path(work_dir).rglob("*.cpp"):
-        try:
-            source = cpp.read_text()
-        except UnicodeDecodeError:
-            continue
-        if needle not in source:
-            continue
-        cpp.write_text(source.replace(needle, replacement))
-        patched += 1
-    return patched
-
-
-def _main() -> None:
-    import argparse
-
-    import torch
-    from pypto.backend import BackendType, set_backend_type
-    from pypto.runtime import RunConfig
-
-    parser = argparse.ArgumentParser(description="Compile or run one Qwen3-14B A8W8 decode layer.")
-    parser.add_argument(
-        "-p",
-        "--platform",
-        default="a2a3",
-        choices=["a2a3", "a2a3sim", "a5", "a5sim"],
-    )
-    parser.add_argument("-d", "--device", type=int, default=0)
-    args = parser.parse_args()
-
-    backend_type = BackendType.Ascend950 if args.platform.startswith("a5") else BackendType.Ascend910B
-    set_backend_type(backend_type)
-    compile_only = args.platform.endswith("sim")
-    inputs = _decode_layer_test_inputs(initialize=not compile_only)
-    out = torch.empty([BATCH_PAD, HIDDEN], dtype=torch.bfloat16)
-
-    if compile_only:
-        program = _decode_layer_test_entry.lower(
-            *inputs, out, config=RunConfig(platform=args.platform, backend_type=backend_type)
-        )
-        print(f"Lowered A8W8 decode layer with {len(program.functions)} function(s).")
-        return
-
-    out.zero_()
-    run_config = RunConfig(
-        platform=args.platform,
-        device_id=args.device,
-        backend_type=backend_type,
-        enable_dep_gen=False,
-        dump_passes=False,
-    )
-    program = _decode_layer_test_entry.compile(*inputs, out, config=run_config)
-    patched = _patch_test_aicore_bitcast_helpers(program.output_dir)
-    print(f"Patched {patched} AICore bitcast helper(s).")
-    program(*inputs, out, config=run_config)
-    output = out.float()
-    if not torch.isfinite(output).all():
-        raise RuntimeError("A8W8 decode layer produced non-finite output")
-    print(
-        "A8W8 decode layer smoke passed: "
-        f"shape={tuple(out.shape)}, max_abs={output.abs().max().item():.6f}"
-    )
-
-
-if __name__ == "__main__":
-    _main()

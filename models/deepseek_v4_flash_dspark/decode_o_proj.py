@@ -6,7 +6,7 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
-# ci: devices=2  # CI: 2-card run; borrows 2 cards via task-submit --device-num
+# ci: devices=2
 """DeepSeek-V4 decode output projections and their TP communication."""
 
 import sys
@@ -65,9 +65,9 @@ TOKEN_TILE = 16
 COMM_ROW_TILE = 8
 ATTENTION_PUBLISH_WORKERS = 48
 O_RS_REDUCE_WORKERS = 48   # 128 row blocks; 8 left 40 of 48 AIV idle
-O_RS_PUBLISH_WORKERS = 24    # put is fabric-bound; more workers only burn cores
+O_RS_PUBLISH_WORKERS = 32
 O_RS_DEQUANT_WORKERS = 12    # per owner; 4 owners -> one AIV wave
-O_RS_PUT_T_TILE = 8          # 4 owners x 16 row blocks -> 64 puts over 24 workers
+O_RS_PUT_T_TILE = 8
 O_RS_D_TILE = 4096
 LOCAL_T_PAD = (LOCAL_T + TOKEN_TILE - 1) // TOKEN_TILE * TOKEN_TILE
 T_PAD = LOCAL_T_PAD
@@ -147,6 +147,8 @@ def decode_o_proj_tp1(
     t_dim = pl.tensor.dim(attn_out, 0)
     act_t_blks = (t_dim + PROJ_B_ACT_TASK_T_TILE - 1) // PROJ_B_ACT_TASK_T_TILE
     proj_a_rows = (t_dim + PROJ_A_ROW_TILE - 1) // PROJ_A_ROW_TILE
+    proj_b_t_rows = (t_dim + PROJ_B_MM_T_TILE - 1) // PROJ_B_MM_T_TILE
+    proj_b_padded_rows = proj_b_t_rows * PROJ_B_MM_T_TILE
 
     # Back-to-back grouped output projection: proj_a[g] -> quant[g] -> proj_b[g]
     # pipelines per group; the per-group amax keeps the quant reduction inside one
@@ -176,9 +178,9 @@ def decode_o_proj_tp1(
                 pa_rows = pl.min(PROJ_A_ROW_TILE, t_dim - pa_r0)
                 pa_src0 = row_base_o + pa_r0
                 n0 = nf * PROJ_A_MM_N_TILE
-                xa0_chunk = pl.slice(o_packed, [PROJ_A_ROW_TILE, A_K_TILE], [pa_src0, 0], valid_shape=[pa_rows, A_K_TILE])
-                wa0_chunk = wo_a[g : g + 1, n0 : n0 + PROJ_A_MM_N_TILE, 0:A_K_TILE]
-                acc_a = pl.matmul(xa0_chunk, wa0_chunk, b_trans=True, out_dtype=pl.FP32)
+                xa_first = pl.slice(o_packed, [PROJ_A_ROW_TILE, A_K_TILE], [pa_src0, 0], valid_shape=[pa_rows, A_K_TILE])
+                wa_first = wo_a[g : g + 1, n0 : n0 + PROJ_A_MM_N_TILE, 0 : A_K_TILE]
+                acc_a = pl.matmul(xa_first, wa_first, out_dtype=pl.FP32, b_trans=True)
                 for kb in pl.pipeline(1, O_GROUP_IN // A_K_TILE, stage=2):
                     k0 = kb * A_K_TILE
                     xa_k_chunk = pl.slice(o_packed, [PROJ_A_ROW_TILE, A_K_TILE], [pa_src0, k0], valid_shape=[pa_rows, A_K_TILE])
@@ -207,13 +209,12 @@ def decode_o_proj_tp1(
                     oq_half = pl.cast(oq_i32, target_type=pl.FP16, mode="round")
                     oq_i8 = pl.cast(oq_half, target_type=pl.INT8, mode="trunc")
                     o_r_i8_pad[qt : qt + QUANT_TOKEN_TILE, col_g : col_g + O_LORA] = oq_i8
-                # Zero the rows past the runtime token count; proj_b_mm reads the full T_PAD extent.
-                for zt in pl.range(t_dim, T_PAD, QUANT_TOKEN_TILE):
+                # Zero the tail of the final active proj_b_mm row tile.
+                for zt in pl.range(t_dim, proj_b_padded_rows, QUANT_TOKEN_TILE):
                     zero_half = pl.full([QUANT_TOKEN_TILE, O_LORA], dtype=pl.FP16, value=0.0)
                     o_r_i8_pad[zt : zt + QUANT_TOKEN_TILE, col_g : col_g + O_LORA] = pl.cast(
                         zero_half, target_type=pl.INT8, mode="trunc")
 
-            proj_b_t_rows = T_PAD // PROJ_B_MM_T_TILE
             with pl.spmd(proj_b_t_rows * (D // PROJ_B_D_TILE), name_hint="proj_b_mm", deps=[q_tid], allow_early_resolve=True) as pb_tid:
                 pb_unit = pl.tile.get_block_idx()
                 tb = pb_unit // (D // PROJ_B_D_TILE)
@@ -225,14 +226,9 @@ def decode_o_proj_tp1(
                     acc_b = pl.create_tensor([PROJ_B_MM_T_TILE, PROJ_B_MM_N_TILE], dtype=pl.INT32)
                     for kb in pl.pipeline(0, O_LORA // B_K_TILE, stage=2):
                         k0 = col_g + kb * B_K_TILE
-                        if kb == 0:
-                            b_act = o_r_i8_pad[t0 : t0 + PROJ_B_MM_T_TILE, col_g : col_g + B_K_TILE]
-                            b_weight = wo_b[n0 : n0 + PROJ_B_MM_N_TILE, col_g : col_g + B_K_TILE]
-                            acc_b = pl.matmul(b_act, b_weight, b_trans=True, out_dtype=pl.INT32)
-                        else:
-                            b_act = o_r_i8_pad[t0 : t0 + PROJ_B_MM_T_TILE, k0 : k0 + B_K_TILE]
-                            b_weight = wo_b[n0 : n0 + PROJ_B_MM_N_TILE, k0 : k0 + B_K_TILE]
-                            acc_b = pl.matmul_acc(acc_b, b_act, b_weight, b_trans=True)
+                        b_act = o_r_i8_pad[t0 : t0 + PROJ_B_MM_T_TILE, k0 : k0 + B_K_TILE]
+                        b_weight = wo_b[n0 : n0 + PROJ_B_MM_N_TILE, k0 : k0 + B_K_TILE]
+                        acc_b = pl.matmul_acc(acc_b, b_act, b_weight, b_trans=True, init_cond=(kb == 0))
                     partials[t0 : t0 + PROJ_B_MM_T_TILE, g * D + n0 : g * D + n0 + PROJ_B_MM_N_TILE] = acc_b
             proj_b_tids[g] = pb_tid
 
@@ -265,6 +261,28 @@ def decode_o_proj_tp1(
     return attn_out
 
 
+@pl.jit.incore
+def o_group_a2a_gather(
+    local_groups_out: pl.Out[pl.Tensor[[ATTENTION_WINDOW_ROWS, O_GROUP_IN], pl.BF16]],
+    exchange_window: pld.DistributedTensor[[ATTENTION_WINDOW_ROWS, O_GROUP_IN], pl.BF16],
+    group_t: pl.Scalar[pl.INT32],
+):
+    """Copy exchanged attention groups into the local projection buffer."""
+    worker = pl.tile.get_block_idx()
+    for local_group in pl.range(LOCAL_O_GROUPS):
+        group_base_row = local_group * GROUP_T_PAD
+        for group_row in pl.range(worker, group_t, ATTENTION_PUBLISH_WORKERS):
+            copy_row = group_base_row + group_row
+            local_groups_out[
+                copy_row : copy_row + 1,
+                0:O_GROUP_IN,
+            ] = exchange_window[
+                copy_row : copy_row + 1,
+                0:O_GROUP_IN,
+            ]
+    return local_groups_out
+
+
 @pl.jit.inline
 def o_group_a2a(
     local_groups_out: pl.Tensor[[ATTENTION_WINDOW_ROWS, O_GROUP_IN], pl.BF16],
@@ -284,21 +302,17 @@ def o_group_a2a(
                 pld.system.wait(signal=exchange_signal, offsets=[source_tp, 0], expected=expected, cmp=pld.WaitCmp.Ge)
 
     group_t = TP_SIZE * local_t
-    with pl.spmd(ATTENTION_PUBLISH_WORKERS, name_hint="o_group_a2a_gather", deps=[wait_tid]) as gather_tid:
-        worker = pl.tile.get_block_idx()
-        for local_group in pl.range(LOCAL_O_GROUPS):
-            group_base_row = local_group * GROUP_T_PAD
-            for group_row in pl.range(worker, group_t, ATTENTION_PUBLISH_WORKERS):
-                copy_row = group_base_row + group_row
-                local_groups_out[
-                    copy_row : copy_row + 1,
-                    0:O_GROUP_IN,
-                ] = exchange_window[
-                    copy_row : copy_row + 1,
-                    0:O_GROUP_IN,
-                ]
+    # Specialize the explicit SPMD callee on a scratch output.
+    if False:
+        gather_specialize = pl.create_tensor([ATTENTION_WINDOW_ROWS, O_GROUP_IN], dtype=pl.BF16)
+        o_group_a2a_gather(gather_specialize, exchange_window, group_t)
+    local_groups_out, gather_tid = pl.spmd_submit(
+        self.o_group_a2a_gather,  # noqa: F821 - materialized by @pl.jit
+        local_groups_out, pl.no_dep(exchange_window), group_t,
+        core_num=ATTENTION_PUBLISH_WORKERS, deps=[wait_tid],
+    )
 
-    with pl.at(level=pl.Level.CORE_GROUP, name_hint="o_group_a2a_complete", deps=[gather_tid]):
+    with pl.at(level=pl.Level.CORE_GROUP, name_hint="o_group_a2a_complete", deps=[gather_tid], no_dep_args=[exchange_signal]):
         completion_anchor = pl.read(local_groups_out, [0, 0])
         for peer_tp in pl.range(TP_SIZE):
             if peer_tp != tp_rank:
@@ -453,6 +467,30 @@ def golden_o_group_a2a(tensors):
     tensors["attention_local_groups"][:] = exchanged
 
 
+@pl.jit.incore
+def tp_o_rs_reduce(
+    local_out: pl.Out[pl.Tensor[[T_DYN, D], pl.BF16]],
+    reduce_window: pld.DistributedTensor[[O_WINDOW_ROWS, D], pl.BF16],
+    local_t: pl.Scalar[pl.INT32],
+):
+    """Sum the received O-projection partials for the local tokens."""
+    worker = pl.tile.get_block_idx()
+    for block in pl.range(worker, local_t * (D // O_RS_D_TILE), O_RS_REDUCE_WORKERS):
+        local_row = block // (D // O_RS_D_TILE)
+        d_block = block - local_row * (D // O_RS_D_TILE)
+        d0 = d_block * O_RS_D_TILE
+        own_partial = pl.load(reduce_window, [local_row, d0], [1, O_RS_D_TILE])
+        reduce_acc = pl.cast(own_partial, target_type=pl.FP32, mode="none")
+        for source_tp in pl.range(1, TP_SIZE):
+            source_row = source_tp * LOCAL_T_PAD + local_row
+            source_partial = pl.load(reduce_window, [source_row, d0], [1, O_RS_D_TILE])
+            source_fp32 = pl.cast(source_partial, target_type=pl.FP32, mode="none")
+            reduce_acc = pl.add(reduce_acc, source_fp32)
+        reduced = pl.cast(reduce_acc, target_type=pl.BF16, mode="rint")
+        pl.store(reduced, [local_row, d0], local_out)
+    return local_out
+
+
 @pl.jit.inline
 def o_proj_reduce_scatter(
     attention_local_groups: pl.Tensor[[LOCAL_O_GROUPS, GROUP_T_PAD, O_GROUP_IN], pl.BF16],
@@ -475,12 +513,7 @@ def o_proj_reduce_scatter(
 
     attn_2d = pl.reshape(attention_local_groups, [LOCAL_O_GROUPS * GROUP_T_PAD, O_GROUP_IN])
     wo_a_flat = pl.reshape(wo_a, [LOCAL_O_WIDTH, O_GROUP_IN])
-    # Owner-private intermediates: each ReduceScatter owner slice carries its own
-    # o_a / o_b / scale buffers, so a -> quant -> b -> dequant chains pipeline
-    # across owners on auto-dep alone, the way expert_routed's per-tile y_i32
-    # does. One shared buffer makes auto-dep serialize every stage. The put stays
-    # hoisted out: it is fabric-bound, and per-owner put scopes serialize on
-    # reduce_window while each gets only a quarter of the workers.
+    # Owner-private buffers and group-local A -> quant -> B dependencies.
     publish_all = pl.create_tensor([O_WINDOW_ROWS, D], dtype=pl.BF16)
     put_rows = (local_t + O_RS_PUT_T_TILE - 1) // O_RS_PUT_T_TILE
     own_a_rows = (local_t + O_A_T_TILE - 1) // O_A_T_TILE
@@ -492,8 +525,8 @@ def o_proj_reduce_scatter(
 
     for owner in pl.parallel(TP_SIZE):
         own_base = owner * local_t
-        own_a_fp32 = pl.create_tensor([LOCAL_T_PAD, LOCAL_O_WIDTH], dtype=pl.FP32)
-        own_a_i8 = pl.create_tensor([LOCAL_T_PAD, LOCAL_O_WIDTH], dtype=pl.INT8)
+        own_a_fp32 = pl.create_tensor([LOCAL_T_PAD, LOCAL_O_WIDTH], dtype=pl.FP32, manual_dep=True)
+        own_a_i8 = pl.create_tensor([LOCAL_T_PAD, LOCAL_O_WIDTH], dtype=pl.INT8, manual_dep=True)
         # The quant scale rides the own_a_i8 -> tp_o_b -> dequant chain.
         own_scale = pl.create_tensor([LOCAL_O_GROUPS, LOCAL_T_PAD], dtype=pl.FP32, manual_dep=True)
         own_b_i32 = pl.create_tensor([LOCAL_T_PAD, LOCAL_O_GROUPS * D], dtype=pl.INT32)
@@ -502,7 +535,7 @@ def o_proj_reduce_scatter(
             attention_row = local_group * GROUP_T_PAD + own_base
             o_a_col = local_group * O_LORA
 
-            with pl.spmd(own_a_rows * (O_LORA // O_A_N_TILE), name_hint="tp_o_a"):
+            with pl.spmd(own_a_rows * (O_LORA // O_A_N_TILE), name_hint="tp_o_a") as pa_tid:
                 pa_unit = pl.tile.get_block_idx()
                 pa_rb = pa_unit // (O_LORA // O_A_N_TILE)
                 pa_nb = pa_unit - pa_rb * (O_LORA // O_A_N_TILE)
@@ -521,7 +554,7 @@ def o_proj_reduce_scatter(
                 pa_valid = pl.set_validshape(pa_acc, pa_rows, O_A_N_TILE)
                 own_a_fp32[pa_t0 : pa_t0 + O_A_T_TILE, pa_wrow : pa_wrow + O_A_N_TILE] = pa_valid
 
-            with pl.spmd(O_A_QUANT_WORKERS, name_hint="tp_o_a_quant"):
+            with pl.spmd(O_A_QUANT_WORKERS, name_hint="tp_o_a_quant", deps=[pa_tid]) as q_tid:
                 qz_worker = pl.tile.get_block_idx()
                 for qz_blk in pl.range(qz_worker, own_quant_blocks, O_A_QUANT_WORKERS):
                     qz_t = qz_blk * QUANT_T_TILE
@@ -553,7 +586,7 @@ def o_proj_reduce_scatter(
                         qz_zero_i8, qz_prows, O_LORA
                     )
 
-            with pl.spmd(own_b_rows * (D // O_B_D_TILE), name_hint="tp_o_b"):
+            with pl.spmd(own_b_rows * (D // O_B_D_TILE), name_hint="tp_o_b", deps=[q_tid]):
                 pb_unit = pl.tile.get_block_idx()
                 pb_tb = pb_unit // (D // O_B_D_TILE)
                 pb_db = pb_unit - pb_tb * (D // O_B_D_TILE)
@@ -645,23 +678,18 @@ def o_proj_reduce_scatter(
             if source_tp != tp_rank:
                 pld.system.wait(signal=reduce_signal, offsets=[source_tp, 0], expected=expected, cmp=pld.WaitCmp.Ge)
 
-    with pl.spmd(O_RS_REDUCE_WORKERS, name_hint="tp_o_rs_reduce", deps=[wait_tid]) as reduce_tid:
-        worker = pl.tile.get_block_idx()
-        for block in pl.range(worker, local_t * (D // O_RS_D_TILE), O_RS_REDUCE_WORKERS):
-            local_row = block // (D // O_RS_D_TILE)
-            d_block = block - local_row * (D // O_RS_D_TILE)
-            d0 = d_block * O_RS_D_TILE
-            own_partial = pl.load(reduce_window, [local_row, d0], [1, O_RS_D_TILE])
-            reduce_acc = pl.cast(own_partial, target_type=pl.FP32, mode="none")
-            for source_tp in pl.range(1, TP_SIZE):
-                source_row = source_tp * LOCAL_T_PAD + local_row
-                source_partial = pl.load(reduce_window, [source_row, d0], [1, O_RS_D_TILE])
-                source_fp32 = pl.cast(source_partial, target_type=pl.FP32, mode="none")
-                reduce_acc = pl.add(reduce_acc, source_fp32)
-            reduced = pl.cast(reduce_acc, target_type=pl.BF16, mode="rint")
-            pl.store(reduced, [local_row, d0], local_out)
+    # Specialize the explicit SPMD callee on a scratch output.
+    if False:
+        reduce_output_rows = pl.tensor.dim(local_out, 0)
+        reduce_specialize = pl.create_tensor([reduce_output_rows, D], dtype=pl.BF16)
+        tp_o_rs_reduce(reduce_specialize, reduce_window, local_t)
+    local_out, reduce_tid = pl.spmd_submit(
+        self.tp_o_rs_reduce,  # noqa: F821 - materialized by @pl.jit
+        local_out, pl.no_dep(reduce_window), local_t,
+        core_num=O_RS_REDUCE_WORKERS, deps=[wait_tid],
+    )
 
-    with pl.at(level=pl.Level.CORE_GROUP, name_hint="tp_o_rs_complete", deps=[reduce_tid]):
+    with pl.at(level=pl.Level.CORE_GROUP, name_hint="tp_o_rs_complete", deps=[reduce_tid], no_dep_args=[reduce_signal]):
         completion_anchor = pl.read(local_out, [0, 0])
         for peer_tp in pl.range(TP_SIZE):
             if peer_tp != tp_rank:
@@ -723,7 +751,7 @@ if __name__ == "__main__":
     import argparse
 
     from golden import run
-    from pypto.ir.distributed_compiled_program import DistributedConfig
+    from pypto.ir import DistributedConfig
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--platform", type=str, default="a2a3", choices=("a2a3", "a2a3sim", "a5", "a5sim"))
@@ -758,14 +786,14 @@ if __name__ == "__main__":
         golden_fn=golden_o_group_a2a,
         compile_only=args.compile_only,
         runtime_dir=args.runtime_dir,
-        compile_cfg=dict(
+        config=dict(
             dump_passes=args.dump_passes,
             distributed_config=DistributedConfig(
                 device_ids=device_ids,
                 num_sub_workers=0,
             ),
+            platform=args.platform,
         ),
-        runtime_cfg=dict(platform=args.platform),
         rtol=0.0,
         atol=0.0,
     )

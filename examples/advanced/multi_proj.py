@@ -33,10 +33,7 @@ def proj(
                 k0 = kb * K_TILE
                 tile_x = x[:, k0 : k0 + K_TILE]
                 tile_w = w[k0 : k0 + K_TILE, n0 : n0 + N_TILE]
-                if kb == 0:
-                    acc = pl.matmul(tile_x, tile_w, out_dtype=pl.FP32)
-                else:
-                    acc = pl.matmul_acc(acc, tile_x, tile_w)
+                acc = pl.matmul_acc(acc, tile_x, tile_w, init_cond=(kb == 0))
             y[:, n0 : n0 + N_TILE] = acc
     return y
 
@@ -97,14 +94,14 @@ if __name__ == "__main__":
     parser.add_argument("-p", "--platform", type=str, default="a2a3",
                         choices=["a2a3", "a2a3sim", "a5", "a5sim"])
     parser.add_argument("-d", "--device", type=int, default=0)
-    parser.add_argument("--enable-chip-swimlane", action="store_true", default=False)
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=range(5))
     args = parser.parse_args()
 
     result = run(
         fn=qkv_proj,
         specs=build_tensor_specs(),
         golden_fn=golden_qkv_proj,
-        runtime_cfg=dict(
+        config=dict(
             platform=args.platform,
             device_id=args.device,
             enable_chip_swimlane=args.enable_chip_swimlane,

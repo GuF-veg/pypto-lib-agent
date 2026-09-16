@@ -6,7 +6,7 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
-# ci: devices=2  # CI: 2-card run; borrows 2 cards via task-submit --device-num
+# ci: devices=2
 """DeepSeek-V4 LM head: dispatch hidden rows, project against a TP vocab shard, combine full-vocab logits.
 
 Hidden states must already have passed the final RMSNorm. Every card is both an
@@ -18,7 +18,7 @@ import sys
 
 import pypto.language as pl
 import pypto.language.distributed as pld
-from pypto.ir.distributed_compiled_program import DistributedConfig
+from pypto.ir import DistributedConfig
 
 from config import DECODE_TOKENS, FLASH as M
 from sample import golden_sample, sample
@@ -192,15 +192,8 @@ def lm_head(
             # so the accumulator keeps one shape for every iteration.
             mm_valid_n = pl.min(VOCAB_PER_TP - mm_o0, FUSED_VOCAB_TILE)
             # M is the full group extent -- one matmul per vocab tile.
-            mm_hidden0 = owner_hiddens[:, 0:FUSED_K_TILE]
-            mm_weight0 = pl.slice(
-                lm_head_weight,
-                [FUSED_VOCAB_TILE, FUSED_K_TILE],
-                [mm_o0, 0],
-                valid_shape=[mm_valid_n, FUSED_K_TILE],
-            )
-            mm_acc = pl.matmul(mm_hidden0, mm_weight0, b_trans=True, out_dtype=pl.FP32)
-            for mm_kb in pl.pipeline(1, D // FUSED_K_TILE, stage=2):
+            mm_acc = pl.create_tensor([GROUP_LOGIT_ROWS, FUSED_VOCAB_TILE], dtype=pl.FP32)
+            for mm_kb in pl.pipeline(0, D // FUSED_K_TILE, stage=2):
                 mm_k0 = mm_kb * FUSED_K_TILE
                 mm_hidden_tile = owner_hiddens[:, mm_k0 : mm_k0 + FUSED_K_TILE]
                 mm_weight_tile = pl.slice(
@@ -209,7 +202,9 @@ def lm_head(
                     [mm_o0, mm_k0],
                     valid_shape=[mm_valid_n, FUSED_K_TILE],
                 )
-                mm_acc = pl.matmul_acc(mm_acc, mm_hidden_tile, mm_weight_tile, b_trans=True)
+                mm_acc = pl.matmul_acc(
+                    mm_acc, mm_hidden_tile, mm_weight_tile, b_trans=True, init_cond=(mm_kb == 0)
+                )
 
             # Columns must be fully valid across the C->V crossing: the boundary
             # transports the full box and rejects a runtime-valued column extent.
@@ -617,8 +612,7 @@ if __name__ == "__main__":
                         help="Active hidden rows each owner projects")
     parser.add_argument("-d", "--device", type=str, default=",".join(str(i) for i in range(WORLD_SIZE)),
                         help=f"comma-separated device ids; need at least {WORLD_SIZE}")
-    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0,
-                        choices=(0, 1, 2, 4))
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=range(5))
     parser.add_argument("--compile-only", action="store_true", default=False)
     parser.add_argument("--runtime-dir", type=str, default=None)
     parser.add_argument("--dump-passes", action="store_true", default=False)
@@ -647,14 +641,12 @@ if __name__ == "__main__":
         compare_fn=compare_fn,
         compile_only=args.compile_only,
         runtime_dir=args.runtime_dir,
-        compile_cfg=dict(
+        config=dict(
             dump_passes=args.dump_passes,
             distributed_config=DistributedConfig(
                 device_ids=device_ids[:required_devices],
                 num_sub_workers=0,
             ),
-        ),
-        runtime_cfg=dict(
             platform=args.platform,
             enable_chip_swimlane=args.enable_chip_swimlane,
         ),

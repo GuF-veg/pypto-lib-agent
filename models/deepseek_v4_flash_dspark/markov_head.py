@@ -140,7 +140,7 @@ if __name__ == "__main__":
     parser.add_argument("-d", "--device", type=int, default=0)
     parser.add_argument("--token-count", type=int, default=DECODE_BATCH // TP)
     parser.add_argument("--vocab-size", type=int, default=TEST_VOCAB_SIZE)
-    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2, 4))
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=range(5))
     parser.add_argument("--dump-passes", action="store_true", default=False)
     args = parser.parse_args()
 
@@ -148,8 +148,8 @@ if __name__ == "__main__":
         fn=markov_head_test,
         specs=build_tensor_specs(args.token_count, args.vocab_size),
         golden_fn=golden_markov_head,
-        compile_cfg=dict(dump_passes=args.dump_passes),
-        runtime_cfg=dict(
+        config=dict(
+            dump_passes=args.dump_passes,
             platform=args.platform,
             device_id=args.device,
             enable_chip_swimlane=args.enable_chip_swimlane,

@@ -826,7 +826,7 @@ if __name__ == "__main__":
     parser.add_argument("--cache-window-replacement-fixture", action="store_true", default=False, help=cache_help)
     parser.add_argument("--golden-data", type=str, default=None)
     parser.add_argument("--save-data", action="store_true", default=False)
-    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2, 4))
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=range(5))
     dep_help = "Capture PTO2 dependency edges (deps.json); the swimlane "
     dep_help += "converter draws fanout/fanin arrows from the sibling file."
     parser.add_argument("--enable-dep-gen", action="store_true", default=False, help=dep_help)
@@ -852,8 +852,8 @@ if __name__ == "__main__":
         golden_fn=golden_sparse_attn,
         golden_data=args.golden_data,
         save_data=args.save_data,
-        compile_cfg=dict(dump_passes=args.dump_passes),
-        runtime_cfg=dict(
+        config=dict(
+            dump_passes=args.dump_passes,
             platform=args.platform,
             device_id=args.device,
             enable_chip_swimlane=args.enable_chip_swimlane,

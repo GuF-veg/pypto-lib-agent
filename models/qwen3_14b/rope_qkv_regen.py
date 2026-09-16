@@ -6,7 +6,7 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
-# ci: no-sim    # compile-only regeneration source; not a runnable kernel test
+# ci: no-sim
 """Regeneration source for ``kernels/paged_attention_cce/kernel/rope_qkv_generated.hpp``.
 
 The fused ``paged_attention_rope_cce`` extern embeds a pypto/ptoas-GENERATED
@@ -401,7 +401,7 @@ if __name__ == "__main__":
     # DEFAULT backend and collide with the set_backend_type above.
     compiled = rope_qkv_regen.compile(
         *_dummy_inputs(args.batch),
-        config=RunConfig(platform=args.platform, backend_type=_backend_type(args.platform)),
+        config=RunConfig(platform=args.platform),
     )
     post_pass = compiled.program
     print(f"Compiled program has {len(post_pass.functions)} function(s):")

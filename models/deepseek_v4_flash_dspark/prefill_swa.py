@@ -6,7 +6,7 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
-# ci: devices=2  # CI: 2-card run; borrows 2 cards via task-submit --device-num
+# ci: devices=2
 """DeepSeek-V4 packed prefill SWA attention: single-die at --tp 1, context-parallel above it."""
 
 import pypto.language as pl
@@ -1040,7 +1040,7 @@ if __name__ == "__main__":
         "--case", choices=["b1", "ragged2"], default="b1",
         help="Fixture case; ragged2 is the fixed two-request TP2 boundary case.",
     )
-    parser.add_argument("--enable-chip-swimlane", action="store_true", default=False)
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=range(5))
     parser.add_argument("--enable-dep-gen", action="store_true", default=False)
     parser.add_argument("--dump-passes", action="store_true", default=False)
     args = parser.parse_args()
@@ -1066,8 +1066,8 @@ if __name__ == "__main__":
             fn=prefill_attention_swa_test,
             specs=build_tensor_specs(args.start_pos, args.token_count),
             golden_fn=golden_prefill_attention_swa,
-            compile_cfg=dict(dump_passes=args.dump_passes),
-            runtime_cfg=dict(
+            config=dict(
+                dump_passes=args.dump_passes,
                 platform=args.platform,
                 device_id=device_ids[0],
                 enable_chip_swimlane=args.enable_chip_swimlane,
@@ -1082,7 +1082,7 @@ if __name__ == "__main__":
             },
         )
     else:
-        from pypto.ir.distributed_compiled_program import DistributedConfig
+        from pypto.ir import DistributedConfig
 
         specs = (
             build_ragged2_cp_tensor_specs(TP_SIZE)
@@ -1093,11 +1093,11 @@ if __name__ == "__main__":
             fn=l3_prefill_attention_swa_cp,
             specs=specs,
             golden_fn=golden_prefill_attention_swa_cp,
-            compile_cfg=dict(
+            config=dict(
                 dump_passes=args.dump_passes,
                 distributed_config=DistributedConfig(device_ids=device_ids, num_sub_workers=0),
+                platform=args.platform,
             ),
-            runtime_cfg=dict(platform=args.platform),
             compile_only=args.compile_only,
             rtol=1e-2,
             atol=1e-2,

@@ -6,7 +6,7 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
-# ci: devices=2  # CI: 2-card run; borrows 2 cards via task-submit --device-num
+# ci: devices=2
 """DeepSeek-V4 MoE single-layer (decode), FLASH preset. --ep picks the EP world
 size: 2/4/8 run N-rank distributed; each rank keeps 32 experts."""
 
@@ -18,7 +18,7 @@ import sys
 
 import config
 
-_EP_CHOICES = (2, 4, 8)
+_EP_CHOICES = (2, 4, 8, 16)
 _EP_DEFAULT = 2
 
 
@@ -32,13 +32,16 @@ def _parse_ep_argv():
 
 
 EP = _parse_ep_argv()
+
+config.FLASH = dataclasses.replace(
+    config.FLASH, n_routed_experts=config.FLASH.n_routed_experts // config.EP_WORLD_SIZE * EP
+)
 config.EP_WORLD_SIZE = EP
-config.FLASH = dataclasses.replace(config.FLASH, n_routed_experts=config.FLASH.n_routed_experts // 8 * EP)
 config.RECV_MAX = EP * config.MOE_TOKENS
 
 import pypto.language as pl
 import pypto.language.distributed as pld
-from pypto.ir.distributed_compiled_program import DistributedConfig
+from pypto.ir import DistributedConfig
 
 from config import FLASH as M, EP_WORLD_SIZE, MOE_TOKENS, RECV_MAX
 from hc_pre import hc_pre
@@ -107,7 +110,7 @@ def dispatch(
     x_norm_i8: pl.Tensor[[T, D], pl.INT8],
     x_norm_scale: pl.Tensor[[T, 1], pl.FP32],
     weights: pl.Tensor[[T, TOPK], pl.FP32],
-    # compact per-expert outputs consumed by expert_routed / combine
+    # per-expert outputs consumed by expert_routed / combine
     recv_x_out: pl.Tensor[[N_LOCAL, RECV_MAX, D], pl.INT8],
     recv_scale_out: pl.Tensor[[N_LOCAL, RECV_MAX], pl.FP32],
     recv_w_out: pl.Tensor[[N_LOCAL, RECV_MAX], pl.FP32],
@@ -134,11 +137,7 @@ def dispatch(
 
     # Count routes, publish counts, barrier on meta, cumsum -> recv_count_out.
     # Needs every source's counts but none of the bulk payload.
-    with pl.at(
-        level=pl.Level.CORE_GROUP,
-        name_hint="dispatch_meta",
-        allow_early_resolve=True,
-    ) as _meta_tid:
+    with pl.at(level=pl.Level.CORE_GROUP, name_hint="dispatch_meta", allow_early_resolve=True) as _meta_tid:
         active_tokens = pl.cast(num_tokens, pl.INDEX)
         if active_tokens < 0:
             active_tokens = pl.cast(0, pl.INDEX)
@@ -166,23 +165,12 @@ def dispatch(
                 pl.tile.write(meta_tile, [0, e], cursor[dst * N_LOCAL + e])
             pld.tile.remote_store(meta_tile, target=recv_meta, peer=dst, offsets=[my_rank, 0])
             if dst != my_rank:
-                pld.system.notify(
-                    target=arrived,
-                    peer=dst,
-                    offsets=[my_rank, 0],
-                    value=1,
-                    op=pld.NotifyOp.AtomicAdd,
-                )
+                pld.system.notify(target=arrived, peer=dst, offsets=[my_rank, 0], value=1, op=pld.NotifyOp.AtomicAdd)
 
         # Wait for every source's meta flag.
         for src in pl.range(N_RANKS):
             if src != my_rank:
-                pld.system.wait(
-                    signal=arrived,
-                    offsets=[src, 0],
-                    expected=moe_epoch,
-                    cmp=pld.WaitCmp.Ge,
-                )
+                pld.system.wait(signal=arrived, offsets=[src, 0], expected=moe_epoch, cmp=pld.WaitCmp.Ge)
 
         # Cumsum recv_meta over sources -> per-expert receive count. The host reads
         # recv_count_out to size the routed-expert tile loop, so producing it here
@@ -274,7 +262,7 @@ def dispatch(
                     cmp=pld.WaitCmp.Ge,
                 )
 
-    # Gather lanes into the compact per-expert buffers: one SPMD block per local
+    # Gather lanes into the per-expert buffers: one SPMD block per local
     # expert. deps on _wait_tid for the incoming payload; this rank's own
     # dst == my_rank puts are already ordered by the local RAW edges on
     # recv_x / recv_aux / recv_route. deps on _meta_tid for recv_meta_local, which is
@@ -305,9 +293,6 @@ def dispatch(
     return _push_tid
 
 
-# === Combine =================================================================
-# Push recv_y rows back to their origin rank keyed by r_route, barrier, then a
-# dense reduce ffn_out[t] = sh[t] + Sigma_k routed_y_buf[t*TOPK+k].
 @pl.jit.inline
 def combine(
     recv_y: pl.Tensor[[N_LOCAL, RECV_MAX, D], pl.BF16],
@@ -323,7 +308,7 @@ def combine(
     dispatch_push_tid: pl.Scalar[pl.TASK_ID],
 ):
     recv_y_flat = pl.reshape(recv_y, [N_LOCAL * RECV_MAX, D])
-    # One SPMD block per LOCAL EXPERT: block e pushes expert e's compact rows back to
+    # One SPMD block per LOCAL EXPERT: block e pushes expert e's live rows back to
     # their origin rank (= the source lane src they arrived on) at their route offset.
     # Rows are src-major, so the per-(e, src) base is a loop-carried prefix sum over
     # src inside the block (same shape as dispatch_gather). Each route maps to a
@@ -365,12 +350,7 @@ def combine(
 
         for src in pl.range(N_RANKS):
             if src != my_rank:
-                pld.system.wait(
-                    signal=combine_arrived,
-                    offsets=[src, 0],
-                    expected=moe_epoch,
-                    cmp=pld.WaitCmp.Ge,
-                )
+                pld.system.wait(signal=combine_arrived, offsets=[src, 0], expected=moe_epoch, cmp=pld.WaitCmp.Ge)
 
     # ffn_out[t] = sh[t] + Sigma_k routed_y_buf[t*TOPK+k]. deps on combine_wait for the
     # peers' writes; this rank's own puts ride the local RAW edge on routed_y_buf,
@@ -380,11 +360,7 @@ def combine(
         active_tokens = pl.cast(0, pl.INDEX)
     if active_tokens > T:
         active_tokens = pl.cast(T, pl.INDEX)
-    with pl.spmd(
-        T,
-        name_hint="shared_routed",
-        deps=[_cwait_tid],
-    ) as _reduce_tid:
+    with pl.spmd(T, name_hint="shared_routed", deps=[_cwait_tid]) as _reduce_tid:
         t = pl.tile.get_block_idx()
         if t < active_tokens:
             acc = pl.cast(sh[t:t + 1, :], target_type=pl.FP32)
@@ -442,10 +418,7 @@ def moe(
     x_mixed = pl.create_tensor([T, D], dtype=pl.BF16)
     post_ffn = pl.create_tensor([T, HC_MULT], dtype=pl.FP32, manual_dep=True)
     comb_ffn = pl.create_tensor([T, HC_MULT * HC_MULT], dtype=pl.FP32)
-    hc_pre(
-        x_hc, hc_ffn_fn, hc_ffn_scale, hc_ffn_base,
-        x_mixed, post_ffn, comb_ffn,
-    )
+    hc_pre(x_hc, hc_ffn_fn, hc_ffn_scale, hc_ffn_base, x_mixed, post_ffn, comb_ffn)
 
     x_norm_i8 = pl.create_tensor([T, D], dtype=pl.INT8)
     x_norm_scale = pl.create_tensor([T, 1], dtype=pl.FP32, manual_dep=True)
@@ -634,6 +607,9 @@ def golden_moe(tensors):
     from expert_shared import golden_expert_shared
     from expert_routed import golden_expert_routed
 
+    T = tensors["x_hc"].shape[1]
+    RECV_MAX = N_RANKS * T
+    N_ROUTES = T * TOPK
     x_next_out = torch.zeros(N_RANKS, T, HC_MULT, D, dtype=torch.float32)
     num_tokens = max(0, min(T, int(tensors.get("num_tokens", T))))
 
@@ -800,7 +776,9 @@ def golden_moe(tensors):
     tensors["x_next"][:] = x_next_out
 
 
-def build_tensor_specs(layer_id=0, num_tokens=T, balanced_routing=False):
+def build_tensor_specs(layer_id=0, num_tokens=None, balanced_routing=False):
+    if num_tokens is None:
+        num_tokens = T
     import torch
     from golden import ScalarSpec, TensorSpec
     from expert_routed import gen_routed_weight
@@ -972,8 +950,7 @@ if __name__ == "__main__":
     from golden import ratio_reldiff, run
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("-p", "--platform", type=str, default="a2a3",
-                        choices=["a2a3", "a2a3sim", "a5", "a5sim"])
+    parser.add_argument("-p", "--platform", type=str, default="a2a3", choices=["a2a3", "a2a3sim", "a5", "a5sim"])
     parser.add_argument("--ep", type=int, default=_EP_DEFAULT, choices=list(_EP_CHOICES),
                         help="EP world size / rank count")
     parser.add_argument("-d", "--device", type=str, default=",".join(str(i) for i in range(N_RANKS)),
@@ -1012,14 +989,9 @@ if __name__ == "__main__":
         save_data=args.save_data,
         compile_only=args.compile_only,
         runtime_dir=args.runtime_dir,
-        compile_cfg=dict(
+        config=dict(
             dump_passes=args.dump_passes,
-            distributed_config=DistributedConfig(
-                device_ids=device_ids,
-                num_sub_workers=0,
-            ),
-        ),
-        runtime_cfg=dict(
+            distributed_config=DistributedConfig(device_ids=device_ids, num_sub_workers=0),
             platform=args.platform,
             enable_chip_swimlane=args.enable_chip_swimlane,
             log_level=args.log_level,

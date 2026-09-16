@@ -6,7 +6,7 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
-# ci: devices=2  # CI: 2-card run; borrows 2 cards via task-submit --device-num
+# ci: devices=2
 """DeepSeek-V4 decode layer smoke: attention DP-N followed by MoE EP-N.
 
 Each rank owns a local decode micro-batch for the selected attention stage.
@@ -17,7 +17,7 @@ size is chosen with --ep (2/4/8, default 2), inherited from moe; see __main__.
 import pypto.language as pl
 import pypto.language.distributed as pld
 from golden import mapped_pool_ratio_allclose
-from pypto.ir.distributed_compiled_program import DistributedConfig
+from pypto.ir import DistributedConfig
 
 from decode_attention_swa import (
     WIN as SWA_WIN,
@@ -83,6 +83,8 @@ from config import ACTIVE as MODEL_CONFIG, DECODE_START_POS
 from moe import (
     AUX_PAD,
     IDX_PAD,
+    H_SCALE,
+    K_SCALE,
     MOE_INTER,
     N_EXPERTS_GLOBAL,
     N_LOCAL,
@@ -202,21 +204,22 @@ def decode_layer(
     gate_bias: pl.Tensor[[N_EXPERTS_GLOBAL], pl.FP32],
     tid2eid: pl.Tensor[[VOCAB, TOPK], pl.INT32],
     input_ids: pl.Tensor[[T], pl.INT64],
-    routed_w1: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8],
-    routed_w1_scale: pl.Tensor[[N_LOCAL, MOE_INTER], pl.FP32],
-    routed_w3: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8],
-    routed_w3_scale: pl.Tensor[[N_LOCAL, MOE_INTER], pl.FP32],
-    routed_w2: pl.Tensor[[N_LOCAL, D, MOE_INTER], pl.INT8],
-    routed_w2_scale: pl.Tensor[[N_LOCAL, D], pl.FP32],
-    shared_w1: pl.Tensor[[MOE_INTER, D], pl.INT8],
-    shared_w1_scale: pl.Tensor[[MOE_INTER], pl.FP32],
-    shared_w3: pl.Tensor[[MOE_INTER, D], pl.INT8],
-    shared_w3_scale: pl.Tensor[[MOE_INTER], pl.FP32],
-    shared_w2: pl.Tensor[[D, MOE_INTER], pl.INT8],
-    shared_w2_scale: pl.Tensor[[D], pl.FP32],
+    routed_w1: pl.Tensor[[N_LOCAL, D, MOE_INTER], pl.FP8E4M3FN],
+    routed_w1_scale: pl.Tensor[[N_LOCAL * K_SCALE, MOE_INTER], pl.FP8E8M0, pl.MX_B_NN],
+    routed_w3: pl.Tensor[[N_LOCAL, D, MOE_INTER], pl.FP8E4M3FN],
+    routed_w3_scale: pl.Tensor[[N_LOCAL * K_SCALE, MOE_INTER], pl.FP8E8M0, pl.MX_B_NN],
+    routed_w2: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.FP8E4M3FN],
+    routed_w2_scale: pl.Tensor[[N_LOCAL * H_SCALE, D], pl.FP8E8M0, pl.MX_B_NN],
+    shared_w1: pl.Tensor[[D, MOE_INTER], pl.FP8E4M3FN],
+    shared_w1_scale: pl.Tensor[[K_SCALE, MOE_INTER], pl.FP8E8M0, pl.MX_B_NN],
+    shared_w3: pl.Tensor[[D, MOE_INTER], pl.FP8E4M3FN],
+    shared_w3_scale: pl.Tensor[[K_SCALE, MOE_INTER], pl.FP8E8M0, pl.MX_B_NN],
+    shared_w2: pl.Tensor[[MOE_INTER, D], pl.FP8E4M3FN],
+    shared_w2_scale: pl.Tensor[[H_SCALE, D], pl.FP8E8M0, pl.MX_B_NN],
     x_next: pl.Out[pl.Tensor[[T, HC_MULT, D], pl.FP32]],
     recv_meta: pld.DistributedTensor[[N_RANKS, N_LOCAL], pl.INT32],
     recv_x: pld.DistributedTensor[[N_LOCAL * RECV_MAX, D], pl.INT8],
+    recv_scale: pld.DistributedTensor[[N_LOCAL * RECV_MAX, K_SCALE], pl.UINT8],
     recv_aux: pld.DistributedTensor[[N_LOCAL * RECV_MAX, AUX_PAD], pl.FP32],
     recv_route: pld.DistributedTensor[[N_LOCAL * RECV_MAX, IDX_PAD], pl.INT32],
     arrived: pld.DistributedTensor[[N_RANKS, SIGNAL_PAD], pl.INT32],
@@ -301,7 +304,7 @@ def decode_layer(
         shared_w1, shared_w1_scale, shared_w3, shared_w3_scale,
         shared_w2, shared_w2_scale,
         x_next,
-        recv_meta, recv_x, recv_aux, recv_route, arrived, data_arrived,
+        recv_meta, recv_x, recv_scale, recv_aux, recv_route, arrived, data_arrived,
         routed_y_buf, combine_arrived, consumed,
         layer_id, pl.const(T, pl.INT32), my_rank, moe_epoch,
     )
@@ -394,24 +397,25 @@ def l3_decode_layer(
     gate_bias: pl.Tensor[[N_RANKS, N_EXPERTS_GLOBAL], pl.FP32],
     tid2eid: pl.Tensor[[N_RANKS, VOCAB, TOPK], pl.INT32],
     input_ids: pl.Tensor[[N_RANKS, T], pl.INT64],
-    routed_w1: pl.Tensor[[N_RANKS, N_LOCAL, MOE_INTER, D], pl.INT8],
-    routed_w1_scale: pl.Tensor[[N_RANKS, N_LOCAL, MOE_INTER], pl.FP32],
-    routed_w3: pl.Tensor[[N_RANKS, N_LOCAL, MOE_INTER, D], pl.INT8],
-    routed_w3_scale: pl.Tensor[[N_RANKS, N_LOCAL, MOE_INTER], pl.FP32],
-    routed_w2: pl.Tensor[[N_RANKS, N_LOCAL, D, MOE_INTER], pl.INT8],
-    routed_w2_scale: pl.Tensor[[N_RANKS, N_LOCAL, D], pl.FP32],
-    shared_w1: pl.Tensor[[N_RANKS, MOE_INTER, D], pl.INT8],
-    shared_w1_scale: pl.Tensor[[N_RANKS, MOE_INTER], pl.FP32],
-    shared_w3: pl.Tensor[[N_RANKS, MOE_INTER, D], pl.INT8],
-    shared_w3_scale: pl.Tensor[[N_RANKS, MOE_INTER], pl.FP32],
-    shared_w2: pl.Tensor[[N_RANKS, D, MOE_INTER], pl.INT8],
-    shared_w2_scale: pl.Tensor[[N_RANKS, D], pl.FP32],
+    routed_w1: pl.Tensor[[N_RANKS, N_LOCAL, D, MOE_INTER], pl.FP8E4M3FN],
+    routed_w1_scale: pl.Tensor[[N_RANKS, N_LOCAL * K_SCALE, MOE_INTER], pl.FP8E8M0],
+    routed_w3: pl.Tensor[[N_RANKS, N_LOCAL, D, MOE_INTER], pl.FP8E4M3FN],
+    routed_w3_scale: pl.Tensor[[N_RANKS, N_LOCAL * K_SCALE, MOE_INTER], pl.FP8E8M0],
+    routed_w2: pl.Tensor[[N_RANKS, N_LOCAL, MOE_INTER, D], pl.FP8E4M3FN],
+    routed_w2_scale: pl.Tensor[[N_RANKS, N_LOCAL * H_SCALE, D], pl.FP8E8M0],
+    shared_w1: pl.Tensor[[N_RANKS, D, MOE_INTER], pl.FP8E4M3FN],
+    shared_w1_scale: pl.Tensor[[N_RANKS, K_SCALE, MOE_INTER], pl.FP8E8M0],
+    shared_w3: pl.Tensor[[N_RANKS, D, MOE_INTER], pl.FP8E4M3FN],
+    shared_w3_scale: pl.Tensor[[N_RANKS, K_SCALE, MOE_INTER], pl.FP8E8M0],
+    shared_w2: pl.Tensor[[N_RANKS, MOE_INTER, D], pl.FP8E4M3FN],
+    shared_w2_scale: pl.Tensor[[N_RANKS, H_SCALE, D], pl.FP8E8M0],
     x_next: pl.Out[pl.Tensor[[N_RANKS, T, HC_MULT, D], pl.FP32]],
     layer_id: pl.Scalar[pl.INT32],
     moe_epoch: pl.Scalar[pl.INT32],
 ):
     recv_meta_buf = pld.alloc_window_buffer([N_RANKS, N_LOCAL], dtype=pl.INT32)
     recv_x_buf = pld.alloc_window_buffer([N_LOCAL * RECV_MAX, D], dtype=pl.INT8)
+    recv_scale_buf = pld.alloc_window_buffer([N_LOCAL * RECV_MAX, K_SCALE], dtype=pl.UINT8)
     recv_aux_buf = pld.alloc_window_buffer([N_LOCAL * RECV_MAX, AUX_PAD], dtype=pl.FP32)
     recv_route_buf = pld.alloc_window_buffer([N_LOCAL * RECV_MAX, IDX_PAD], dtype=pl.INT32)
     arrived_buf = pld.alloc_window_buffer([N_RANKS, SIGNAL_PAD], dtype=pl.INT32)
@@ -423,6 +427,7 @@ def l3_decode_layer(
     for r in pl.range(pld.world_size()):
         recv_meta = pld.window(recv_meta_buf, [N_RANKS, N_LOCAL], dtype=pl.INT32)
         recv_x = pld.window(recv_x_buf, [N_LOCAL * RECV_MAX, D], dtype=pl.INT8)
+        recv_scale = pld.window(recv_scale_buf, [N_LOCAL * RECV_MAX, K_SCALE], dtype=pl.UINT8)
         recv_aux = pld.window(recv_aux_buf, [N_LOCAL * RECV_MAX, AUX_PAD], dtype=pl.FP32)
         recv_route = pld.window(recv_route_buf, [N_LOCAL * RECV_MAX, IDX_PAD], dtype=pl.INT32)
         arrived = pld.window(arrived_buf, [N_RANKS, SIGNAL_PAD], dtype=pl.INT32)
@@ -459,7 +464,7 @@ def l3_decode_layer(
             shared_w1[r], shared_w1_scale[r], shared_w3[r], shared_w3_scale[r],
             shared_w2[r], shared_w2_scale[r],
             x_next[r],
-            recv_meta, recv_x, recv_aux, recv_route, arrived, data_arrived,
+            recv_meta, recv_x, recv_scale, recv_aux, recv_route, arrived, data_arrived,
             routed_y_buf, combine_arrived, consumed,
             layer_id, r, moe_epoch,
             device=r,
@@ -966,7 +971,7 @@ if __name__ == "__main__":
     parser.add_argument("--start-pos", type=int, default=DECODE_START_POS,
                         help="Fixture-only start_pos for all batches; default is the 8k target position.")
     parser.add_argument("--layer-id", type=int, default=10)
-    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2))
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=range(5))
     parser.add_argument("--compile-only", action="store_true", default=False)
     parser.add_argument("--runtime-dir", type=str, default=None)
     parser.add_argument("--save-data", action="store_true", default=False,
@@ -1102,14 +1107,12 @@ if __name__ == "__main__":
         save_data=args.save_data,
         compile_only=args.compile_only,
         runtime_dir=args.runtime_dir,
-        compile_cfg=dict(
+        config=dict(
             dump_passes=args.dump_passes,
             distributed_config=DistributedConfig(
                 device_ids=device_ids[:N_RANKS],
                 num_sub_workers=0,
             ),
-        ),
-        runtime_cfg=dict(
             platform=args.platform,
             enable_chip_swimlane=args.enable_chip_swimlane,
         ),

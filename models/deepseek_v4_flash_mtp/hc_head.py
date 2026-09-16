@@ -97,10 +97,7 @@ def hc_head(
                     [0, k0],
                     valid_shape=[HC_MULT, LINEAR_K_TILE],
                 )
-                if kb == 0:
-                    acc_full = pl.matmul(x_lin_full, w_full, b_trans=True, out_dtype=pl.FP32)
-                else:
-                    acc_full = pl.matmul_acc(acc_full, x_lin_full, w_full, b_trans=True)
+                acc_full = pl.matmul_acc(acc_full, x_lin_full, w_full, b_trans=True, init_cond=(kb == 0))
             mixes_raw = pl.assemble(mixes_raw, acc_full, [t0, 0], atomic=pl.AtomicType.Add)
 
     # At most one incomplete row block exists. Keep it in a separate conditional
@@ -129,10 +126,7 @@ def hc_head(
                     [0, k0],
                     valid_shape=[HC_MULT, LINEAR_K_TILE],
                 )
-                if kb == 0:
-                    acc_tail = pl.matmul(x_lin_tail, w_tail, b_trans=True, out_dtype=pl.FP32)
-                else:
-                    acc_tail = pl.matmul_acc(acc_tail, x_lin_tail, w_tail, b_trans=True)
+                acc_tail = pl.matmul_acc(acc_tail, x_lin_tail, w_tail, b_trans=True, init_cond=(kb == 0))
             mixes_raw = pl.assemble(
                 mixes_raw,
                 acc_tail,
@@ -267,7 +261,7 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=0)
     # Int mode (0=off; 1=timing only, most accurate; 2=timing + dep graph, two runs).
     # `nargs="?"` so a bare `--enable-chip-swimlane` -> mode 1 (int, not bool True).
-    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2))
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=range(5))
     parser.add_argument("--dump-passes", action="store_true", default=False)
     args = parser.parse_args()
     torch.manual_seed(args.seed)
@@ -276,10 +270,8 @@ if __name__ == "__main__":
         fn=hc_head_test,
         specs=build_tensor_specs(),
         golden_fn=golden_hc_head,
-        compile_cfg=dict(
+        config=dict(
             dump_passes=args.dump_passes,
-        ),
-        runtime_cfg=dict(
             platform=args.platform,
             device_id=args.device,
             enable_chip_swimlane=args.enable_chip_swimlane,

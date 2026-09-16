@@ -10,12 +10,13 @@
 
 import pypto.language as pl
 import pypto.language.distributed as pld
-from pypto.ir.distributed_compiled_program import DistributedConfig
+from pypto.ir import DistributedConfig
 
 from config import FLASH as M
 from lm_head import (
     DONE_VALUE,
     GROUP_LOGIT_ROWS,
+    LM_HEAD_RING_HEAP,
     MAX_LOGIT_ROWS,
     TP_SIZE,
     VOCAB_PER_TP,
@@ -585,7 +586,7 @@ def l2_distributed_markov_sample(
     confidence_probs: pl.Out[pl.Tensor[[B_DYN, DSPARK_QUERY_WIDTH], pl.FP32]],
     hidden_window: pld.DistributedTensor[[GROUP_LOGIT_ROWS, D], pl.BF16],
     hidden_done: pld.DistributedTensor[[TP_SIZE, 1], pl.INT32],
-    logits_window: pld.DistributedTensor[[MAX_LOGIT_ROWS * VOCAB], pl.FP32],
+    logits_window: pld.DistributedTensor[[MAX_LOGIT_ROWS, VOCAB], pl.FP32],
     logits_done: pld.DistributedTensor[[TP_SIZE, 1], pl.INT32],
     group_base: pl.Scalar[pl.INT32],
     tp_rank: pl.Scalar[pl.INT32],
@@ -672,7 +673,7 @@ def l3_distributed_markov_sample(
         )
         logits_window = pld.window(
             logits_window_buf,
-            [MAX_LOGIT_ROWS * VOCAB],
+            [MAX_LOGIT_ROWS, VOCAB],
             dtype=pl.FP32,
         )
         hidden_done = pld.window(hidden_done_buf, [TP_SIZE, 1], dtype=pl.INT32)
@@ -972,8 +973,7 @@ if __name__ == "__main__":
 
     assert args.tp == TP_SIZE
     assert args.dp * args.tp == WORLD_SIZE
-    compile_cfg = dict(dump_passes=args.dump_passes)
-    runtime_cfg = dict(platform=args.platform)
+    config = dict(dump_passes=args.dump_passes, platform=args.platform)
     fn = markov_sample
     golden_fn = golden_nonzero_markov
     if args.distributed:
@@ -981,19 +981,19 @@ if __name__ == "__main__":
         assert len(device_ids) >= WORLD_SIZE
         fn = l3_distributed_markov_sample
         golden_fn = golden_distributed_markov
-        compile_cfg["distributed_config"] = DistributedConfig(
+        config["ring_heap"] = LM_HEAD_RING_HEAP
+        config["distributed_config"] = DistributedConfig(
             device_ids=device_ids[:WORLD_SIZE],
             num_sub_workers=0,
         )
     else:
-        runtime_cfg["device_id"] = int(args.device)
+        config["device_id"] = int(args.device)
 
     result = run(
         fn=fn,
         specs=build_tensor_specs(args.batch, distributed=args.distributed),
         golden_fn=golden_fn,
-        compile_cfg=compile_cfg,
-        runtime_cfg=runtime_cfg,
+        config=config,
         rtol=2e-3,
         atol=2e-3,
         compile_only=args.compile_only,

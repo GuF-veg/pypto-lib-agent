@@ -6,7 +6,7 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
-# ci: no-sim    # A2/A3-only driver; a2a3sim remains available explicitly with --compile-only.
+# ci: no-sim
 """Dynamic correctness, codegen, and raw-performance driver for PyPTO Qwen PA.
 
 The handwritten CCE backend and its existing validation remain available. This
@@ -832,8 +832,11 @@ def _run_case(case: DynamicCase, args: argparse.Namespace) -> dict[str, object]:
         fn=paged_attention_pypto_dynamic,
         specs=build_specs(case, fixture),
         golden_fn=None if fixture is None else lambda values: golden_attention(values, case),
-        compile_cfg={"dump_passes": True},
-        runtime_cfg={"platform": args.platform, "device_id": args.device},
+        config=dict(
+            dump_passes=True,
+            platform=args.platform,
+            device_id=args.device,
+        ),
         compile_only=compile_only,
         rtol=5.0e-3,
         atol=2.0e-2,

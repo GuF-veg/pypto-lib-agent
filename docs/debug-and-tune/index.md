@@ -24,6 +24,7 @@ then move from the broadest evidence to the narrowest:
 | Understand how task edges are formed and when the scheduler issues them | [Dependencies and Scheduling](dependency-and-scheduling.md) |
 | Fit intermediate tensors in the runtime's ring heaps and measure per-scope peaks | [Ring Heap and Scope Stats](ring-heap-and-scope-stats.md) |
 | Choose matmul row, N, and K tiles | [Cube Tile Tuning](cube-tile-tuning.md) |
+| Warm L2 for a weight set the next stage evicts | [L2 Prefetch](l2-prefetch.md) |
 | Inspect one generated kernel in the operator simulator | [In-Core Simulator Profiling](incore-simulator-profiling.md) |
 | Partition phases inside a multi-core CCE extern kernel on real hardware | [CCE In-Core Profiling](cce-incore-profiling.md) |
 
@@ -50,8 +51,7 @@ source.
   round count for every candidate.
 - Collect repeats as rounds inside one process (`PYPTO_BENCH_ROUNDS`), not as
   repeated invocations of the script, and report the `mean=` field of the
-  `[RUN] effective_us` line — the same convention as daily CI. Retain the raw
-  samples (`PYPTO_BENCH_RAW=1`).
+  `[RUN] effective_us` line. Retain the raw samples (`PYPTO_BENCH_RAW=1`).
 - Keep generated traces and build products under `build_output/`; do not commit
   them.
 - Remove diagnostic instrumentation and rerun validation before submitting a

@@ -6,7 +6,7 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
-# ci: devices=2  # CI: 2-card run; borrows 2 cards via task-submit --device-num
+# ci: devices=2
 """Context-parallel prefill token-row all-gather into rank-major order on every rank."""
 
 import sys
@@ -244,7 +244,7 @@ if __name__ == "__main__":
     import argparse
 
     from golden import run
-    from pypto.ir.distributed_compiled_program import DistributedConfig
+    from pypto.ir import DistributedConfig
 
     parser = argparse.ArgumentParser(description="Standalone context-parallel prefill token-row all-gather test.")
     parser.add_argument("-p", "--platform", type=str, default="a2a3", choices=("a2a3", "a2a3sim", "a5", "a5sim"))
@@ -273,11 +273,11 @@ if __name__ == "__main__":
         golden_fn=golden_prefill_cp_token_allgather,
         compile_only=args.compile_only,
         runtime_dir=args.runtime_dir,
-        compile_cfg=dict(
+        config=dict(
             dump_passes=args.dump_passes,
             distributed_config=DistributedConfig(device_ids=device_ids, num_sub_workers=0),
+            platform=args.platform,
         ),
-        runtime_cfg=dict(platform=args.platform),
         rtol=0.0,
         atol=0.0,
     )

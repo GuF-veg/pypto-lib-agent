@@ -6,11 +6,7 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
-"""DeepSeek-V4 CSA sparse attention with grouped output projection (decode).
-
-Ratio-4 compressed cache plus the sliding window, with the indexer top-k
-masking folded in. The SWA and HCA variants live in sibling modules.
-"""
+"""DeepSeek-V4 CSA decode sparse attention over sliding-window and compressed KV caches."""
 
 
 import pypto.language as pl
@@ -55,39 +51,42 @@ COMPRESS_RATIO_INV = 1.0 / COMPRESS_RATIO
 CSA_CMP_GE_BIAS = 1.0  # raw + 1, folded for the ge clamp
 NEG_INF = -1.0e20
 
-# paged KV cache
+# cache geometry
 ORI_MAX_BLOCKS = (MAX_SEQ_LEN + BLOCK_SIZE - 1) // BLOCK_SIZE
 ORI_BLOCK_NUM = KV_ORI_BLOCK_NUM
 CMP_MAX_BLOCKS = (MAX_SEQ_LEN // COMPRESS_RATIO + BLOCK_SIZE - 1) // BLOCK_SIZE
 
 # tiling
 H_TILE = 16
-QK_M_TILE = 32           # qk_pv M rows per QK/PV matmul; QK_M_TILE/H_TILE-way KV L1->L0 reuse
+QK_PRE_LAUNCH = 2
+QK_TRANSFER_SLOTS = QK_PRE_LAUNCH + 1
+QK_KV_READY_EVENT = 0
+QK_SCORE_READY_EVENT = 1
+QK_PROB_READY_EVENT = 2
+QK_PV_READY_EVENT = 3
 ATTN_K_TILE = 128
-NUM_QK_CORES = 24        # qk_pv dispatch lanes = a2a3 AIC count; re-sweep for other AIC counts
-T_PAD = ((T + 16 - 1) // 16) * 16  # T padded up to the 16-row cube M floor
+NUM_QK_CORES = 24  # qk_pv dispatch lanes
+CSA_PLAN_WORKERS = 16  # csa_slots_build_valid_qk_plan token-tile lanes
+T_PAD = ((T + 16 - 1) // 16) * 16  # Cube M floor
 ATTENTION_PUBLISH_WORKERS = 48
-ATTENTION_PUBLISH_T_TILE = 8
+ATTENTION_PUBLISH_T_TILE = 4
 LOCAL_O_GROUPS = O_GROUPS // TP
 GROUP_T_PAD = TP * T_PAD
 ATTENTION_WINDOW_ROWS = LOCAL_O_GROUPS * GROUP_T_PAD
 PUBLISH_GROUPS = H_TILE // HEADS_PER_GROUP
-ROPE_CS_T_TILE = 8    # rope cos/sin row block; T is a multiple of 8 by the batch contract
+ROPE_CS_T_TILE = 8
 TOPK = WIN + CMP_TOPK
-# Floor to 2: a single sparse-K block miscompiles in pypto (S-stride cross-token
-# output mixup); a 2-block build with an all-invalid 2nd block is bit-exact.
-SPARSE_BLOCKS = max(2, (TOPK + ATTN_K_TILE - 1) // ATTN_K_TILE)
+SPARSE_BLOCKS = max(2, (TOPK + ATTN_K_TILE - 1) // ATTN_K_TILE)  # Sparse-K block floor
+# One whole 64-byte DDR line per token row of valid_block_mask: the plan lanes
+# write it with scalar pl.write, and a scalar write lands a full line, so two
+# lanes sharing a line would silently drop each other's stores.
+MASK_LINE_ELEMS = 64 // 4
+VALID_BLOCK_MASK_COLS = (
+    (SPARSE_BLOCKS + MASK_LINE_ELEMS - 1) // MASK_LINE_ELEMS
+) * MASK_LINE_ELEMS
 PADDED_TOPK = SPARSE_BLOCKS * ATTN_K_TILE
-QK_ITEMS = T * SPARSE_BLOCKS   # qk_pv work items: one per (token, sparse block)
-# Page-contiguous runs one sliding-window K tile spans. WIN, not the K tile size,
-# caps how many window rows a tile can hold; BLOCK_SIZE only sets where the cuts
-# fall, being where physical contiguity breaks. So: those rows plus a worst-case
-# BLOCK_SIZE - 1 head offset, rounded up to pages -- 2 whenever WIN <= BLOCK_SIZE,
-# whatever ATTN_K_TILE is, and it grows on its own if either outgrows a page.
 SWA_TILE_WIN_ROWS = min(ATTN_K_TILE, WIN)
-SWA_RUNS = (SWA_TILE_WIN_ROWS + 2 * (BLOCK_SIZE - 1)) // BLOCK_SIZE
-# Token tile for the slot / bias vector work; the whole-T form would put
-# [T, IDX_TOPK] FP32 tiles well past the Vec limit.
+SWA_RUNS = (SWA_TILE_WIN_ROWS + 2 * (BLOCK_SIZE - 1)) // BLOCK_SIZE  # Sliding-window page runs
 BIAS_T_TILE = min(T, 8)
 if T % BIAS_T_TILE != 0:
     raise ValueError("CSA token capacity must contain complete bias tiles")
@@ -110,55 +109,56 @@ def sparse_attn_csa(
     cmp_block_table: pl.Tensor[[B_DYN, CMP_MAX_BLOCKS], pl.INT32],
     idx_topk: pl.Tensor[[T_DYN, IDX_TOPK], pl.INT32],
     position_ids: pl.Tensor[[T_DYN, 1], pl.INT32],
+    attn_sink: pl.Tensor[[H], pl.FP32],
     freqs_cos: pl.Tensor[[T_DYN, ROPE_DIM], pl.BF16],
     freqs_sin: pl.Tensor[[T_DYN, ROPE_DIM], pl.BF16],
-    cache_ready_dep: pl.Scalar[pl.TASK_ID],
 ):
     """Plan and run CSA QK/PV over sparse blocks, and build inverse-RoPE metadata."""
-    # Compressed index contract: -1 invalid, [0, ...) compressed KV slots.
+    # Compressed index contract.
     ori_block_num = pl.tensor.dim(ori_kv, 0)
     t_dim = pl.tensor.dim(q, 0)
     t_heads = t_dim * H
-    t_blk = t_dim * (H // H_TILE) * SPARSE_BLOCKS * H_TILE
-    qk_items = t_dim * SPARSE_BLOCKS
     rope_cs_blocks = t_dim // ROPE_CS_T_TILE
     ori_kv_flat = pl.reshape(ori_kv, [ori_block_num * BLOCK_SIZE, HEAD_DIM])
 
-    # WAR marker (pypto-lib#481): a scalar-driven gather_row does not mark ori_kv
-    # add_inout by itself, so the enclosing layer's in-place KV-cache writeback would
-    # lose its WAR edge against the qk_pv gather read. add_inout is a param-level
-    # property, so this one no-op tile self-copy suffices.
+    # pypto-lib#481 original-cache WAR marker.
     with pl.at(level=pl.Level.CORE_GROUP, name_hint="kv_touch", allow_early_resolve=True):
         ori_kv_flat[0:1, 0:HEAD_DIM] = ori_kv_flat[0:1, 0:HEAD_DIM]
 
-    # qk_plan compacts the t_dim * SPARSE_BLOCKS (token, sparse-block) work items into
-    # qk_order[] -- non-empty tiles (valid_block_mask > 0) first, empty tiles
-    # appended -- through one running write cursor, so qk_pv's NUM_QK_CORES lanes
-    # take the heavy tiles one-per-lane before any lane takes a second.
+    # Sparse slot indices, additive softmax bias, and per-block validity.
     sparse_bias = pl.create_tensor([t_dim, PADDED_TOPK], dtype=pl.FP32)
     cmp_sparse_indices = pl.create_tensor([t_dim, CMP_TOPK], dtype=pl.INT32)
-    valid_block_mask = pl.create_tensor([t_dim, SPARSE_BLOCKS], dtype=pl.INT32)
-    qk_order = pl.create_tensor([QK_ITEMS], dtype=pl.INT32)
-    qk_wcur = pl.create_tensor([1], dtype=pl.INT32)
-    with pl.at(level=pl.Level.CORE_GROUP, name_hint="csa_slots_build_valid_qk_plan") as qk_plan_tid:
-        # Compressed slots [0, IDX_TOPK): vectorized masked copy over a token tile, keeping
-        # raw iff 0 <= raw < floor((pos + 1) / COMPRESS_RATIO), as out = mask*(raw + 1) - 1.
-        for bias_t0 in pl.range(0, t_dim, BIAS_T_TILE):
+    valid_block_mask = pl.create_tensor([t_dim, VALID_BLOCK_MASK_COLS], dtype=pl.INT32)
+    # Every token tile is independent: it reads its own idx_topk / position_ids /
+    # window_swa_indices rows and writes its own cmp_sparse_indices, valid_block_mask
+    # and sparse_bias rows, so the tiles spread over lanes instead of one core.
+    with pl.spmd(CSA_PLAN_WORKERS, name_hint="csa_slots_build_valid_qk_plan", allow_early_resolve=True) as qk_plan_tid:
+        plan_worker = pl.tile.get_block_idx()
+        # Valid compressed slots.
+        for bias_t0 in pl.range(plan_worker * BIAS_T_TILE, t_dim, CSA_PLAN_WORKERS * BIAS_T_TILE):
             c_raw = pl.cast(idx_topk[bias_t0 : bias_t0 + BIAS_T_TILE, 0:IDX_TOPK], target_type=pl.FP32)
             c_pos = pl.cast(position_ids[bias_t0 : bias_t0 + BIAS_T_TILE, 0:1], target_type=pl.FP32)
             c_pos_scaled = pl.mul(pl.add(c_pos, 1.0), COMPRESS_RATIO_INV)
             c_pos_i32 = pl.cast(c_pos_scaled, target_type=pl.INT32, mode="trunc")
             c_pos_q = pl.cast(c_pos_i32, target_type=pl.FP32)
-            # Broadcast the per-token bound over IDX_TOPK cols.
+            # Per-token compressed-slot bound.
             c_upper_b = pl.row_expand_mul(pl.full([BIAS_T_TILE, IDX_TOPK], dtype=pl.FP32, value=1.0), c_pos_q)
             c_ge = pl.minimum(pl.maximum(pl.add(c_raw, CSA_CMP_GE_BIAS), 0.0), 1.0)
             c_lt = pl.minimum(pl.maximum(pl.sub(c_upper_b, c_raw), 0.0), 1.0)
             c_mask = pl.mul(c_ge, c_lt)
             c_out = pl.sub(pl.mul(c_mask, pl.add(c_raw, 1.0)), 1.0)
             cmp_sparse_indices[bias_t0 : bias_t0 + BIAS_T_TILE, 0:IDX_TOPK] = pl.cast(c_out, target_type=pl.INT32)
-            # Block 0 (sliding-window) is always live; blocks 1.. from the compressed mask.
+            v_win_f = pl.cast(window_swa_indices[bias_t0 : bias_t0 + BIAS_T_TILE, 0:WIN], target_type=pl.FP32)
+            v_win_valid = pl.minimum(pl.maximum(pl.add(v_win_f, 1.0), 0.0), 1.0)
+            # Scalar writes, but VALID_BLOCK_MASK_COLS gives every token row its own
+            # whole 64-byte line, and a lane owns BIAS_T_TILE entire rows, so no two
+            # lanes can land in the same line. The compiler still reports
+            # ScalarWriteLineShared because the row index is computed at runtime and
+            # it cannot prove that; the golden replay is what checks it.
+            raw_block_valid = pl.row_max(v_win_valid)
             for c_t0 in pl.range(BIAS_T_TILE):
-                pl.write(valid_block_mask, [bias_t0 + c_t0, 0], pl.cast(1, pl.INT32))
+                c_valid = pl.cast(pl.read(raw_block_valid, [c_t0, 0]), target_type=pl.INT32)
+                pl.write(valid_block_mask, [bias_t0 + c_t0, 0], c_valid)
             for c_sb in pl.range(1, SPARSE_BLOCKS):
                 c_s0 = (c_sb - 1) * ATTN_K_TILE
                 c_blk_valid = pl.row_max(c_mask[:, c_s0 : c_s0 + ATTN_K_TILE])
@@ -166,158 +166,202 @@ def sparse_attn_csa(
                     c_valid = pl.cast(pl.read(c_blk_valid, [c_dt, 0]), target_type=pl.INT32)
                     pl.write(valid_block_mask, [bias_t0 + c_dt, c_sb], c_valid)
 
-            # Additive softmax bias (0 valid / NEG_INF invalid) that qk_pv adds onto the
-            # scaled scores, so invalid lanes exp to ~0 with no per-block mask multiply.
-            v_win_f = pl.cast(window_swa_indices[bias_t0 : bias_t0 + BIAS_T_TILE, 0:WIN], target_type=pl.FP32)
-            # Index contract: raw == -1 invalid, raw >= 0 valid. min(idx, 0) is -1 for
-            # invalid / 0 for valid; * -NEG_INF gives NEG_INF / 0. c_out is the
-            # post-mask compressed slots (integer-valued), reused directly.
-            v_win_valid = pl.minimum(pl.maximum(pl.add(v_win_f, 1.0), 0.0), 1.0)
+            # Additive sparse softmax bias.
             sparse_bias[bias_t0 : bias_t0 + BIAS_T_TILE, 0:WIN] = pl.mul(pl.sub(v_win_valid, 1.0), -NEG_INF)
             sparse_bias[bias_t0 : bias_t0 + BIAS_T_TILE, WIN:TOPK] = pl.mul(pl.minimum(c_out, 0.0), -NEG_INF)
             if PADDED_TOPK > TOPK:
-                sparse_bias[bias_t0 : bias_t0 + BIAS_T_TILE, TOPK:PADDED_TOPK] = pl.full(
-                    [BIAS_T_TILE, PADDED_TOPK - TOPK], dtype=pl.FP32, value=NEG_INF)
+                bias_pad = pl.full([BIAS_T_TILE, PADDED_TOPK - TOPK], dtype=pl.FP32, value=NEG_INF)
+                sparse_bias[bias_t0 : bias_t0 + BIAS_T_TILE, TOPK:PADDED_TOPK] = bias_pad
 
-        pl.write(qk_wcur, [0], pl.cast(0, pl.INT32))
-        # Pass 1: non-empty tiles to the front of qk_order.
-        for plan_t in pl.range(t_dim):
-            for plan_sb in pl.range(SPARSE_BLOCKS):
-                if pl.read(valid_block_mask, [plan_t, plan_sb]) > 0:
-                    plan_w = pl.read(qk_wcur, [0])
-                    pl.write(qk_order, [plan_w], pl.cast(plan_t * SPARSE_BLOCKS + plan_sb, pl.INT32))
-                    pl.write(qk_wcur, [0], pl.cast(plan_w + 1, pl.INT32))
-        # Pass 2: empty tiles appended to the tail.
-        for plan_t in pl.range(t_dim):
-            for plan_sb in pl.range(SPARSE_BLOCKS):
-                if pl.read(valid_block_mask, [plan_t, plan_sb]) <= 0:
-                    plan_w = pl.read(qk_wcur, [0])
-                    pl.write(qk_order, [plan_w], pl.cast(plan_t * SPARSE_BLOCKS + plan_sb, pl.INT32))
-                    pl.write(qk_wcur, [0], pl.cast(plan_w + 1, pl.INT32))
-
-    # One lane per core. Each lane walks its planned items and gathers the
-    # window/compressed KV rows into one L1 matmul operand; invalid lanes gather a
-    # finite row and are zeroed by the NEG_INF softmax bias.
+    # QK/PV scratch tensors.
     cmp_block_num = pl.tensor.dim(cmp_kv, 0)
     cmp_kv_flat = pl.reshape(cmp_kv, [cmp_block_num * BLOCK_SIZE, HEAD_DIM])
     q_flat = pl.reshape(q, [t_heads, HEAD_DIM])
-    sparse_blk_mi = pl.create_tensor([t_blk, 1], dtype=pl.FP32)
-    sparse_blk_li = pl.create_tensor([t_blk, 1], dtype=pl.FP32)
-    sparse_blk_oi = pl.create_tensor([t_blk, HEAD_DIM], dtype=pl.FP32)
+    attn_sink_col = pl.reshape(attn_sink, [H, 1])
+    attn_mi = pl.create_tensor([t_heads, 1], dtype=pl.FP32)
+    attn_li = pl.create_tensor([t_heads, 1], dtype=pl.FP32)
+    attn_oi = pl.create_tensor([t_heads, HEAD_DIM], dtype=pl.FP32)
 
-    with pl.spmd(NUM_QK_CORES, name_hint="qk_pv", deps=[qk_plan_tid, cache_ready_dep], allow_early_resolve=True) as qk_tid:
+    transfer_slots = NUM_QK_CORES * QK_TRANSFER_SLOTS
+    transfer_heads = transfer_slots * H
+    transfer_kv_rows = transfer_slots * ATTN_K_TILE
+    kv_transfer = pl.create_tensor([transfer_kv_rows, HEAD_DIM], dtype=pl.BF16)
+    score_transfer = pl.create_tensor([transfer_heads, ATTN_K_TILE], dtype=pl.FP32)
+    probability_transfer = pl.create_tensor([transfer_heads, ATTN_K_TILE], dtype=pl.BF16)
+    pv_transfer = pl.create_tensor([transfer_heads, HEAD_DIM], dtype=pl.FP32)
+    mi_transfer = pl.create_tensor([transfer_heads, 1], dtype=pl.FP32)
+    li_transfer = pl.create_tensor([transfer_heads, 1], dtype=pl.FP32)
+    ffts_workspace = pl.create_tensor([256], dtype=pl.INT64)
+    with pl.spmd(NUM_QK_CORES, name_hint="qk_pv", deps=[qk_plan_tid], allow_early_resolve=True) as qk_tid:
         qk_core = pl.tile.get_block_idx()
-        # Items for this lane: qk_core, qk_core + NUM_QK_CORES, ...  The per-lane
-        # count is derived from the lane index (no stored per-core count); a lane
-        # with index >= qk_items runs zero iterations.
-        qk_lane_iters = (qk_items - qk_core + NUM_QK_CORES - 1) // NUM_QK_CORES
-        for qk_it in pl.range(qk_lane_iters):
-            qk_flat = qk_core + qk_it * NUM_QK_CORES
-            qk_item = pl.cast(pl.read(qk_order, [qk_flat]), pl.INDEX)
-            qk_t = qk_item // SPARSE_BLOCKS
-            qk_sb = qk_item - qk_t * SPARSE_BLOCKS
+        pl.system.set_ffts(ffts_workspace)
+        for qk_t in pl.range(qk_core, t_dim, NUM_QK_CORES):
             qk_b = qk_t // S
-            qk_token_base = qk_t * (H // H_TILE) * SPARSE_BLOCKS * H_TILE
-            qk_s0 = qk_sb * ATTN_K_TILE
-            qk_bias_row = sparse_bias[qk_t : qk_t + 1, qk_s0 : qk_s0 + ATTN_K_TILE]
-            qk_block_valid = pl.read(valid_block_mask, [qk_t, qk_sb])
-            if qk_block_valid > 0:
-                qk_kv = pl.create_l1([ATTN_K_TILE, HEAD_DIM], pl.BF16)
-                # Sliding-window rows of this tile: all ATTN_K_TILE of them at
-                # WIN == ATTN_K_TILE, none for a compressed tile.
-                qk_win_rows = pl.min(pl.max(WIN - qk_s0, 0), ATTN_K_TILE)
-                if qk_win_rows > 0:
-                    # The window is consecutive absolute positions and paged KV keeps one
-                    # page's positions in consecutive rows, so these rows are SWA_RUNS
-                    # page-contiguous runs -- one multi-row gather each (row count carried
-                    # by valid_shape) instead of a single-row DMA per row. Visible length
-                    # and start mirror the metadata producers
-                    # (decode_metadata.build_swa_metadata / utils.swa_indices_and_lens).
-                    qk_pos = pl.cast(pl.read(position_ids, [qk_t, 0]), pl.INDEX)
-                    qk_win_len = pl.min(qk_pos + 1, WIN)
-                    qk_win_start = qk_pos - qk_win_len + 1
-                    qk_run_rows = pl.min(pl.max(qk_win_len - qk_s0, 0), qk_win_rows)
-                    # qk_head is how far into its page this tile's first window row sits,
-                    # so run i holds the rows landing in the i-th page the tile touches:
-                    # [i * BLOCK_SIZE - qk_head, (i + 1) * BLOCK_SIZE - qk_head) clipped to
-                    # [0, qk_run_rows). Run 0 is the short one, every later run is page
-                    # aligned, and runs past the end clip empty -- no carried cursor.
-                    qk_head = (qk_win_start + qk_s0) % BLOCK_SIZE
-                    for qk_run in pl.unroll(SWA_RUNS):
-                        qk_run_lo = pl.max(qk_run * BLOCK_SIZE - qk_head, 0)
-                        qk_run_hi = pl.min((qk_run + 1) * BLOCK_SIZE - qk_head, qk_run_rows)
-                        if qk_run_hi > qk_run_lo:
-                            qk_run_raw = pl.read(window_swa_indices, [qk_t, qk_s0 + qk_run_lo])
-                            # An unmapped page (-1) falls back to row 0 like the tail below
-                            # -- every such slot is NEG_INF-masked by sparse_bias.
-                            qk_run_src = pl.cast(pl.max(qk_run_raw, 0), pl.INDEX)
-                            qk_kv = pl.gather_row(qk_kv, ori_kv_flat, [qk_run_lo, 0], [qk_run_src, 0],
-                                                  [ATTN_K_TILE, HEAD_DIM],
-                                                  valid_shape=[qk_run_hi - qk_run_lo, HEAD_DIM])
-                    qk_tail_n = qk_win_rows - qk_run_rows
-                    if qk_tail_n > 0:
-                        # Slots past the visible window still need finite data so their
-                        # NEG_INF-biased lanes exp to ~0 instead of reading stale L1.
-                        qk_kv = pl.gather_row(qk_kv, ori_kv_flat, [qk_run_rows, 0], [0, 0],
-                                              [ATTN_K_TILE, HEAD_DIM], valid_shape=[qk_tail_n, HEAD_DIM])
-                # Compressed rows stay per-row: the indexer top-k slots are scattered.
-                for qk_r in pl.range(qk_win_rows, ATTN_K_TILE):
-                    qk_cmp_k = qk_s0 + qk_r - WIN
-                    if qk_cmp_k < CMP_TOPK:
-                        qk_ridx = pl.read(cmp_sparse_indices, [qk_t, qk_cmp_k])
-                        if qk_ridx >= 0:
-                            qk_slot = qk_ridx
-                            qk_cblk = pl.cast(pl.read(cmp_block_table, [qk_b, qk_slot // BLOCK_SIZE]), pl.INDEX)
-                            qk_csrc = qk_cblk * BLOCK_SIZE + qk_slot % BLOCK_SIZE
-                            qk_kv = pl.gather_row(qk_kv, cmp_kv_flat, [qk_r, 0], [qk_csrc, 0], [1, HEAD_DIM])
+            qk_q = pl.load(
+                q_flat, [qk_t * H, 0], [H, HEAD_DIM], target_memory=pl.MemorySpace.Mat,
+            )
+            qk_l1 = pl.create_tile([QK_TRANSFER_SLOTS * ATTN_K_TILE, HEAD_DIM], dtype=pl.BF16, target_memory=pl.MemorySpace.Mat)
+            for qk_tick in pl.range(SPARSE_BLOCKS + QK_PRE_LAUNCH):
+                if qk_tick < SPARSE_BLOCKS:
+                    qk_sb = qk_tick
+                    if pl.read(valid_block_mask, [qk_t, qk_sb]) > 0:
+                        qk_slot = qk_core * QK_TRANSFER_SLOTS + qk_sb % QK_TRANSFER_SLOTS
+                        qk_kv_row = qk_slot * ATTN_K_TILE
+                        qk_transfer_row = qk_slot * H
+                        pl.system.sync_wait(QK_KV_READY_EVENT, pipe=pl.PipeType.MTE2, core_type=pl.KernelType.AIC)
+                        qk_l1_row = (qk_sb % QK_TRANSFER_SLOTS) * ATTN_K_TILE
+                        qk_l1 = pl.gather_row(
+                            qk_l1, kv_transfer, [qk_l1_row, 0], [qk_kv_row, 0], [ATTN_K_TILE, HEAD_DIM],
+                        )
+                        qk_l1_t = pl.tile.transpose_view(qk_l1)
+                        qk_kv_t = pl.tile.slice(qk_l1_t, [HEAD_DIM, ATTN_K_TILE], [0, qk_l1_row])
+                        qk_scores = pl.matmul(qk_q, qk_kv_t, out_dtype=pl.FP32)
+                        pl.store(qk_scores, [qk_transfer_row, 0], score_transfer)
+                        pl.system.sync_set(
+                            QK_SCORE_READY_EVENT, pipe=pl.PipeType.FIX,
+                            ffts_mode=2, core_type=pl.KernelType.AIC,
+                        )
+                if qk_tick >= QK_PRE_LAUNCH:
+                    pv_sb = qk_tick - QK_PRE_LAUNCH
+                    if pl.read(valid_block_mask, [qk_t, pv_sb]) > 0:
+                        pv_slot = qk_core * QK_TRANSFER_SLOTS + pv_sb % QK_TRANSFER_SLOTS
+                        pv_transfer_row = pv_slot * H
+                        pl.system.sync_wait(QK_PROB_READY_EVENT, pipe=pl.PipeType.MTE2, core_type=pl.KernelType.AIC)
+                        pv_probability = pl.load(
+                            probability_transfer, [pv_transfer_row, 0], [H, ATTN_K_TILE],
+                            target_memory=pl.MemorySpace.Mat,
+                        )
+                        pv_l1_row = (pv_sb % QK_TRANSFER_SLOTS) * ATTN_K_TILE
+                        pv_kv = pl.tile.slice(qk_l1, [ATTN_K_TILE, HEAD_DIM], [pv_l1_row, 0])
+                        pv_output = pl.matmul(pv_probability, pv_kv, out_dtype=pl.FP32)
+                        pl.store(pv_output, [pv_transfer_row, 0], pv_transfer)
+                        pl.system.sync_set(
+                            QK_PV_READY_EVENT, pipe=pl.PipeType.FIX,
+                            ffts_mode=2, core_type=pl.KernelType.AIC,
+                        )
+
+            for qk_aiv in pl.split_aiv(2, mode=pl.SplitMode.NONE):
+                pl.system.set_ffts(ffts_workspace)
+                qk_lane_head = qk_aiv * (H // 2)
+                qk_lane_kv = qk_aiv * (ATTN_K_TILE // 2)
+                qk_reduce_tmp = pl.create_tile([H // 2, ATTN_K_TILE], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec)
+                running_m = pl.load(attn_sink_col, [qk_lane_head, 0], [H // 2, 1], target_memory=pl.MemorySpace.Vec)
+                running_l = pl.tile.muls(running_m, 0.0)
+                running_left = pl.tile.full([H // 2, HEAD_DIM // 2], dtype=pl.FP32, value=0.0)
+                running_right = pl.tile.full([H // 2, HEAD_DIM // 2], dtype=pl.FP32, value=0.0)
+                for qk_tick, (m_iter, l_iter, left_iter, right_iter) in pl.range(
+                    SPARSE_BLOCKS + QK_PRE_LAUNCH + 1,
+                    init_values=(running_m, running_l, running_left, running_right),
+                ):
+                    if qk_tick < SPARSE_BLOCKS:
+                        qk_sb = qk_tick
+                        if pl.read(valid_block_mask, [qk_t, qk_sb]) > 0:
+                            qk_slot = qk_core * QK_TRANSFER_SLOTS + qk_sb % QK_TRANSFER_SLOTS
+                            qk_kv_row = qk_slot * ATTN_K_TILE
+                            qk_transfer_row = qk_slot * H
+                            qk_s0 = qk_sb * ATTN_K_TILE
+                            qk_kv_half = pl.tile.full([ATTN_K_TILE // 2, HEAD_DIM], dtype=pl.BF16, value=0.0)
+                            if qk_s0 < WIN:
+                                qk_pos = pl.cast(pl.read(position_ids, [qk_t, 0]), pl.INDEX)
+                                qk_win_len = pl.min(qk_pos + 1, WIN)
+                                qk_win_start = qk_pos - qk_win_len + 1
+                                qk_head = (qk_win_start + qk_s0) % BLOCK_SIZE
+                                qk_rows = pl.min(pl.max(qk_win_len - qk_s0 - qk_lane_kv, 0), ATTN_K_TILE // 2)
+                                for qk_run in pl.unroll(SWA_RUNS):
+                                    qk_lo = pl.max(qk_run * BLOCK_SIZE - qk_head - qk_lane_kv, 0)
+                                    qk_hi = pl.min((qk_run + 1) * BLOCK_SIZE - qk_head - qk_lane_kv, qk_rows)
+                                    if qk_hi > qk_lo:
+                                        qk_raw_row = pl.read(window_swa_indices, [qk_t, qk_s0 + qk_lane_kv + qk_lo])
+                                        if qk_raw_row >= 0:
+                                            qk_kv_half = pl.gather_row(
+                                                qk_kv_half, ori_kv_flat, [qk_lo, 0], [qk_raw_row, 0],
+                                                [ATTN_K_TILE // 2, HEAD_DIM], valid_shape=[qk_hi - qk_lo, HEAD_DIM],
+                                            )
+                            else:
+                                for qk_row in pl.range(ATTN_K_TILE // 2):
+                                    qk_cmp_k = qk_s0 + qk_lane_kv + qk_row - WIN
+                                    if qk_cmp_k < CMP_TOPK:
+                                        qk_ridx = pl.read(cmp_sparse_indices, [qk_t, qk_cmp_k])
+                                        if qk_ridx >= 0:
+                                            qk_page = pl.cast(pl.read(cmp_block_table, [qk_b, qk_ridx // BLOCK_SIZE]), pl.INDEX)
+                                            qk_src = qk_page * BLOCK_SIZE + qk_ridx % BLOCK_SIZE
+                                            qk_kv_half = pl.gather_row(
+                                                qk_kv_half, cmp_kv_flat, [qk_row, 0], [qk_src, 0], [1, HEAD_DIM],
+                                            )
+                            pl.store(qk_kv_half, [qk_kv_row + qk_lane_kv, 0], kv_transfer)
+                    if qk_tick > 0 and qk_tick <= SPARSE_BLOCKS:
+                        softmax_sb = qk_tick - 1
+                        if pl.read(valid_block_mask, [qk_t, softmax_sb]) > 0:
+                            qk_slot = qk_core * QK_TRANSFER_SLOTS + softmax_sb % QK_TRANSFER_SLOTS
+                            qk_transfer_row = qk_slot * H
+                            qk_s0 = softmax_sb * ATTN_K_TILE
+                            pl.system.sync_wait(QK_SCORE_READY_EVENT, pipe=pl.PipeType.MTE2, core_type=pl.KernelType.AIV)
+                            qk_scores_half = pl.load(
+                                score_transfer, [qk_transfer_row + qk_lane_head, 0], [H // 2, ATTN_K_TILE],
+                                target_memory=pl.MemorySpace.Vec,
+                            )
+                            qk_bias = pl.load(
+                                sparse_bias, [qk_t, qk_s0], [1, ATTN_K_TILE], target_memory=pl.MemorySpace.Vec,
+                            )
+                            qk_scaled = pl.mul(qk_scores_half, SOFTMAX_SCALE)
+                            qk_masked = pl.col_expand_add(qk_scaled, qk_bias)
+                            qk_mi = pl.row_max(qk_masked, qk_reduce_tmp)
+                            qk_exp = pl.exp(pl.row_expand_sub(qk_masked, qk_mi))
+                            qk_li = pl.row_sum(qk_exp, qk_reduce_tmp)
+                            qk_probability = pl.cast(qk_exp, target_type=pl.BF16, mode="rint")
+                            pl.store(qk_probability, [qk_transfer_row + qk_lane_head, 0], probability_transfer)
+                            pl.store(qk_mi, [qk_transfer_row + qk_lane_head, 0], mi_transfer)
+                            pl.store(qk_li, [qk_transfer_row + qk_lane_head, 0], li_transfer)
+                            pl.system.sync_set(
+                                QK_PROB_READY_EVENT, pipe=pl.PipeType.MTE3,
+                                ffts_mode=2, core_type=pl.KernelType.AIV,
+                            )
+                    # Publish the next KV-ready event after the preceding softmax stores.
+                    if qk_tick < SPARSE_BLOCKS:
+                        if pl.read(valid_block_mask, [qk_t, qk_tick]) > 0:
+                            pl.system.sync_set(
+                                QK_KV_READY_EVENT, pipe=pl.PipeType.MTE3,
+                                ffts_mode=2, core_type=pl.KernelType.AIV,
+                            )
+                    if qk_tick >= QK_PRE_LAUNCH + 1:
+                        pv_sb = qk_tick - QK_PRE_LAUNCH - 1
+                        if pl.read(valid_block_mask, [qk_t, pv_sb]) > 0:
+                            pv_slot = qk_core * QK_TRANSFER_SLOTS + pv_sb % QK_TRANSFER_SLOTS
+                            pv_transfer_row = pv_slot * H
+                            pl.system.sync_wait(QK_PV_READY_EVENT, pipe=pl.PipeType.MTE2, core_type=pl.KernelType.AIV)
+                            pv_m = pl.load(mi_transfer, [pv_transfer_row + qk_lane_head, 0], [H // 2, 1], target_memory=pl.MemorySpace.Vec)
+                            pv_l = pl.load(li_transfer, [pv_transfer_row + qk_lane_head, 0], [H // 2, 1], target_memory=pl.MemorySpace.Vec)
+                            next_m = pl.maximum(m_iter, pv_m)
+                            alpha = pl.exp(pl.sub(m_iter, next_m))
+                            beta = pl.exp(pl.sub(pv_m, next_m))
+                            next_l = pl.add(pl.mul(alpha, l_iter), pl.mul(beta, pv_l))
+                            pv_left = pl.load(
+                                pv_transfer, [pv_transfer_row + qk_lane_head, 0], [H // 2, HEAD_DIM // 2],
+                                target_memory=pl.MemorySpace.Vec,
+                            )
+                            next_left = pl.add(pl.row_expand_mul(left_iter, alpha), pl.row_expand_mul(pv_left, beta))
+                            pv_right = pl.load(
+                                pv_transfer, [pv_transfer_row + qk_lane_head, HEAD_DIM // 2], [H // 2, HEAD_DIM // 2],
+                                target_memory=pl.MemorySpace.Vec,
+                            )
+                            next_right = pl.add(pl.row_expand_mul(right_iter, alpha), pl.row_expand_mul(pv_right, beta))
+                            m_valid, l_valid, left_valid, right_valid = pl.yield_(next_m, next_l, next_left, next_right)
                         else:
-                            qk_kv = pl.gather_row(qk_kv, ori_kv_flat, [qk_r, 0], [0, 0], [1, HEAD_DIM])
+                            m_valid, l_valid, left_valid, right_valid = pl.yield_(m_iter, l_iter, left_iter, right_iter)
+                        m_after, l_after, left_after, right_after = pl.yield_(m_valid, l_valid, left_valid, right_valid)
                     else:
-                        qk_kv = pl.gather_row(qk_kv, ori_kv_flat, [qk_r, 0], [0, 0], [1, HEAD_DIM])
+                        m_after, l_after, left_after, right_after = pl.yield_(m_iter, l_iter, left_iter, right_iter)
+                    running_m, running_l, running_left, running_right = pl.yield_(m_after, l_after, left_after, right_after)
+                qk_output_row = qk_t * H + qk_lane_head
+                pl.store(running_m, [qk_output_row, 0], attn_mi)
+                pl.store(running_l, [qk_output_row, 0], attn_li)
+                pl.store(running_left, [qk_output_row, 0], attn_oi)
+                pl.store(running_right, [qk_output_row, HEAD_DIM // 2], attn_oi)
 
-                # Cube-batch QK_M_TILE head rows per QK/PV matmul. The [QK_M_TILE, ...]
-                # softmax result slices back into H_TILE-row stores at the same offsets
-                # as the per-head-tile path (qk_h_idx == qk_hb * (QK_M_TILE // H_TILE) + qk_sub).
-                for qk_hb in pl.pipeline(H // QK_M_TILE, stage=2):
-                    qk_h0 = qk_hb * QK_M_TILE
-                    qk_head_row = qk_t * H + qk_h0
-                    qk_q_tile = q_flat[qk_head_row : qk_head_row + QK_M_TILE, 0 : HEAD_DIM]
-                    qk_raw = pl.matmul(qk_q_tile, qk_kv, b_trans=True, out_dtype=pl.FP32)
-                    qk_scaled = pl.mul(qk_raw, SOFTMAX_SCALE)
-                    # Broadcast-add the per-block bias directly (col_expand_add) instead
-                    # of col_expand into a dead pl.full(0) base + a separate add.
-                    qk_scores = pl.col_expand_add(qk_scaled, qk_bias_row)
-                    qk_mi = pl.row_max(qk_scores)
-                    # Invalid lanes (NEG_INF bias, zero kv rows) exp to ~0; all-invalid
-                    # blocks die in the merge alpha/beta -- no mask multiply needed.
-                    qk_exp = pl.exp(pl.row_expand_sub(qk_scores, qk_mi))
-                    qk_li = pl.row_sum(qk_exp)
-                    qk_exp_bf16 = pl.cast(qk_exp, target_type=pl.BF16, mode="rint")
-                    qk_oi = pl.matmul(qk_exp_bf16, qk_kv, out_dtype=pl.FP32)
-                    for qk_sub in pl.unroll(QK_M_TILE // H_TILE):
-                        qk_h_idx = qk_hb * (QK_M_TILE // H_TILE) + qk_sub
-                        qk_r0 = qk_sub * H_TILE
-                        qk_blk_base = qk_token_base + qk_h_idx * SPARSE_BLOCKS * H_TILE
-                        qk_row = qk_blk_base + qk_sb * H_TILE
-                        sparse_blk_mi[qk_row : qk_row + H_TILE, 0 : 1] = qk_mi[qk_r0 : qk_r0 + H_TILE, 0 : 1]
-                        sparse_blk_li[qk_row : qk_row + H_TILE, 0 : 1] = qk_li[qk_r0 : qk_r0 + H_TILE, 0 : 1]
-                        sparse_blk_oi[qk_row : qk_row + H_TILE, 0 : HEAD_DIM] = qk_oi[qk_r0 : qk_r0 + H_TILE, 0 : HEAD_DIM]
-            else:
-                qk_oi_zero = pl.full([H_TILE, HEAD_DIM], dtype=pl.FP32, value=0.0)
-                for qk_h_idx in pl.range(H // H_TILE):
-                    qk_blk_base = qk_token_base + qk_h_idx * SPARSE_BLOCKS * H_TILE
-                    qk_row = qk_blk_base + qk_sb * H_TILE
-                    for qk_hr in pl.range(H_TILE):
-                        pl.write(sparse_blk_mi, [qk_row + qk_hr, 0], -3.0e38)
-                        pl.write(sparse_blk_li, [qk_row + qk_hr, 0], 0.0)
-                    sparse_blk_oi[qk_row : qk_row + H_TILE, 0 : HEAD_DIM] = qk_oi_zero
-
-    # Head-invariant interleaved cos and sign-folded sin, built once per token.
-    # The conjugate (inverse) rotation is out[j] = x[j]*cos_il[j] + x[j^1]*sign[j]*sin_il[j].
+    # Interleaved inverse-RoPE frequency rows.
     rope_cos_il = pl.create_tensor([T_PAD, ROPE_DIM], dtype=pl.FP32)
     rope_sin_signed = pl.create_tensor([T_PAD, ROPE_DIM], dtype=pl.FP32)
-    # j^1 lane-swap index for merge_norm's rotation gather. Shaped [H_TILE, ROPE_DIM]
-    # because gather's index must match its source rows.
+    # Inverse-RoPE lane-swap index.
     rope_swap_idx = pl.create_tensor([H_TILE, ROPE_DIM], dtype=pl.INT32)
     with pl.at(level=pl.Level.CORE_GROUP, name_hint="rope_cs", allow_early_resolve=True) as rope_tid:
         sw_ones = pl.full([H_TILE, ROPE_DIM], dtype=pl.FP32, value=1.0)
@@ -325,8 +369,8 @@ def sparse_attn_csa(
         sw_col = pl.col_expand_mul(sw_ones, sw_idx_f)
         sw_dup_i32 = pl.cast(pl.mul(sw_col, 0.5), target_type=pl.INT32, mode="trunc")
         sw_dup_f = pl.cast(sw_dup_i32, target_type=pl.FP32)
-        sw_lane = pl.sub(sw_col, pl.mul(sw_dup_f, 2.0))                                           # j%2
-        sw_swap_f = pl.sub(pl.add(sw_col, 1.0), pl.mul(sw_lane, 2.0))                             # j^1
+        sw_lane = pl.sub(sw_col, pl.mul(sw_dup_f, 2.0))
+        sw_swap_f = pl.sub(pl.add(sw_col, 1.0), pl.mul(sw_lane, 2.0))
         rope_swap_idx[0:H_TILE, 0:ROPE_DIM] = pl.cast(sw_swap_f, target_type=pl.INT32)
 
         cs_ones = pl.full([ROPE_CS_T_TILE, ROPE_DIM], dtype=pl.FP32, value=1.0)
@@ -334,9 +378,9 @@ def sparse_attn_csa(
         cs_col = pl.col_expand_mul(cs_ones, cs_idx_f)
         cs_dup_i32 = pl.cast(pl.mul(cs_col, 0.5), target_type=pl.INT32, mode="trunc")
         cs_dup_f = pl.cast(cs_dup_i32, target_type=pl.FP32)
-        cs_dup_idx = pl.cast(cs_dup_f, target_type=pl.INT32)                                      # j>>1
-        cs_lane = pl.sub(cs_col, pl.mul(cs_dup_f, 2.0))                                           # j%2
-        cs_sign = pl.neg(pl.sub(pl.mul(cs_lane, 2.0), 1.0))                                       # [+1,-1,...] (conjugate)
+        cs_dup_idx = pl.cast(cs_dup_f, target_type=pl.INT32)
+        cs_lane = pl.sub(cs_col, pl.mul(cs_dup_f, 2.0))
+        cs_sign = pl.neg(pl.sub(pl.mul(cs_lane, 2.0), 1.0))
         for cs_rb in pl.range(rope_cs_blocks):
             cs_t0 = cs_rb * ROPE_CS_T_TILE
             cs_cos = pl.cast(freqs_cos[cs_t0 : cs_t0 + ROPE_CS_T_TILE, 0:HALF_ROPE], target_type=pl.FP32)
@@ -346,14 +390,9 @@ def sparse_attn_csa(
             rope_sin_signed[cs_t0 : cs_t0 + ROPE_CS_T_TILE, 0:ROPE_DIM] = pl.mul(cs_sin_il, cs_sign)
 
     return (
-        sparse_blk_mi,
-        sparse_blk_li,
-        sparse_blk_oi,
-        rope_cos_il,
-        rope_sin_signed,
-        rope_swap_idx,
-        qk_tid,
-        rope_tid,
+        attn_mi, attn_li, attn_oi,
+        rope_cos_il, rope_sin_signed, rope_swap_idx,
+        qk_tid, rope_tid,
     )
 
 
@@ -370,7 +409,6 @@ def sparse_attn_csa_tp1(
     freqs_cos: pl.Tensor[[T_DYN, ROPE_DIM], pl.BF16],
     freqs_sin: pl.Tensor[[T_DYN, ROPE_DIM], pl.BF16],
     o_packed_heads: pl.Tensor[[O_GROUPS * T_PAD, O_GROUP_IN], pl.BF16],
-    cache_ready_dep: pl.Scalar[pl.TASK_ID],
 ) -> tuple[pl.Tensor, pl.Scalar[pl.TASK_ID]]:
     """Write CSA heads as ``[group, T_PAD, O_GROUP_IN]`` slabs.
 
@@ -378,20 +416,13 @@ def sparse_attn_csa_tp1(
     returned task ID covers every write to the packed output tensor.
     """
     (
-        sparse_blk_mi, sparse_blk_li, sparse_blk_oi,
+        attn_mi, attn_li, attn_oi,
         rope_cos_il, rope_sin_signed, rope_swap_idx,
         qk_tid, rope_tid,
     ) = sparse_attn_csa(
-        q,
-        ori_kv,
-        window_swa_indices,
-        cmp_kv,
-        cmp_block_table,
-        idx_topk,
-        position_ids,
-        freqs_cos,
-        freqs_sin,
-        cache_ready_dep,
+        q, ori_kv, window_swa_indices,
+        cmp_kv, cmp_block_table, idx_topk,
+        position_ids, attn_sink, freqs_cos, freqs_sin,
     )
     t_dim = pl.tensor.dim(q, 0)
 
@@ -400,22 +431,10 @@ def sparse_attn_csa_tp1(
         m_t = m_idx // (H // H_TILE)
         m_h_idx = m_idx - m_t * (H // H_TILE)
         m_h0 = m_h_idx * H_TILE
-        m_blk_base = m_idx * SPARSE_BLOCKS * H_TILE
-        m_mi = sparse_blk_mi[m_blk_base : m_blk_base + H_TILE, 0 : 1]
-        m_li = sparse_blk_li[m_blk_base : m_blk_base + H_TILE, 0 : 1]
-        m_oi = sparse_blk_oi[m_blk_base : m_blk_base + H_TILE, 0 : HEAD_DIM]
-
-        for m_sb in pl.pipeline(1, SPARSE_BLOCKS, stage=2):
-            m_row = m_blk_base + m_sb * H_TILE
-            m_cur_mi = sparse_blk_mi[m_row : m_row + H_TILE, 0 : 1]
-            m_cur_li = sparse_blk_li[m_row : m_row + H_TILE, 0 : 1]
-            m_cur_oi = sparse_blk_oi[m_row : m_row + H_TILE, 0 : HEAD_DIM]
-            m_mi_new = pl.maximum(m_mi, m_cur_mi)
-            m_alpha = pl.exp(pl.sub(m_mi, m_mi_new))
-            m_beta = pl.exp(pl.sub(m_cur_mi, m_mi_new))
-            m_li = pl.add(pl.mul(m_alpha, m_li), pl.mul(m_beta, m_cur_li))
-            m_oi = pl.add(pl.row_expand_mul(m_oi, m_alpha), pl.row_expand_mul(m_cur_oi, m_beta))
-            m_mi = m_mi_new
+        m_row = m_idx * H_TILE
+        m_mi = attn_mi[m_row : m_row + H_TILE, 0:1]
+        m_li = attn_li[m_row : m_row + H_TILE, 0:1]
+        m_oi = attn_oi[m_row : m_row + H_TILE, 0:HEAD_DIM]
 
         n_sink_bias = pl.reshape(attn_sink[m_h0 : m_h0 + H_TILE], [H_TILE, 1])
         n_sink_tile = pl.add(pl.sub(m_mi, m_mi), n_sink_bias)
@@ -423,8 +442,7 @@ def sparse_attn_csa_tp1(
         n_full = pl.row_expand_div(m_oi, n_denom)[0 : H_TILE, 0 : HEAD_DIM]
         n_bf16 = pl.cast(n_full, target_type=pl.BF16, mode="rint")
 
-        # Inverse RoPE on this head-tile's fp32 rope segment: cos_il / sign*sin are
-        # head-invariant per token, rope_swap_idx (j^1) pairs the interleaved real/imag lanes.
+        # Inverse-RoPE head tile.
         m_rope = n_full[0 : H_TILE, NOPE_DIM : HEAD_DIM]
         m_cos_il = rope_cos_il[m_t : m_t + 1, 0 : ROPE_DIM]
         m_sin_signed = rope_sin_signed[m_t : m_t + 1, 0 : ROPE_DIM]
@@ -433,11 +451,10 @@ def sparse_attn_csa_tp1(
         n_rope_bf16 = pl.cast(m_rot, target_type=pl.BF16, mode="rint")
         n_full_bf16 = pl.concat(n_bf16[:, : NOPE_DIM], n_rope_bf16)
 
-        for n_hi in pl.unroll(H_TILE):
-            n_pack_row = ((m_h0 + n_hi) // HEADS_PER_GROUP) * T_PAD + m_t
-            n_col = ((m_h0 + n_hi) % HEADS_PER_GROUP) * HEAD_DIM
-            # One HEAD_DIM-wide store per head row: nope and inverse-RoPE halves concat on chip.
-            o_packed_heads[n_pack_row : n_pack_row + 1, n_col : n_col + HEAD_DIM] = n_full_bf16[n_hi : n_hi + 1, :]
+        n_group_bf16 = pl.reshape(n_full_bf16, [PUBLISH_GROUPS, O_GROUP_IN])
+        for n_group in pl.unroll(PUBLISH_GROUPS):
+            n_pack_row = (m_h0 // HEADS_PER_GROUP + n_group) * T_PAD + m_t
+            o_packed_heads[n_pack_row : n_pack_row + 1, 0:O_GROUP_IN] = n_group_bf16[n_group : n_group + 1, :]
 
     return o_packed_heads, merge_tid
 
@@ -464,15 +481,12 @@ def sparse_attn_csa_test(
     freqs_cos.bind_dynamic(0, T_DYN)
     freqs_sin.bind_dynamic(0, T_DYN)
 
-    cache_ready_dep = pl.system.task_dummy(deps=[])
     o_packed_flat = pl.reshape(o_packed_heads, [O_GROUPS * T_PAD, O_GROUP_IN])
     o_packed_flat, _ = sparse_attn_csa_tp1(
-        q,
-        ori_kv, window_swa_indices,
+        q, ori_kv, window_swa_indices,
         cmp_kv, cmp_block_table, idx_topk,
-        position_ids, attn_sink,
-        freqs_cos, freqs_sin,
-        o_packed_flat, cache_ready_dep,
+        position_ids, attn_sink, freqs_cos, freqs_sin,
+        o_packed_flat,
     )
     return o_packed_heads
 
@@ -483,12 +497,11 @@ def golden_sparse_attn(tensors):
 
     q = tensors["q"].float()
     tokens = q.shape[0]
-    batch = tokens // S
     ori_kv = tensors["ori_kv"].float()
     window_swa_indices = tensors["window_swa_indices"]
     cmp_kv = tensors["cmp_kv"].float()
     cmp_block_table = tensors["cmp_block_table"]
-    # Compressed slots: keep raw indexer topk iff 0 <= raw < floor((pos + 1) / COMPRESS_RATIO), else -1.
+    # Valid compressed slots.
     raw = tensors["idx_topk"][:, :CMP_TOPK].to(torch.int64)
     bound = ((tensors["position_ids"][:, 0].to(torch.int64) + 1) // COMPRESS_RATIO).unsqueeze(1)
     keep = (raw >= 0) & (raw < bound)
@@ -499,8 +512,7 @@ def golden_sparse_attn(tensors):
 
     o = torch.zeros(tokens, H, HEAD_DIM)
 
-    # Per-query-token attention. The window prefix is driven by window_swa_indices;
-    # cmp_sparse_indices contains compressed-cache slots only.
+    # Per-token sparse attention.
     for t in range(tokens):
         b = t // S
         kv_rows = []
@@ -580,8 +592,7 @@ def golden_sparse_attn(tensors):
     o_rope = torch.stack([inv_even, inv_odd], dim=-1).flatten(-2)
     o = torch.cat([o[..., :NOPE_DIM], o_rope], dim=-1).to(torch.bfloat16)
 
-    # Pack as [group, T_PAD, group-input]; rows past the runtime token count are
-    # capacity padding the kernel never writes.
+    # Grouped attention output packing.
     packed = tensors["o_packed_heads"]
     packed[:, :tokens] = o.float().view(tokens, O_GROUPS, O_GROUP_IN).permute(1, 0, 2).to(torch.bfloat16)
 
@@ -590,8 +601,10 @@ def build_tensor_specs(
     short_window_fixture: bool = False,
     mixed_topk_fixture: bool = False,
     cache_window_replacement_fixture: bool = False,
+    all_invalid_fixture: bool = False,
     start_pos=None,
     batch: int = B,
+    block_holes_fixture: bool = False,
 ):
     """Build deterministic demo tensors for the CSA standalone harness."""
     import torch
@@ -606,16 +619,11 @@ def build_tensor_specs(
     )
 
     tokens = batch * S
+    def default_starts():
+        return csa_decode_start_set(batch=batch, seq=S, compress_ratio=COMPRESS_RATIO)
+
     starts = resolve_start_positions(
-        start_pos,
-        batch=batch,
-        seq=S,
-        max_seq_len=MAX_SEQ_LEN,
-        default_fn=lambda: csa_decode_start_set(
-            batch=batch,
-            seq=S,
-            compress_ratio=COMPRESS_RATIO,
-        ),
+        start_pos, batch=batch, seq=S, max_seq_len=MAX_SEQ_LEN, default_fn=default_starts,
     )
     positions = position_ids_from_starts(starts, seq=S)
     visible_rows = ((positions.to(torch.int64) + 1) // COMPRESS_RATIO).reshape(-1)
@@ -623,19 +631,16 @@ def build_tensor_specs(
     active_cmp_pages = max(1, (max_visible_rows + BLOCK_SIZE - 1) // BLOCK_SIZE)
     cmp_block_num = batch * active_cmp_pages
     shared_rope_cos, shared_rope_sin = token_local_rope(
-        M,
-        COMPRESS_RATIO,
-        positions.reshape(-1),
-        max_seq_len=MAX_SEQ_LEN,
-        dtype=torch.bfloat16,
+        M, COMPRESS_RATIO, positions.reshape(-1),
+        max_seq_len=MAX_SEQ_LEN, dtype=torch.bfloat16,
     )
     shared_window_block_table = block_table(batch=batch, table_blocks=ORI_MAX_BLOCKS, physical_blocks=ORI_BLOCK_NUM)
-    shared_swa_indices = swa_indices_and_lens(
-        positions,
-        shared_window_block_table,
-        block_size=BLOCK_SIZE,
-        window=WIN,
-    )[0].contiguous()
+    shared_swa_metadata = swa_indices_and_lens(positions, shared_window_block_table, block_size=BLOCK_SIZE, window=WIN)
+    shared_swa_indices = shared_swa_metadata[0].contiguous()
+    if block_holes_fixture:
+        shared_swa_indices[::4, :] = -1
+    if all_invalid_fixture:
+        shared_swa_indices.fill_(-1)
 
     def init_q():
         """Initialize the query tensor used by the decode attention stage."""
@@ -672,7 +677,9 @@ def build_tensor_specs(
         return torch.rand(cmp_block_num, BLOCK_SIZE, 1, HEAD_DIM) - 0.5
 
     def init_attn_sink():
-        """Initialize the per-head sink logits to zero."""
+        """Initialize the per-head sink logits."""
+        if block_holes_fixture:
+            return torch.linspace(-2.0, 2.0, H)
         return torch.zeros(H)
 
     def init_window_block_table():
@@ -697,16 +704,20 @@ def build_tensor_specs(
             elif valid == 1:
                 candidates = torch.zeros(1, dtype=torch.int64)
             else:
-                candidates = torch.div(
-                    torch.arange(valid, dtype=torch.int64) * (int(visible) - 1),
-                    valid - 1,
-                    rounding_mode="floor",
-                )
+                spread = torch.arange(valid, dtype=torch.int64) * (int(visible) - 1)
+                candidates = torch.div(spread, valid - 1, rounding_mode="floor")
             indices[token, :valid] = candidates.to(torch.int32)
+        if block_holes_fixture:
+            indices[:, :ATTN_K_TILE] = -1
+            indices[:, 2 * ATTN_K_TILE : 3 * ATTN_K_TILE] = -1
+            indices[::4, :CMP_TOPK - 1] = -1
+            indices[1::4, :] = -1
         if cache_window_replacement_fixture:
             indices[:, :] = -1
         if causal_regression_fixture:
             indices[0, :] = -1
+        if all_invalid_fixture:
+            indices.fill_(-1)
         return indices
 
     def init_idx_topk():
@@ -746,25 +757,46 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--platform", type=str, default="a2a3", choices=["a2a3", "a2a3sim", "a5", "a5sim"])
     parser.add_argument("-d", "--device", type=int, default=0)
-    parser.add_argument("-b", "--batch", type=int, default=B,
-                        help=f"runtime request count up to {B} (the compile-time upper bound). "
-                             "The token axis is pl.dynamic, so one compiled program "
-                             "serves every value.")
-    parser.add_argument("--start-pos", type=str, default=None,
-                        help="Fixture-only start position: one value for a uniform batch or "
-                             "a comma-separated value per request.")
-    parser.add_argument("--causal-regression-fixture", action="store_true", default=False,
-                        help="Amplify the S=2 future-window-slot regression.")
-    parser.add_argument("--short-window-fixture", action="store_true", default=False,
-                        help="Use a short-window topk row with valid prefix + -1 padding.")
-    parser.add_argument("--mixed-topk-fixture", action="store_true", default=False,
-                        help="Use -1-padded window slots with valid compressed raw indices.")
-    parser.add_argument("--cache-window-replacement-fixture", action="store_true", default=False,
-                        help="Place a sentinel row inside the cache window prefix.")
+    parser.add_argument(
+        "-b", "--batch", type=int, default=B,
+        help=f"runtime request count up to {B} (the compile-time upper bound). The token axis "
+             "is pl.dynamic, so one compiled program serves every value.",
+    )
+    parser.add_argument(
+        "--start-pos", type=str, default=None,
+        help="Fixture-only start position: one value for a uniform batch or "
+             "a comma-separated value per request.",
+    )
+    parser.add_argument(
+        "--causal-regression-fixture", action="store_true", default=False,
+        help="Amplify the S=2 future-window-slot regression.",
+    )
+    parser.add_argument(
+        "--short-window-fixture", action="store_true", default=False,
+        help="Use a short-window topk row with valid prefix + -1 padding.",
+    )
+    parser.add_argument(
+        "--mixed-topk-fixture", action="store_true", default=False,
+        help="Use -1-padded window slots with valid compressed raw indices.",
+    )
+    parser.add_argument(
+        "--cache-window-replacement-fixture", action="store_true", default=False,
+        help="Place a sentinel row inside the cache window prefix.",
+    )
+    parser.add_argument(
+        "--all-invalid-fixture", action="store_true", default=False,
+        help="Mask every raw and compressed row.",
+    )
     parser.add_argument("--golden-data", type=str, default=None)
-    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=(0, 1, 2))
-    parser.add_argument("--enable-dep-gen", action="store_true", default=False,
-                        help="Capture PTO2 dependency edges (deps.json) for the swimlane converter.")
+    parser.add_argument(
+        "--block-holes-fixture", action="store_true", default=False,
+        help="Use invalid sparse blocks between valid blocks and signed sink logits.",
+    )
+    parser.add_argument("--enable-chip-swimlane", type=int, nargs="?", const=1, default=0, choices=range(5))
+    parser.add_argument(
+        "--enable-dep-gen", action="store_true", default=False,
+        help="Capture PTO2 dependency edges (deps.json) for the swimlane converter.",
+    )
     parser.add_argument("--enable-pmu", nargs="?", const=2, default=0, type=int, choices=[0, 1, 2, 4])
     parser.add_argument("--dump-passes", action="store_true", default=False)
     args = parser.parse_args()
@@ -787,17 +819,14 @@ if __name__ == "__main__":
     result = run(
         fn=sparse_attn_csa_test,
         specs=build_tensor_specs(
-            args.causal_regression_fixture,
-            args.short_window_fixture,
-            args.mixed_topk_fixture,
-            args.cache_window_replacement_fixture,
-            start_pos=start_pos,
-            batch=args.batch,
+            args.causal_regression_fixture, args.short_window_fixture, args.mixed_topk_fixture,
+            args.cache_window_replacement_fixture, args.all_invalid_fixture,
+            start_pos=start_pos, batch=args.batch, block_holes_fixture=args.block_holes_fixture,
         ),
         golden_fn=golden_sparse_attn,
         golden_data=args.golden_data,
-        compile_cfg=dict(dump_passes=args.dump_passes),
-        runtime_cfg=dict(
+        config=dict(
+            dump_passes=args.dump_passes,
             platform=args.platform,
             device_id=args.device,
             enable_chip_swimlane=args.enable_chip_swimlane,

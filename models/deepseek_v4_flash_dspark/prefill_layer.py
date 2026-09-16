@@ -6,8 +6,8 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
-# ci: devices=2  # CI: EP2/TP2 representative single-layer golden
-# ci: no-sim    # CI marker: distributed communication oracle requires real devices
+# ci: devices=2
+# ci: no-sim
 """DeepSeek-V4 Flash DSpark DSA-CP single-layer numerical oracle."""
 
 import argparse
@@ -16,7 +16,7 @@ import os
 import pypto.language as pl
 import pypto.language.distributed as pld
 from golden import ScalarSpec, TensorSpec, ratio_allclose, ratio_reldiff, run
-from pypto.ir.distributed_compiled_program import DistributedConfig
+from pypto.ir import DistributedConfig
 
 from moe import (
     AUX_PAD,
@@ -106,6 +106,11 @@ from prefill_swa import golden_prefill_attention_swa, prefill_attention_swa_cp
 
 # model config
 GROUP_TOKENS = TP_SIZE * T
+
+# runtime
+# Per-ring output heap, 1 GiB on each of the 4 rings. The 256 MiB compile-time
+# default deadlocks the ring allocator on this layer.
+PREFILL_RING_HEAP = (1024 * 1024 * 1024,) * 4
 
 # fixture
 SUPPORTED_LAYERS = (0, 2, 3)
@@ -413,9 +418,19 @@ def prefill_layer_moe(
         arrived, data_arrived, routed_y_buf, combine_arrived,
         stage_done, stage_token, layer_completion,
         gather_window, gather_signal,
-        group_base, tp_rank, layer_i32, my_rank,
+        group_base, tp_rank, layer_i32, my_rank, pl.cast(pl.tensor.dim(attn_stage, 0), pl.INT32),
     )
     clear_prefill_moe_signals(stage_token, arrived, data_arrived, combine_arrived, stage_done)
+    with pl.at(level=pl.Level.CORE_GROUP, name_hint="prefill_layer_epoch_signal_clear"):
+        # Clear the two fixed-threshold epoch signals the MoE clear does not own.
+        # Reading the final MoE output orders this after every peer's last notify,
+        # which the wave-barrier epoch alone does not establish.
+        _completion_anchor = pl.read(x_next, [0, 0, 0])
+        zero = pl.cast(0, pl.INT32)
+        for src in pl.range(N_RANKS):
+            pl.write(epoch_init_done, [src, 0], zero)
+        for source_tp in pl.range(TP_SIZE):
+            pl.write(gather_signal, [source_tp, 0], zero)
     return x_next
 
 
@@ -1060,13 +1075,14 @@ def main():
         compile_only=args.compile_only,
         runtime_dir=args.runtime_dir,
         save_data=False,
-        compile_cfg=dict(
+        config=dict(
             dump_passes=args.dump_passes,
             distributed_config=DistributedConfig(
                 device_ids=device_ids[:N_RANKS], num_sub_workers=0
             ),
+            platform=args.platform,
+            ring_heap=PREFILL_RING_HEAP,
         ),
-        runtime_cfg=dict(platform=args.platform),
         rtol=1e-3,
         atol=1e-3,
         compare_fn=_compare_functions(args.layer_id),
