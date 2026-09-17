@@ -32,6 +32,26 @@ All 11 declare `a2a3`, `a2a3sim`, `a5`, and `a5sim` in their `--platform`
 choices. An accepted `-p a5` is not by itself evidence that the example has been
 validated on an A5 device.
 
+## The language-guide examples
+
+`examples/language/` backs the [PyPTO Language Guide](../pypto-language/index.md):
+one runnable kernel per language topic (elementwise, reductions, broadcast
+expand, matmul family, shape and cast, data movement, gather/sort, control
+flow, dynamic shapes, scopes and deps, tile views, tensor ops, system sync,
+cross-core events, prefetch, unary math). They run the same way:
+
+```bash
+PYTHONPATH="$PWD" python examples/language/elementwise_binary.py -p a2a3 -d 0
+```
+
+Three of them are distributed or cross-core and need the named devices:
+
+```bash
+PYTHONPATH=$PWD python examples/language/distributed_collectives.py -p a2a3 -d 0,1   # all 7 pld.tensor collectives
+PYTHONPATH=$PWD python examples/language/distributed_transfer.py -p a2a3 -d 0,1      # put / get / remote_store
+PYTHONPATH=$PWD python examples/language/cross_core_shard.py -p a2a3 -d 0            # hand-written aiv_shard/aic_gather
+```
+
 ## Running an example
 
 Use a simulator for the quickest functional check, or a real device by ID:

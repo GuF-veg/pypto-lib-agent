@@ -70,6 +70,28 @@ nav:
       - Overview: get-started/index.md
       - Installation and environment: get-started/installation.md
       - Run your first kernel: get-started/first-kernel.md
+  - PyPTO Language:
+      - Overview: pypto-language/index.md
+      - 01-programming-model: pypto-language/01-programming-model.md
+      - 02-syntax: pypto-language/02-syntax.md
+      - 03-types: pypto-language/03-types.md
+      - 04-control-flow: pypto-language/04-control-flow.md
+      - 05-scopes-and-dependencies: pypto-language/05-scopes-and-dependencies.md
+      - 06-tile-operations: pypto-language/06-tile-operations.md
+      - 07-tensor-and-system-operations: pypto-language/07-tensor-and-system-operations.md
+      - 08-dynamic-shapes: pypto-language/08-dynamic-shapes.md
+      - 09-compiling-and-running: pypto-language/09-compiling-and-running.md
+      - 10-distributed: pypto-language/10-distributed.md
+      - 11-patterns-and-pitfalls: pypto-language/11-patterns-and-pitfalls.md
+      - 12-api-index: pypto-language/12-api-index.md
+      - Elementwise operations: pypto-language/14-elementwise.md
+      - Reductions: pypto-language/15-reductions.md
+      - Broadcast and expand operations: pypto-language/16-broadcast-expand.md
+      - Matrix multiply: pypto-language/17-matmul.md
+      - Shape, cast and layout: pypto-language/18-shape-layout.md
+      - Data movement: pypto-language/19-data-movement.md
+      - Tensor and system operators: pypto-language/20-tensor-system-ops.md
+      - Gather, scatter and sort: pypto-language/21-gather-sort.md
   - PyPTO Coding:
       - Overview: pypto-coding/index.md
       - L2 programming: pypto-coding/l2-programming.md
