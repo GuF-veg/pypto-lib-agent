@@ -79,8 +79,11 @@ it proceeds.
   `CoreAffinity::VECTOR`; in a mixed kernel it stays on the vector lane.
 - **Runtime support.** Execution reads the artifact's SDMA requirement and builds
   an enabled worker automatically — no workspace reaches any tensor signature. Only
-  onboard a2a3 is covered: a platform without an SDMA provider (simulator, a5)
-  fails during runtime initialization rather than degrading to a no-op.
+  onboard a2a3 is covered. A kernel issuing `make_context` + `async_prefetch`
+  runs to completion under `-p a2a3sim` and produces correct output — the
+  simulator does not fail at runtime initialization — but a prefetch is a pure
+  cache hint, so a correct result does not prove the transfer happened.
+  `a5` and real SDMA activity under simulation are untested.
 
 ---
 

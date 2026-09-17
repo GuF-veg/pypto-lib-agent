@@ -5,7 +5,7 @@ evidence each one produces. Its anchor is the commonly used L2 swimlane
 capture:
 
 ```bash
-python models/qwen3_32b/decode.py -p a2a3 --enable-l2-swimlane
+python models/qwen3_14b/decode_fwd.py -p a2a3 --enable-chip-swimlane
 ```
 
 Section 1 and 2 explain exactly what that command does and which artifacts
@@ -23,13 +23,16 @@ be committed.
 
 ## 1. The baseline command
 
-`models/qwen3_32b/decode.py` is the golden-harness entry for the Qwen3-32B
-single-layer decode forward (`@pl` program name `Qwen3Decode`; batch 16,
-64 query heads / 8 KV heads, hidden 8192). It lowers 16 named kernels:
-`rmsnorm`, `q_proj`, `kv_proj`, `rope_kv_cache`, `qk_matmul`, `softmax`,
-`sv_matmul`, `online_softmax`, `out_proj_residual_aic`,
-`out_proj_residual_aiv`, `post_rmsnorm`, `gate_proj`, `up_proj`, `silu`,
-`down_proj_residual_aic`, `down_proj_residual_aiv`.
+`models/qwen3_14b/decode_fwd.py` is the live golden-harness entry for the
+Qwen3-14B decode forward (`@pl.jit` programs `decode_fwd` and the stacked
+`decode_fwd_layers`; an internal pipeline padded to 16 rows for any public
+batch >= 1). It lowers the layer's RMSNorm, Q/K/V projections, RoPE +
+paged-KV update, paged attention with online softmax, output projection
+with residual, and the gate/up/silu/down MLP stack.
+
+The worked examples below keep the `Qwen3Decode_<ts>` case directory of the
+archived Qwen3-32B capture; a `decode_fwd` run writes the same artifacts
+under its own `build_output/<case>_<ts>/` case directory.
 
 Its command line is deliberately small:
 
@@ -37,26 +40,24 @@ Its command line is deliberately small:
 |------|---------|
 | `-p a2a3` | Real Ascend 910B device (`a2a3sim` = simulator; `a5` / `a5sim` = Ascend 950). Profiling artifacts differ between real device and simulator, see below. |
 | `-d 0` | Device id (default 0). |
-| `--enable-l2-swimlane` | `store_true`; forwards `enable_l2_swimlane=True` into the runtime config (see Section 2). |
+| `--enable-chip-swimlane` | Optional collection level (`nargs="?"`; a bare flag = level 4 here); forwards `enable_chip_swimlane=<N>` into the runtime config (see Section 2). |
 | `--max-seq` | Pins every sequence length to `MAX_SEQ` (4096) for a stable, maximum-load run instead of sampled lengths. Useful for reproducible profiling. |
 
-This entry does **not** expose `--enable-pmu`, `--dump-args`,
-`--enable-dep-gen`, or `--enable-scope-stats`. Those capture options still
-work for this program, but only through `runtime_cfg` (Section 4.5), while
-the flags exist as CLI spellings on other entries (for example
-`models/deepseek_v4_flash_mtp/decode_sparse_attn.py` exposes `--enable-pmu`
-with choices `0/1/2/4`).
+This entry does **not** expose `--enable-pmu`, `--enable-dump-args`, or
+`--enable-scope-stats` (it does expose `--enable-dep-gen`). Those capture
+options still work for this program, but only through the run's `config`
+dict (Section 4.5), while the flags exist as CLI spellings on other entries
+(for example `models/deepseek_v4_flash_mtp/decode_sparse_attn_hca.py`
+exposes `--enable-pmu` with choices `0/1/2/4`).
 
-Under the hood, the script calls `golden.run(..., runtime_cfg={...})`.
+Under the hood, the script calls `golden.run(..., config={...})`.
 `golden/runner.py` bundles the five DFX fields into the runtime's DFX
-options and translates the flag's public spelling to the runtime name:
-`enable_l2_swimlane` → `enable_chip_swimlane`. Everything else in the run
-(compile, input generation, golden computation, validation) is unchanged
-by the profiling flags.
+options. Everything else in the run (compile, input generation, golden
+computation, validation) is unchanged by the profiling flags.
 
-## 2. What `--enable-l2-swimlane` produces
+## 2. What `--enable-chip-swimlane` produces
 
-`--enable-l2-swimlane` collects an **L2 (chip-level, inter-kernel) swimlane
+`--enable-chip-swimlane` collects an **L2 (chip-level, inter-kernel) swimlane
 record**: per-task start/end timestamps on every AIC / AIV core and on the
 AICPU scheduling lane, plus scheduler and orchestrator phase records.
 
@@ -70,11 +71,11 @@ AICPU scheduling lane, plus scheduler and orchestrator phase records.
 | 4 | + AICPU orchestrator phases (full capture) |
 
 Entries differ in how they spell the flag: integer-style entries take
-`--enable-l2-swimlane [N]` (a bare flag usually selects level 1 there), so
-a full capture must pass `--enable-l2-swimlane 4` explicitly. On
-`qwen3_32b/decode.py` the flag is a plain `store_true`; the runtime binding
-maps `True` to the full **level 4** capture. The raw artifact records its
-own level, so always verify rather than assume.
+`--enable-chip-swimlane [N]` (a bare flag usually selects level 1 there), so
+a full capture must pass `--enable-chip-swimlane 4` explicitly. On
+`qwen3_14b/decode_fwd.py` the flag is `nargs="?"` with `const=4`, so a bare
+`--enable-chip-swimlane` already selects the full **level 4** capture. The
+raw artifact records its own level, so always verify rather than assume.
 
 ### Capture procedure on a real device
 
@@ -98,8 +99,7 @@ trace is intentionally skipped there.
 | `name_map_Qwen3Decode_<ts>.json` | `callable_id_to_name` map that resolves a task id's encoded callable index to a kernel name (`rmsnorm`, `q_proj`, …). |
 | `merged_swimlane_<ts>.json` | Perfetto-convertible merged trace (real device only). |
 
-`chip_swimlane_records.json` (same structure as `l2_swimlane_records.json`)
-contains:
+`chip_swimlane_records.json` contains:
 
 - `chip_swimlane_level` — the recorded capture level.
 - `metadata` — `clock_freq_hz` (50 MHz in an observed capture, so
@@ -133,9 +133,10 @@ AICPU clock). Join them only through
   `OUTPUT_EXISTING`), `tensor_id`, dtype, shape, `start_offset`, strides.
 - `edges[]` — `pred` / `succ` task ids with per-edge tensor metadata.
 
-`merged_swimlane_<ts>.json` is a `traceEvents` document with three lane
-groups — "Worker View" (one lane per `AIC_0..AIC_19` / `AIV_0..AIV_39`),
-"Scheduler View", and "Orchestrator View" — plus `cat: flow` dependency
+`merged_swimlane_<ts>.json` is a `traceEvents` document with four lane
+groups — "Worker View" (one lane per physical core: `AIC_0..AIC_19` and
+`AIV_20..AIV_59`, using the global core id), "Scheduler View",
+"AICPU Scheduler", and "AICPU Orchestrator" — plus `cat: flow` dependency
 arrows (`ph: "s"` / `"f"`) labeled with `input_task_count` /
 `output_task_count`. Timestamps are already in µs. Open it at
 <https://ui.perfetto.dev/> to see per-task duration, idling gaps, and
@@ -166,48 +167,49 @@ adds observer cost, so compare tuned variants with an unprofiled benchmark
 
 ## 3. Deriving measurements from the capture (no new run)
 
-### Profile feedback analyzer
+### Profile feedback database
 
-The read-only profile feedback analyzer turns the artifacts above into
-compact facts (agent integrations provide its concrete location; see
-[Agent Profile Feedback](agent-profile-feedback.md) for the stable
-records and semantics):
+The read-only profile feedback database (`pfdb`) turns the artifacts above
+into compact facts; see [Agent Profile Feedback](agent-profile-feedback.md)
+for the stable records and semantics and
+[Profile Database (pfdb)](profile-db.md) for the full command reference.
+Ingest a capture once, then query it:
 
 ```bash
-python <profile-feedback-script> \
-  build_output/Qwen3Decode_<ts>/dfx_outputs \
-  [--rank <label>] [--format facts|markdown] [--max-bytes N] \
-  <query> [options]
+pfdb ingest build_output/Qwen3Decode_<ts>/dfx_outputs --platform a2a3 --device 0
+pfdb query <name> --run-id <id> [--format facts|json|markdown] [--budget N]
 ```
 
 | Query | Returns |
 |-------|---------|
-| `inventory` | Presence/size of every artifact and one line per detected L2 run. |
-| `metadata` | Clock frequency, core count, per-core engine/thread. |
-| `summary` | Makespan, CPM and its share, critical compute/stall split, graph size, per-engine utilization, per-family critical totals. |
-| `families` / `tasks` / `task <id>` | Task aggregates with family/engine/time filters; one task's full timing, arguments, stall decomposition. |
-| `deps [id]` / `subgraph <id>` | Dependency edges with tensor-edge metadata; BFS neighborhood. |
-| `critical-path --kind observed|static` | Canonical critical-path facts: per-path-task `PATH` lines with wall/core-time/compute/stall and `STALL` gap decomposition into FIN-detection, ready→dispatch, and dispatch→start waits. |
-| `overlap [id]` / `window <id>` / `core <id>` | Time-interval intersections; a task's neighborhood; one physical core's rows. |
-| `scheduler [--raw]` | Scheduler/orchestrator phase aggregates, or every recorded phase verbatim. |
-| `early-dispatch <id>` | Producer flags plus timestamp-proven `full` / `partial` / `none` classification. |
-| `perf-hints` / `memory` | Compiler hint lines and buffer-occupancy report, from the compile's `report/` (no capture needed). |
+| `runs_list` / `inventory` | Baselines and the latest usable run; presence/size of every artifact and one line per detected capture. |
+| `overview` | Makespan, CPM and its share, graph size, per-engine core counts, and task/edge counts. |
+| `density` / `sparse_regions` / `why_sparse` | Engine occupancy over time bands; which bands collapse and what each is blocked on. |
+| `tasks --family <name>` / `task --task-id <id>` | Task ids selected by family/name/engine; one task's identity, timing, and critical-path membership. |
+| `deps --task-id <id>` / `subgraph --task-id <id>` | Direct dependency edges with tensor shape/stride/dtype metadata; the in/out neighborhood. |
+| `critical_path --kind observed` / `static` | Canonical critical-path facts: per-path-task `PATH` lines with wall/core-time/compute/stall and `STALL` gap decomposition into FIN-detection, ready→dispatch, and dispatch→start waits. |
+| `region --t0-us <a> --t1-us <b>` / `idle_window --after-task-id <id>` / `core --core <id>` | Contents of a time window; the other engine's occupancy between a producer's FIN and a later consumer's start; one physical core's rows. |
+| `rows --task-id <id>` / `why_long --task-id <id>` / `why_late --task-id <id>` | One operator's physical row-level timing; why it runs long; why it could not start earlier. |
+| `scheduler --task-id <id>` | Scheduler/orchestrator phase aggregates around a task. |
+| `early_dispatch --task-id <id>` | Producer flags plus timestamp-proven `full` / `partial` / `none` classification. |
+| `perf_hints` / `memory` | Compiler hint lines; per-buffer usage against hardware limits (from the compile's `report/`; no capture needed). |
 | `pmu` | Parsed PMU columns and task aggregates when `pmu.csv` exists. |
 | `incore` | In-core simulator manifest and per-pipe metrics when present. |
-| `compare <after-root>` | Neutral before/after deltas for two compatible captures. |
+| `pfdb compare <run_a> <run_b>` | Neutral before/after deltas for two compatible captures (`--family` adds per-family busy/wall/count). |
 
-The analyzer requires a **level-4** records file next to `deps.json` and a
-`name_map*.json` in the same directory, and reports missing evidence as
-`unavailable` instead of estimating it.
+Query output is `facts` (default), `json`, or `markdown`; `--budget N` caps
+the byte budget (defaults: 32768 for `pmu`/`critical_path`, 16384 for
+`tasks`/`idle_window`, 4096 otherwise). Records levels 1-4 are accepted;
+level 2 or higher is needed for makespan and critical-path analysis, since
+level-1 captures carry no AICPU dispatch/FIN stream. A `name_map*.json` in
+the same directory as the records resolves task ids to kernel names, and
+missing evidence is reported as `unavailable` instead of estimated.
 
-> **Naming compatibility.** As of this checkout, the tool discovers
-> `l2_swimlane_records.json` (or legacy `l2_perf_records.json`) and reads
-> the `l2_swimlane_level` key, while the current runtime writes
-> `chip_swimlane_records.json` with `chip_swimlane_level`. The record
-> structure is otherwise identical, so a current capture can be consumed
-> by copying the file to `l2_swimlane_records.json` and renaming the
-> `chip_swimlane_level` key to `l2_swimlane_level`. Prefer making that
-> copy in a scratch directory rather than mutating the capture.
+> **Naming compatibility.** The tool discovers
+> `chip_swimlane_records.json` (current) and also accepts the legacy
+> `l2_swimlane_records.json` / `l2_perf_records.json`, reading
+> `chip_swimlane_level` or the legacy `l2_swimlane_level`. A current
+> capture is consumed as-is; no copy or key rename is needed.
 
 ### Critical-path report
 
@@ -250,7 +252,7 @@ No flag is needed; the env variable enables a timed device loop after the
 correctness dispatch:
 
 ```bash
-PYPTO_BENCH=1 python models/qwen3_32b/decode.py -p a2a3
+PYPTO_BENCH=1 python models/qwen3_14b/decode_fwd.py -p a2a3
 # [RUN]   effective_us (100 rounds) min=... median=... mean=... max=...
 ```
 
@@ -273,14 +275,14 @@ PMU reports the per-kernel busy cycles of each hardware pipe, which is
 the primary intra-kernel utilization evidence:
 
 ```bash
-python models/deepseek_v4_flash_mtp/decode_sparse_attn.py \
+python models/deepseek_v4_flash_mtp/decode_sparse_attn_hca.py \
   -p a2a3 -d 0 --enable-pmu 2
 # → build_output/<case>/dfx_outputs/pmu.csv
 ```
 
-`qwen3_32b/decode.py` does not expose the flag. Any entry can still
+`qwen3_14b/decode_fwd.py` does not expose the flag. Any entry can still
 collect PMU through the harness by adding `"enable_pmu": <N>` to its
-`runtime_cfg` dict (the harness bundles it into the runtime DFX options),
+`config` dict (the harness bundles it into the runtime DFX options),
 or by running an entry that does expose it. Recommended counters in
 `pmu.csv`:
 
@@ -353,29 +355,30 @@ troubleshooting live in
 
 ### 4.4 Compiler reports (no capture needed)
 
-Every compile writes two tuning reports next to the build:
+Every compile writes `build_output/<case>/report/perf_hints.log`; per-buffer
+occupancy comes from the memory map tool instead of a report file:
 
-```text
-build_output/<case>/report/perf_hints.log
-build_output/<case>/report/memory_after_AllocateMemoryAddr.txt
+```bash
+python -m pypto.tools.memory_map build_output/<case>/ [-o mem.html]
 ```
 
 `perf_hints.log` flags tile loads/stores whose innermost dimension is
 below the 512 B L2 cache line (each hint carries the exact source
-location), and the memory report lists per-kernel buffer occupancy
+location), and the memory map renders per-kernel buffer occupancy
 (`Vec` / `Mat` / `Left` / `Right` / `Acc`) against hardware limits. The
-`pfdb query perf_hints` / `pfdb query memory` queries (via the
-profile-feedback skill) also read both.
+`pfdb query perf_hints` query reads the hint log; `pfdb query memory` has
+data only for older captures that still carry the retired
+`report/memory_after_AllocateMemoryAddr.txt` report.
 
 ### 4.5 Remaining runtime DFX flags
 
 All five DFX toggles share `dfx_outputs/` and combine freely. CLI
 spellings are entry-specific; any entry accepts them through
-`runtime_cfg`:
+`config`:
 
 | Kwarg | Artifact | Purpose |
 |-------|----------|---------|
-| `enable_dump_args=<0..3>` | `args_dump/args_dump.json` + `args.bin` | Per-task tensor/scalar captures at kernel boundaries; level 1 = `pl.dump_tag`-selected tensors, 2 = everything (heavy), 3 = metadata only. Localizes a precision mismatch to one op. View with `python -m simpler_setup.tools.dump_viewer <.../args_dump>`. |
+| `enable_dump_args=<0..3>` | `args_dump/args_dump.json` + `args.bin` | Per-task tensor/scalar captures at kernel boundaries; level 1 = `pl.dump_tag`-selected tensors (manifest + payload); 2 = hybrid — manifest for every task, payload only for `pl.dump_tag`-marked tensors; 3 = full — every task, every arg, with payload (heaviest). Localizes a precision mismatch to one op. View with `python -m simpler_setup.tools.dump_viewer <.../args_dump>`. |
 | `enable_dep_gen=True` | `deps.json` | Dependency graph on its own (the onboard swimlane run performs this pass automatically). Render with `python -m simpler_setup.tools.deps_viewer deps.json --format html --engine sfdp`. |
 | `enable_scope_stats=True` | `scope_stats/scope_stats.jsonl` | Per-scope execution statistics. Plot with `python -m simpler_setup.tools.scope_stats_plot <...>/scope_stats.jsonl`. |
 
@@ -391,7 +394,8 @@ the simulator trace of Section 4.3 covers its kernel internals.
 ### 4.7 Device logs
 
 For hung or slow dispatch diagnosis, raise the runtime log level via
-`runtime_cfg={"log_level": "v5"}` (or `v0` for hangs) and direct device
+`config={"log_level": "debug"}` (the most verbose level; use it for hangs)
+and direct device
 logs to `build_output/device_logs` with
 `export ASCEND_PROCESS_LOG_PATH="$PWD/build_output/device_logs"`. See
 [Debugging](debugging.md).
@@ -403,12 +407,12 @@ at a time:
 
 | Question | Command | Evidence |
 |----------|---------|----------|
-| Is my change faster end-to-end? | `PYPTO_BENCH=1 python models/qwen3_32b/decode.py -p a2a3` | `effective_us` min/median/mean/max |
-| Which task / gap / dependency dominates the schedule? | `... --enable-l2-swimlane` (bare flag = level 4 here) | Swimlane records, merged Perfetto trace, `critical-path` reports |
+| Is my change faster end-to-end? | `PYPTO_BENCH=1 python models/qwen3_14b/decode_fwd.py -p a2a3` | `effective_us` min/median/mean/max |
+| Which task / gap / dependency dominates the schedule? | `... --enable-chip-swimlane` (bare flag = level 4 here) | Swimlane records, merged Perfetto trace, `critical_path` reports |
 | Why does this task wait? | `pfdb query critical_path --kind observed`, `pfdb query scheduler`, `pfdb query early_dispatch` | Per-task stall decomposition, phase counts, proven early dispatch |
-| Which pipe inside kernel K is the limit? | `--enable-pmu 2` (via `runtime_cfg` for this entry) | `pmu.csv` busy-cycle ratios |
+| Which pipe inside kernel K is the limit? | `--enable-pmu 2` (via `config` for this entry) | `pmu.csv` busy-cycle ratios |
 | Exactly which instructions serialize kernel K? | `incore_profile.py --build-dir ... --func K`, then `clean_sim_trace` | Cleaned in-core pipe trace, `instr_metrics.json` |
-| Is my tiling using the L0/L1 buffers? | (compile already ran) | `report/memory_after_AllocateMemoryAddr.txt`, `report/perf_hints.log` |
+| Is my tiling using the L0/L1 buffers? | (compile already ran) | `report/perf_hints.log`; per-buffer occupancy via `python -m pypto.tools.memory_map build_output/<case>/` |
 | Which op went numerically wrong? | `enable_dump_args` level 1–3 | `args_dump/` per-task tensors and scalars |
 
 Keep every experiment reproducible: same platform and device, same input

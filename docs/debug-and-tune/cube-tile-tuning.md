@@ -35,10 +35,11 @@ to interpret.
 
 ## Read the compiler memory report correctly
 
-Every build writes:
+The retired per-pass text report (`report/memory_after_AllocateMemoryAddr.txt`)
+is no longer written; per-buffer occupancy now comes from the memory map tool:
 
-```text
-build_output/<case>/report/memory_after_AllocateMemoryAddr.txt
+```bash
+python -m pypto.tools.memory_map build_output/<case>/
 ```
 
 The relevant spaces are:

@@ -116,8 +116,9 @@ Two rules:
 
 1. **Prefer fp32 for intermediates.** Accumulate, normalize, apply RoPE, and
    do residual adds in fp32. Narrow to bf16/int8 only at the op that consumes
-   the narrow type. The dsv4 layers carry `acc`/`res_row`/`y_row` in fp32 and
-   cast to bf16 only on the store.
+   the narrow type. The dsv4 layers carry `acc` in fp32, and the hc residual
+   stream (`res_row`/`y_row`) is fp32 end to end — the store stays fp32 too,
+   with no bf16 narrowing at the output.
 
 2. **Never cast through an intermediate dtype.** A direct `fp32 → int8` is
    strictly better than `fp32 → bf16 → int8`: the second hop throws away
@@ -147,10 +148,11 @@ a constant. Things to vary and measure:
 - **Granularity** — per-tensor vs. per-channel / per-token scales. A single
   per-tensor scale loses badly when one channel has a much larger dynamic
   range; per-channel (or per-token activation) scales recover it. The dsv4
-  weights ship per-channel `weight_scale`; match that granularity in the
-  kernel and golden.
+  weights ship one `*_scale` tensor per projected output (`wq_b_scale`,
+  `wo_b_scale`, …); match that granularity in the kernel and golden.
 - **Symmetric vs. asymmetric** — symmetric (offset 0) is cheaper and is what
-  the dsv4 W8A8 checkpoints use (`weight_offset == 0`). Only reach for a
+  the dsv4 W8A8 checkpoints use: the amax rescale to `INT8_SCALE_MAX = 127`
+  carries no zero point at all. Only reach for a
   zero-point if the data is genuinely one-sided.
 - **Scale source** — compute the activation scale from the *actual* dynamic
   range of the activation, not a static constant. Real-weight activations can

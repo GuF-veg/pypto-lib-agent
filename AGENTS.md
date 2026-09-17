@@ -13,7 +13,9 @@ kernel behavior:
 - Read `.claude/CLAUDE.md`
 - Read task-relevant files in `.claude/rules/` when present
 - Follow `.claude/skills/*/SKILL.md` when the task matches a documented workflow
-- Read `docs/pypto-coding/pypto-coding-style.md` before writing or modifying kernels
+- Read `docs/pypto-coding/l2-programming.md` (with its `operations.md`,
+  `loops.md`, and `naming-and-comments.md` siblings) before writing or
+  modifying kernels
 
 Task mapping:
 

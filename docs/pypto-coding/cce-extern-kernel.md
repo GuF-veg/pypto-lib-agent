@@ -256,7 +256,9 @@ not worth reverse-engineering; work from artifacts.
 5. **Read the simpler runtime, don't assume.** The execution model (§1) —
    persistent kernel, one-time `set_ffts_base_addr`, unified function-pointer
    dispatch, the subtask `BIT_SYNC_START` flag — is all in
-   `src/{arch}/runtime/.../aicore/aicore_executor.cpp` and
+   `src/{arch}/runtime/.../runtime/submit_types.h` (where `BIT_SYNC_START`
+   itself is defined) and
+   `src/{arch}/runtime/.../aicore/aicore_executor.cpp` plus
    `.../platform/onboard/aicore/kernel.cpp`. Several dead-end hypotheses (FFTS base
    not set for externs; per-`.o` sync globals; mode-0 count descriptors) were ruled
    out by reading these ~200 lines.

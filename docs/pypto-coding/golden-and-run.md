@@ -113,10 +113,13 @@ def golden_rms_norm_test(tensors):               # the harness callback
 
 Three rules:
 
-- **Write the math, not the kernel.** A golden that mirrors the kernel's tiling,
-  its accumulation order, or its quant scheme reproduces the kernel's bugs and
-  validates nothing. Express the operation the way the model defines it.
-- **Compute in FP32, cast once at the end.** A BF16 reference accumulates its
+- **Mirror the operation, in the kernel's arithmetic.** Express the operation
+  the way the model defines it, but compute it the way the kernel does:
+  identical op order, identical dtype at every step, and the same quant scheme
+  (see [Precision Tuning](../debug-and-tune/precision-tuning.md) §2 and §5).
+  What the golden must not do is copy an outright defect.
+- **Compute in FP32, cast at the same points the kernel does** (keep FP32
+  wherever the kernel keeps it wide). A BF16 reference accumulates its
   own error and turns a tolerance into a guess. See
   [Precision Tuning](../debug-and-tune/precision-tuning.md) for the rounding
   modes that make a cast match the device.

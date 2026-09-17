@@ -17,7 +17,7 @@ default so existing operator entry points and DailyCI keep their prior behavior.
 | Decode context length | up to 16,384 positions (`KERNEL_MAX_SEQ_LEN`), 128-token pages |
 | Prefill shape | one request of 128 tokens per program |
 | Platform | Ascend A5 (`-p a5`); full forwards are device-only |
-| Expert parallelism | `--ep 2/4/8`, `384 / ep` routed experts per rank |
+| Expert parallelism | `--ep 2/4/8`; each rank always keeps 48 routed experts (`n_routed_experts // 8`), so the routing space shrinks to `48 * ep` and only EP8 covers all 384 Pro experts |
 | LM-head parallelism | `--tp 2/4/8` vocab shards; `LM_HEAD_TP_SIZE = 8` is the deployment value |
 | Other components | no tensor parallelism — attention is data-parallel, MoE is expert-parallel |
 | Quantization | Hybrid MXFP8-MXFP4 — MXFP8 for the dense path, MXFP4 for the routed-expert weights |
@@ -136,7 +136,9 @@ decode_mtp      mtp_projection → decode_attention_swa → moe → hc_head → 
 prefill_mtp     mtp_projection → prefill_attention_swa → moe → hc_head → rmsnorm
 ```
 
-`prefill_mtp` reuses `prefill_fwd`'s driver for the main-model pass.
+`prefill_mtp` reuses `prefill_fwd`'s single-layer tensor-spec builder
+(`build_single_layer_tensor_specs`) to pack the MTP layer; the main-model pass
+is `prefill_fwd` itself, whose hidden states arrive as inputs.
 
 ## Real weights (Flash)
 
@@ -170,7 +172,8 @@ Numeric validation on real weights:
   recomputes with the same weights, so the existing per-layer validation runs
   on real dynamic ranges.
 - `prefill_fwd.py --validate` enables a full-network torch golden
-  (`golden_fwd.py`: embed → 43 chained layer goldens → hc_head → final norm →
+  (`utils.golden_prefill_fwd`, formerly `golden_fwd.py`: embed → 43 chained
+  layer goldens → hc_head → final norm →
   LM head). End-of-network gates are cosine/rel-L2 on the selected logit rows
   plus greedy-sample agreement; per-element gates on deep hidden states and
   compressor state pools accumulate cross-layer drift and are expected to

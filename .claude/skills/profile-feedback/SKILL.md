@@ -164,8 +164,8 @@ capture does not carry FIN/dispatch, not "this task had no wait"):
   close to saturation. First-class, not an afterthought: cube vs mte2 vs
   scalar is the question that decides "algorithmic gather" vs "weight
   traffic". Only available when the capture includes `pmu.csv`. Without a
-  `*total*cycle*` column the `ratio` field is absent and an `EVIDENCE
-  metric=ratio status=unavailable` line says so.
+  `*total*cycle*` column the `ratio` field is absent and an `EVIDENCE` line
+  with `metric="ratio"`, a `reason`, and `evidence=unavailable` says so.
 
 **Evidence tables**:
 
@@ -184,16 +184,17 @@ capture does not carry FIN/dispatch, not "this task had no wait"):
 
 ## Optional modalities that look "dark"
 
-`inventory` reports `state=available|not_emitted|unavailable|empty|parse_error`
+`inventory` reports
+`state=available|not_emitted|not_requested|unknown_request|empty|parse_error`
 per modality, plus whether it was `requested`.
 
 - `requested` + `not_emitted`: the harness asked and the runtime wrote
   nothing. Check the capture flags and `dfx_outputs/profile_capture_manifest.json`.
   That is not a pfdb parser bug.
-- `unavailable` on `memory`: there is no
-  `report/memory_after_AllocateMemoryAddr.txt`. That file is a compile-time
-  dump; a run that never compiled far enough will not have it.
-- `unavailable` on `args_dump` with `not_requested`: the entry did not
+- `not_emitted` (or `not_requested` when the harness did not ask) on `memory`:
+  there is no `report/memory_after_AllocateMemoryAddr.txt`. That file is a
+  compile-time dump; a run that never compiled far enough will not have it.
+- `not_requested` on `args_dump`: the entry did not
   forward `--enable-dump-args` / `--dump-args`.
 
 ## Trials without a profile run

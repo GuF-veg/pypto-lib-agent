@@ -488,7 +488,7 @@ artifacts drive intra-kernel tuning:
 PMU counters per kernel:
 
 ```bash
-python models/deepseek_v4_flash_mtp/decode_sparse_attn.py -p a2a3 -d 0 --enable-pmu 2
+python models/deepseek_v4_flash_mtp/decode_sparse_attn_hca.py -p a2a3 -d 0 --enable-pmu 2
 # → build_output/<...>/dfx_outputs/pmu.csv
 ```
 

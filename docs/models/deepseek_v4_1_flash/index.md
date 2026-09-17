@@ -3,8 +3,10 @@
 `models/deepseek_v4_1_flash/` is the implementation staging area for the
 DeepSeek-V4.1-Flash checkpoint. The first milestone establishes the text-model
 configuration, layer schedule, cache ownership, inference metadata, Torch
-goldens, and prefill/decode kernel contracts. Checkpoint loading and optimized
-PyPTO leaf kernels remain follow-up work.
+goldens, and prefill/decode kernel contracts. The SWA and C2A-Full leaf kernels
+and the attention TP all-reduce are implemented and A5-validated; the mHC,
+EP-MoE, hierarchical-indexer, C1A, and C2A-Reuse bodies remain parallel
+work, along with checkpoint loading.
 
 ## Checkpoint shape
 
@@ -36,17 +38,24 @@ The attention schedule is:
 ## Parallel-development structure
 
 Each attention mode and execution phase has one ownership file. Every file
-contains a Torch golden and an explicit `@pl.jit.inline` ABI; kernel bodies are
-the remaining parallel work.
+contains a Torch golden and an explicit `@pl.jit.inline` ABI. The SWA and
+C2A-Full kernels and the attention TP all-reduce are implemented and
+A5-validated; the mHC, EP-MoE, hierarchical-indexer, C1A, and C2A-Reuse bodies
+remain parallel work.
 
-Run an operator file directly to execute its deterministic CPU golden:
+Run a golden-only operator file directly to execute its deterministic CPU
+golden:
 
 ```bash
-source .venv/bin/activate-pypto
+source .venv/bin/activate
 python models/deepseek_v4_1_flash/decode_c1a_reindex.py
 ```
 
 The command prints `[GOLDEN] PASS` and exits nonzero when the reference fails.
+The mHC, EP-MoE, hierarchical-indexer, C1A, and C2A-Reuse entries are
+golden-only in this sense. The SWA and C2A-Full entries (`prefill_swa.py`,
+`decode_swa.py`, `prefill_c2a_full.py`, `decode_c2a_full.py`) instead run A5
+device validation, so they require an A5 NPU and do not print `[GOLDEN] PASS`.
 Once a kernel body lands, its owner can extend the same file with the thin
 `@pl.jit` entry, `build_tensor_specs()`, and device `run(...)` block.
 
@@ -149,11 +158,15 @@ reference-matching text.
 
 The implementation milestones are ordered by dependency:
 
-1. Implement and compile the attention TP all-reduce, mHC, and SWA.
-2. Implement C2A Full, then validate Full-to-Reuse cache and Top-K replay.
+1. **Done:** the attention TP all-reduce and the SWA kernels are implemented and
+   A5-validated; mHC remains.
+2. **Done:** C2A Full is implemented and A5-validated; the Full-to-Reuse cache
+   and Top-K replay validation remains.
 3. Implement C1A Full and the level-one candidate selector, then Reindex and Reuse.
 4. Implement the three-phase EP-MoE dispatch/local-expert/combine body.
 5. Compose the operators into the 40-layer prefill/decode token loop.
 
-Until the leaf kernels and weight loader land, this directory is not a runnable
-model and is not exposed to `pypto-serving`.
+The SWA and C2A-Full leaf kernels and the attention TP all-reduce are
+implemented and A5-validated, but the mHC, EP-MoE, hierarchical-indexer, C1A,
+and C2A-Reuse bodies are still missing; until they and the weight loader land,
+this directory is not a runnable model and is not exposed to `pypto-serving`.

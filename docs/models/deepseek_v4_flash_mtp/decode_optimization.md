@@ -327,10 +327,12 @@ runs once at the tail, but at 8 token rows it was badly under-parallelized.
   cubes. Standalone ~199 µs → ~66 µs, about 3× (#606).
 - **`hc_head` — then fan it again** (#822): the reduce spread over
   (token-tile × D-slice), `LINEAR_OK` 8 → 16, and — a detail worth stealing —
-  zero the accumulator with `pl.create_tensor(init_value=0)` on the AICPU
-  instead of a dedicated seed kernel, which had been spending ~5 µs of cube
-  critical path to zero 1 KB. 58.8 → 42.6 µs, and run-to-run spread narrowed
-  from 45–65 µs to 39–43 µs.
+  zero the accumulator with a dedicated seed scope (`hc_head_linear_seed`,
+  ordered before the split-K atomic-add scope) instead of a seed kernel that
+  had been spending ~5 µs of cube critical path to zero 1 KB. (The original
+  form of this tweak used `pl.create_tensor(init_value=...)`, which PyPTO no
+  longer supports — it now raises `ValueError`.) 58.8 → 42.6 µs, and
+  run-to-run spread narrowed from 45–65 µs to 39–43 µs.
 - **Both — settle the dtype of the whole stream.** The residual stream was BF16
   in GM, so every kernel boundary paid a cast: FP32→BF16 on write, BF16→FP32
   on the residual read (once per stream), plus a dedicated cast scope in

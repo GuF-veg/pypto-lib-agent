@@ -39,13 +39,13 @@ source "$PYPTO_ROOT/toolchain/versions.env"
 SKILL_PTOAS_VERSION=${PTOAS_VERSION#v}
 ```
 
-Pass the swimlane level explicitly: `--enable-chip-swimlane 4`. Every entry in
-this repository declares the flag the same way and accepts levels 0-4, so no
-per-entry inspection is needed. A bare flag means level 1, which cannot answer a
-dispatch question. If an entry still rejects `4`, its declaration predates the
-repo-wide form — normalize it to
-`type=int, nargs="?", const=1, default=0, choices=range(5)` rather than
-substituting level 1 or 2.
+Pass the swimlane level explicitly: `--enable-chip-swimlane 4`. The flag is not
+declared uniformly: most entries use
+`type=int, nargs="?", const=1, default=0, choices=range(5)` (a bare flag means
+level 1), `models/qwen3_14b/decode_fwd.py` and `prefill_fwd.py` use `const=4`,
+and `models/deepseek_v4_flash_mtp/decode_fwd_mtp.py` accepts only levels 0/1/2.
+Always pass an explicit integer and inspect the entry's declaration if `4` is
+rejected rather than substituting level 1 or 2.
 
 Submit the real NPU run through the device queue; do not infer device health
 from an unassigned shell:
@@ -209,10 +209,11 @@ out, b_tid = pl.submit(
 ```
 
 For an existing `with pl.spmd(...) as tid` launch, append the same dependency.
-A plain `with pl.spmd(...)` without `as tid` cannot carry `deps`; add a TaskId
-capture even when it is otherwise unused. A `for i in pl.spmd(...)` launch also
-cannot carry `deps`; convert only that launch to the captured context-manager
-form while preserving its block-index semantics:
+`deps=` is accepted on all three `pl.spmd` forms — `with`, `for i in`, and
+`as tid` — so a plain `with pl.spmd(...)` or `for i in pl.spmd(...)` launch can
+carry the appended dependency without any conversion; the TaskId capture is only
+needed when a later task must wait on this one. The example shows the captured
+context-manager form with its block-index semantics preserved:
 
 ```python
 seed_dummy = pl.system.task_dummy(deps=[])

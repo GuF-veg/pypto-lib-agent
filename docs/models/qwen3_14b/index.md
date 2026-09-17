@@ -109,7 +109,7 @@ part of the tracked runnable set.
 ### Sampling and output
 
 `rms_lm_head` (final RMSNorm plus the LM-head projection, in vocab chunks of
-512) is shared by both forwards. [greedy_sample.py](../../../models/qwen3_14b/greedy_sample.py)
+192) is shared by both forwards. [greedy_sample.py](../../../models/qwen3_14b/greedy_sample.py)
 and [topk_select.py](../../../models/qwen3_14b/topk_select.py) are the standalone
 sampling components; `decode_fwd` inlines its own greedy sample so a step
 produces the next token without a host round trip.

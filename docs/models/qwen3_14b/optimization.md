@@ -125,9 +125,10 @@ repeat.
 **`--decode-steps` (#795).** `--validate-fwd` dispatched `decode_fwd` exactly
 once, so every timing run measured a *cold single invocation*, not a decode
 step. The flag runs N autoregressive steps, feeding the sampled token back and
-growing the context by one each time, starting at `MAX_SEQ - decode_steps` so
-the KV pool sized for `MAX_SEQ` holds the whole sweep. Only then does a median
-over 20 invocations mean anything (~37.7 ms/step at batch-16, 40 layers, context
+growing the context by one each time — starting at `MAX_SEQ` and growing to
+`MAX_SEQ + decode_steps - 1`, with the paged KV pool enlarged by `decode_steps`
+tokens up front so the growing context never overflows it. Only then does a
+median over 20 invocations mean anything (~37.7 ms/step at batch-16, 40 layers, context
 3338→3358).
 
 **`--enable-dep-gen` (#797).** The flag had been hardcoded off with a rationale
@@ -310,7 +311,7 @@ as bugs:
 
 | Wall | Value | What it forced |
 |---|---|---|
-| AIC L0B, double-buffered | 64 KB | `BLOCK_SIZE` 256 → 128, because a 256-token K/V tile is 32 KB and any cube+vec fuse double-buffers it: `Right buffer usage 131072 bytes exceeds platform limit 65536` (#349) |
+| AIC L0B, double-buffered | 64 KB | `BLOCK_SIZE` 256 → 128, because a 256-token K/V tile is 64 KB (256 × head_dim 128 × BF16) and any cube+vec fuse double-buffers it: `Right buffer usage 131072 bytes exceeds platform limit 65536` (#349) |
 | mat-buffer verifier | 512 KB | rejected both K=512,N=256 and K=256,N=512 for the decode projections (#223) |
 | `pto.subview` valid-shape | — | an odd split dim has no legal form inside a mixed root (#349) |
 | GM store paths | — | one InCore function may not mix `tile.store` / `tensor.assemble` with scalar `tensor.write` into the same GM tensor; ordering and cache-line coherence are unguaranteeable across the two (#971) |

@@ -26,13 +26,14 @@ program name.
    remains.
 3. Reuse the operator's normal platform, shapes, weights, and multi-card device
    list. A smaller or synthetic case answers a different performance question.
-4. Pass the swimlane level explicitly: `--enable-chip-swimlane 4`. Every entry
-   in this repository declares the flag the same way and accepts levels 0-4, so
-   no per-entry inspection is needed. A bare flag means level 1, which cannot
-   answer a dispatch question. If an entry still rejects `4`, its declaration
-   predates the repo-wide form — normalize it to
-   `type=int, nargs="?", const=1, default=0, choices=range(5)` rather than
-   analyzing a level 1/2 capture as level 4.
+4. Pass the swimlane level explicitly: `--enable-chip-swimlane 4`. The flag is
+   not declared uniformly: most entries use
+   `type=int, nargs="?", const=1, default=0, choices=range(5)` (a bare flag
+   means level 1), `models/qwen3_14b/decode_fwd.py` and `prefill_fwd.py` use
+   `const=4`, and `models/deepseek_v4_flash_mtp/decode_fwd_mtp.py` accepts only
+   levels 0/1/2. Always pass an explicit integer and inspect the entry's
+   declaration if `4` is rejected rather than analyzing a level 1/2 capture as
+   level 4.
 
 Activate the worktree environment before running:
 

@@ -13,7 +13,7 @@ CLI flag; a typical model `__main__` wires them up like:
 ```python
 parser.add_argument("--runtime-dir", type=str, default=None)
 parser.add_argument(
-    "--dump-args", nargs="?", const=1, default=0, type=int,
+    "--enable-dump-args", nargs="?", const=1, default=0, type=int,
     choices=(0, 1, 2, 3),
 )
 parser.add_argument("--enable-dep-gen", action="store_true")
@@ -25,8 +25,8 @@ result = run(
     runtime_dir=args.runtime_dir,                     # reuse a compile (§3)
     config=dict(
         platform=args.platform, device_id=args.device,
-        log_level="v5",                               # runtime log level; raise to v0 for hangs (§4)
-        enable_dump_args=args.dump_args,              # argument dump (§5)
+        log_level="debug",                            # runtime log level; use "debug" for hangs (§4)
+        enable_dump_args=args.enable_dump_args,       # argument dump (§5)
         enable_dep_gen=args.enable_dep_gen,           # dependency graph (§6)
     ),
     rtol=1e-3, atol=1e-3,
@@ -130,15 +130,18 @@ log:
 1. Set `log_level` in `config`:
 
    ```python
-   config=dict(platform=..., device_id=..., log_level="v0")
+   config=dict(platform=..., device_id=..., log_level="debug")
    ```
 
    `log_level` is the one harness-only key — it is not a `RunConfig` field, so
    it is consumed up front (`configure_log`) rather than reaching the
    `RunConfig`. Accepted values:
-   `debug`, `v0`..`v9`, `info`, `warn`, `error`, `null`. The runtime default
-   is `v5` (= INFO); lower is more verbose, so `v0` (or `debug`) raises the
-   detail above the default to surface the most runtime tracing.
+   `debug`, `info`, `timing`, `warn`, `error`, `null` (case-insensitive;
+   `warning` is an alias), or a raw Python logging integer. The runtime
+   default is `timing`; `debug` is the most verbose, so it raises the detail
+   above the default to surface the most runtime tracing. An unrecognised
+   name does not raise — it silently falls back to the default, so a typo
+   here is a silent no-op.
 
 2. Point the CANN / simpler runtime at a device-log directory before
    running:
@@ -169,10 +172,11 @@ inputs/outputs and scalar inputs captured at kernel-task boundaries. Use it to
 turn a "the whole kernel is wrong" mismatch into "this one op is wrong".
 
 **Dump levels** (`config["enable_dump_args"]`): `0` off · `1` partial —
-only tensor arguments you mark · `2` full — every task's tensor payloads and
-scalar values (heavy; can saturate the host collector / trip AICPU timeouts on
-large workloads) · `3` full metadata only — every task's tensor/scalar
-metadata, but no tensor payload or `args.bin`.
+manifest and payload only for the tensor/scalar arguments you mark ·
+`2` hybrid — every task's tensor/scalar metadata, but payload only for the
+marked arguments · `3` full — every task's tensor payloads and scalar values
+(heavy; can saturate the host collector / trip AICPU timeouts on large
+workloads).
 
 **The usual flow — tag the tensor, dump at level 1.** Mark the tensor of
 interest with `pl.dump_tag(t)` right where it's produced, then run with level
@@ -244,6 +248,11 @@ round-trip, which drops the read-dep and lets the downstream task race).
 | Compile / PTOAS error | `passes_dump/`; `skip_ptoas` via `ir.compile` directly | `config=dict(dump_passes=True)` |
 | Need to reproduce on the same inputs | golden-data replay (§2) | `golden_data=` / `--golden-data` |
 | Iterating on generated `.cpp` / `.pto` | runtime-dir reuse (§3) | `runtime_dir=` / `--runtime-dir` |
-| Run hangs / deadlocks (§4) | device log | `config["log_level"]="v0"` + `ASCEND_PROCESS_LOG_PATH` |
-| Precision mismatch, unknown stage (§5) | args dump | `enable_dump_args=` / `--dump-args [LEVEL]` |
+| Run hangs / deadlocks (§4) | device log | `config["log_level"]="debug"` + `ASCEND_PROCESS_LOG_PATH` |
+| Precision mismatch, unknown stage (§5) | args dump | `enable_dump_args=` / `--enable-dump-args [LEVEL]` |
 | Non-deterministic / raced result (§6) | dependency graph | `enable_dep_gen=` / `--enable-dep-gen` |
+
+Flag spelling varies by front-end: the model entry points here use
+`--enable-dump-args` (except `models/deepseek_v4_pro/prefill_fwd.py`, which
+uses `--dump-args`), while the simpler runtime's pytest / scene-test CLI and
+the auto-generated `debug/run.py` use `--dump-args [LEVEL]`.

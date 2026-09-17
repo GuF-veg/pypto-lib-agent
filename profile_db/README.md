@@ -29,10 +29,11 @@
   `critical_path` 逐条件同构，真实捕获对拍零差）、stall 四段分解与
   early-dispatch 四态证明；迁移 `0003` 补行级 dispatch/receive/finish。
 - ✅ T4 分层查询引擎：注册表（每条查询强绑定 owner question + pydantic
-  参数单一同源）+ Z0–Z4 共 19 条查询（runs_list/overview/inventory、
+  参数单一同源）+ Z0–Z4 共 22 条查询（runs_list/overview/inventory、
   density/sparse_regions、region/why_sparse/core/idle_window、
   task/tasks/deps/subgraph、
-  why_late/why_long/rows/scheduler/early_dispatch/pmu）；事实 DSL v2 输出、
+  why_late/why_long/rows/scheduler/early_dispatch/pmu/
+  critical_path/perf_hints/memory）；事实 DSL v2 输出、
   字节预算 `TRUNCATED` 显式收尾、unavailable 语义、rank 标签与一致性校验、
   无原始 JSON 泄漏检查器；金质题库快照（含 6.4 全会话）+ 真实捕获锚点。
 - ✅ T5 接口：公开 Python API（`profile_db.api.ProfileDB` + `Result` +
@@ -49,8 +50,9 @@
   `pfdb render` 均返回 `IMAGE` fact（含 `legend` 映射）+ `ImageRef`，
   同参数重复渲染 SHA-256 逐字节一致，空窗/无边任务/未知目标不崩。
 - ✅ T7 MCP 服务：`pfdb serve --mcp`（stdio、会话级生命周期、不常驻）——
-  工具集由查询注册表自动生成（`pfdb.list_runs / overview / density / ...`
-  + `pfdb.render` + `pfdb.version`），`inputSchema` 与 CLI 参数单一同源
+  工具集由查询注册表自动生成（`pfdb.list_runs / overview / density / ...`），
+  另加 10 个手写生命周期工具（compare / baseline / trial 族与 note）
+  与 `pfdb.render` / `pfdb.version`，`inputSchema` 与 CLI 参数单一同源
   （pydantic）；查询返回预算受限 facts 文本、渲染返回 IMAGE fact +
   `ImageContent`（PNG base64）；`examples/mock_agent.py` 演示 6.4 全会话。
 - ✅ T8 生命周期与短期记忆：`lifecycle/` 子包——工作集判定（最新 K +
@@ -164,7 +166,10 @@ PFDB_PATH=.pfdb/profile.duckdb python profile_db/examples/mock_agent.py
 ```
 
 工具集由查询注册表自动生成（`pfdb.list_runs` / `pfdb.overview` /
-`pfdb.density` / … + `pfdb.render` + `pfdb.version`），tool schema 版本经
+`pfdb.density` / …），另加 10 个手写生命周期工具（`pfdb.compare` /
+`pfdb.baseline_diff|list|add` / `pfdb.register_trial` / `pfdb.bind_trial` /
+`pfdb.attach_bench` / `pfdb.set_verdict` / `pfdb.list_trials` / `pfdb.note`）
+与 `pfdb.render` / `pfdb.version`，tool schema 版本经
 `pfdb.version` 暴露。
 
 ### 生命周期与短期记忆

@@ -114,8 +114,10 @@ moe         hc_pre → gate → expert_shared → dispatch → expert_routed →
 
 `hc_pre` mixes the four hyper-connection streams into one hidden row (RMS,
 sigmoid gates, a Sinkhorn-normalized combine matrix); `hc_post` folds the
-sublayer output back into the stack. `decode_layer` and `prefill_layer` are
-exactly this pair exposed as standalone two-rank harnesses.
+sublayer output back into the stack. `decode_layer` is exactly this pair
+exposed as a standalone two-rank harness; `prefill_layer` is only a 14-line
+import-compatibility shim with no compute entry (`prefill_fwd` holds the
+prefill implementation).
 
 ### Attention paths
 
@@ -213,6 +215,7 @@ serving-level residency and lowering — with the limit measured at each step.
 | MoE and output | [decode_moe.py](../../../models/deepseek_v4_flash_mtp/decode_moe.py), [prefill_moe.py](../../../models/deepseek_v4_flash_mtp/prefill_moe.py), [gate.py](../../../models/deepseek_v4_flash_mtp/gate.py), [expert_shared.py](../../../models/deepseek_v4_flash_mtp/expert_shared.py), [expert_routed.py](../../../models/deepseek_v4_flash_mtp/expert_routed.py), [lm_head.py](../../../models/deepseek_v4_flash_mtp/lm_head.py) |
 | Metadata and host helpers | [decode_prepare.py](../../../models/deepseek_v4_flash_mtp/decode_prepare.py), [config.py](../../../models/deepseek_v4_flash_mtp/config.py), [utils.py](../../../models/deepseek_v4_flash_mtp/utils.py) |
 
-`config.py`, `utils.py`, `rope_interleave.py`, and `decode_prepare.py` have
-no `__main__` block: they are imported rather than run. Every other file,
-including `decode_fwd_mtp.py`, is an executable composition.
+`config.py`, `utils.py`, `rope_interleave.py`, `decode_prepare.py`,
+`prefill_layer.py`, `prefill_cp_exchange.py`, and `serving_contract.py` have
+no `__main__` block: they are imported rather than run. The remaining files,
+including `decode_fwd_mtp.py`, are executable compositions.

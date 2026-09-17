@@ -128,7 +128,8 @@ The harness checks that every required file exists before runtime:
 | `ScalarSpec` | `in/<name>.pt` |
 | pure tensor input | `in/<name>.pt` |
 | pure tensor output | `out/<name>.pt` |
-| initialized output / inout tensor | both `in/<name>.pt` and `out/<name>.pt` |
+| pure output with `init_value` | `out/<name>.pt` only — the `init_value` reaches the golden reference, never the device |
+| inout tensor | both `in/<name>.pt` and `out/<name>.pt` |
 
 An incomplete snapshot returns a failed `RunResult` with the missing paths.
 

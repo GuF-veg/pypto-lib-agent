@@ -42,7 +42,7 @@ compressor-state pools.
 | Rows per decode step, per card | 4 requests × 2 = 8 | 64 requests × 8 = 512 |
 | Attention parallelism | data-parallel; each rank owns its own micro-batch | TP-sharded output projection over a DSA-CP token split |
 | Page size | 128 | 32 |
-| Context ceiling | `max_position_embeddings` truncated to 16,384 | the checkpoint's own 1,048,576, and the cache capacities are sized from it |
+| Context ceiling | the checkpoint's own 1,048,576 | the checkpoint's own 1,048,576, and the cache capacities are sized from it |
 
 The wider verify window is the reason for the rest of the table: 512 rows per
 step is too much attention work for one card, so the token axis is split across
@@ -60,7 +60,7 @@ with each attention and MoE stage in its own `pl.scope()` under
 
 ```
 decode_fwd
-├── preamble          embedding lookup, metadata lowering, CP token all-gather
+├── preamble          embedding lookup, MoE input-id packing, metadata lowering
 ├── layers 0, 1       decode_swa  → moe
 ├── loop ×20          decode_csa  → moe        (layers 2, 4, …, 40)
 │                     decode_hca  → moe        (layers 3, 5, …, 41)

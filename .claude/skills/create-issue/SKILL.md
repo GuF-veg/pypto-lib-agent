@@ -427,7 +427,7 @@ Step 9, after the Step 8 preview.
 
 | Diagnosis | Target repo | How to file |
 |---|---|---|
-| pypto | `hw-native-sys/pypto` | **delegate**: `$PYPTO_ROOT/.claude/skills/create-issue/SKILL.md` |
+| pypto | `hw-native-sys/pypto` | file directly via `gh` (no local skill) |
 | simpler | `hw-native-sys/simpler` | **delegate**: `$PYPTO_ROOT/runtime/.claude/skills/create-issue/SKILL.md` |
 | ptoas | `hw-native-sys/PTOAS` | file directly via `gh` (no local skill) |
 | pto-isa | `hw-native-sys/pto-isa` | file directly via `gh` (no local skill) |

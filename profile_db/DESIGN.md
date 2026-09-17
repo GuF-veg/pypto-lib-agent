@@ -178,7 +178,7 @@
 
 ---
 
-## 5. 数据模型（DuckDB，schema v5）
+## 5. 数据模型（DuckDB，schema v6）
 
 ### 5.1 引擎、位置与生命周期
 
@@ -214,7 +214,7 @@
 | `cpm_path`（衍生） | 关键路径任务序列与间隔分解 | `run_id`、`kind(observed/static)`、`seq`、`task_id`、`wall_us`、`busy_us`、`compute_us`、`stall_us`、`gap_us`、`gap_kind`、`early_dispatch_proven(full/partial/none/unavailable)`。<br>算法与上游 `critical_path` 逐条件同构（对拍即真）：observed 行 `compute_us`=非重叠实际贡献、`stall_us`=距 frontier 的间隔、`gap_kind∈data-wait/core-wait/front-gap`、`gap_us=start-ready`（level≥2 且生产者带时刻时）；static 行为依赖受限最长路径，`compute_us=busy_us`，gap 列空。early-dispatch 用结构规则（直接生产者全部 creator 或 allow_early_resolve）＋两 tick 容差时间戳证明。 |
 | `pmu_counter` | PMU 长表（列名随架构动态） | `run_id`、canonical `task_id`、`task_id_raw`、`task_id_u64`、`sample_seq`、`thread_id`、`core_id`、`func_id`、`core_type`、`event_type`、`counter`、`value`、`total_cycles` |
 | `perf_hint` | 编译器提示逐行 | `run_id`、`seq`、`text`、`source_path`、`origin='compiler'` |
-| `memory_entry` | 缓冲占用报告 | `run_id`、`kernel`、`space(Vec/Mat/Left/Right/Acc)`、`usage`、`limit` |
+| `memory_entry` | 缓冲占用报告 | `run_id`、`kernel`、`space(Vec/Mat/Left/Right/Acc)`、`usage`、`limit_value` |
 | `modality_status` | 可选工件请求及解析状态 | `run_id`、`modality`、`requested`、`request_value`、`rel_path`、`size_bytes`、`parser_state`、`entry_count`、`state`、`reason` |
 | `bench_stratum` | 一次独立 benchmark invocation 的配置 | `run_id`、`stratum`、`source_sha256`、`rounds`、`warmup`、`rank_count`、`aggregation_mode` |
 | `bench_sample` | 可选原始基准样本 | `run_id`、`stratum`、`round`、`effective_us` |
@@ -227,8 +227,7 @@
 `dep_edge(pred)`、`dep_edge(succ)`、`time_band(run_id, engine, band_idx)`、
 `trial(run_id)`、`cpm_path(run_id, kind, seq)`。
 
-视图：`v_run_summary`、`v_family_stats(run)`、`v_region(t0,t1)` 等，只读、
-只引用表格。
+视图：未创建 SQL 视图；查询直接读上表与衍生表，一律只读连接。
 
 ### 5.3 口径决策表（schema 细则，已定）
 
@@ -239,9 +238,9 @@
 | `makespan_us` | `max(finish) - min(dispatch)`（converter 拼接后口径） | 与既有分析器/关键路径工具同源；另一口径另存 `raw_span_us`（原始 aicore 行跨度，实测 2825.18µs） |
 | 任务时长 | 双列：`busy_us = max(end) - min(start)`（行级）；`wall_us = max(finish) - min(dispatch)`（生命周期） | 消除"duration"歧义 |
 | `ready(task)` | `max(FIN(直接生产者))`，边语义（`flags`、artifact 边）以 simpler 运行时口径为准；T1 与 `critical_path` 工具对拍锁死后固化测试常量 | 不臆造边语义 |
-| 密度带粒度 | 存储粒度 **5µs**（`time_band`），自适应：`res = max(1µs, span/10000)`（防超长 run 表膨胀）；查询时按 `--bands N` 聚合展示 | 标定：AIV 任务中位 11.9µs、最小 1.8µs，5µs 以下粒度才能保留短任务信号（附录 B） |
+| 密度带粒度 | 存储粒度 **5µs**（`time_band`），自适应：`res = max(5µs, span/10000)`（防超长 run 表膨胀）；查询时按 `--bands N` 聚合展示 | 标定：AIV 任务中位 11.9µs、最小 1.8µs，5µs 以下粒度才能保留短任务信号（附录 B） |
 | 稀疏判定 | 带内 `busy_cores ≤ 25% × 该引擎核数` 且非 `drain_tail` 后缀 → 稀疏候选；`drain_tail` = 最后一个"忙碌 ≥50% 核数"的带之后的后缀 | 标定：AIV 44% 的 5µs 带为空、62% ≤ 10 核；AIC 中位带宽即全忙（附录 B） |
-| 空闲段记录阈值 | 同核相邻两行间隔 ≥ **5µs** 记入 `idle_gap`；≥ **1µs** 在输出中标记为"显著间隔"（沿用既有临界路径报告惯例） | 标定：AIC 间隔中位 0.94µs，AIV 中位 40.9µs |
+| 空闲段记录阈值 | 同核相邻两行间隔 ≥ **5µs** 记入 `idle_gap` | 标定：AIC 间隔中位 0.94µs，AIV 中位 40.9µs |
 | 基准 vs 观测开销 | `bench_*`（`PYPTO_BENCH`，无观察者开销，头指标取 mean）与 `makespan_us`（带观察者开销）严格分列，永不混用 | profiling-options.md 既有语义 |
 | rank | `rank_label` 默认 `'single'`；多 rank 捕获必须按 rank 隔离行集 | 防止静默混 rank |
 | 路径与脱敏 | 入库路径一律相对路径；任何环境元数据不含机器用户名 | 仓库既有政策 |
@@ -262,7 +261,7 @@ GAP     run_id=1 core=27 t0_us=1200.4 t1_us=1311.0 kind=dispatch_wait ...
 STALL   run_id=1 task_id=... fin_detect_us=... dispatch_wait_us=... start_wait_us=...
 ...
 EVIDENCE artifact=deps.json status=unavailable
-TRUNCATED limit_bytes=4096
+TRUNCATED first_dropped_index=… remaining=… limit=… hint="retry --budget …"
 ```
 
 结构值（shapes、计数器映射、编译文本）一律 JSON 编码，避免二次转义协议。
@@ -275,8 +274,13 @@ TRUNCATED limit_bytes=4096
   已有迁移：`0001_init.sql`（18 表全量建表）、`0002_sched_queue_depths.sql`
   （`scheduler_phase.shared_at_*` 改 JSON 列表——T1 对真实捕获的保真修正）、
   `0003_task_row_dispatch.sql`（`task_row` 补 `dispatch/receive/finish_us`
-  三列——T3 行级 early-dispatch 证明与最早行 stall 分解所需）。
-- schema 自 v1 起**一次性预留**全部表（含 trial/baseline 与衍生表），避免后期大迁移。
+  三列——T3 行级 early-dispatch 证明与最早行 stall 分解所需）、
+  `0004_extra_modalities.sql`（补 `args_dump_entry` / `scope_stats_entry`
+  两表——T9 扩展模态）、`0005_dogfood_feedback.sql`（task id 归一化、PMU
+  样本溯源列、补 `modality_status` / `bench_stratum` 两表）、
+  `0006_trial_bench.sql`（`trial` 补 bench 数字列——trial 仅 bench 证据）。
+- schema 自 v1 起预留绝大多数表（含 trial/baseline 与衍生表），0004/0005
+  再补扩展模态与 dogfood 表，避免大迁移。
 - 库文件可整体删除重建（数据可弃），因此不提供降级/回滚语义——迁移只前进。
 
 ### 5.6 技术栈选型（已定）
@@ -460,8 +464,8 @@ STALL ready_us=... dispatch_us=... receive_us=... start_us=...
   - `R3 core`：单核时间轴（回答"这核空着的时候别人在干嘛"）。
 - **确定性**：样式参数集中在一个常量模块；同 `(run, kind, params)` 渲染结果
   SHA-256 稳定（Python/matplotlib 版本记录在清单里）。
-- **缓存与清单**：`render/<run>/<kind>-<params_hash>.png` + 同名
-  `render_manifest.json`（宽高、µs/px、图例、生成版本）。缓存随库作废
+- **缓存与清单**：`render/<run>/<kind>-<params_key>.png` + 同名
+  `<kind>-<params_key>.manifest.json`（宽高、µs/px、图例、生成版本）。缓存随库作废
   （prune 连带清理），重复请求命中缓存。
 - **预算**：图像受尺寸/字节上限约束，超限自动降采样并在 manifest 标注。
 - 文本模型路径：查询返回 `IMAGE` fact（清单元数据），模型可忽略像素只用
@@ -483,8 +487,8 @@ STALL ready_us=... dispatch_us=... receive_us=... start_us=...
   - 若某历史 run 突然需要对比价值，`pfdb baseline add <run>` 先标记再 prune。
 - **体积控制**：原始工件默认 link 不复制；in-core/args_dump 永远只存指标；
   渲染缓存有总量上限（默认 200MB，LRU）。
-- **重建**：`.pfdb` 删除后，用 `pfdb ingest build_output/... --replay manifests`
-  或原命令重跑 ingest 即可重建相同内容的库（sha256 保证一致性）。
+- **重建**：`.pfdb` 删除后，用原命令重跑 `pfdb ingest build_output/...`
+  即可重建相同内容的库（sha256 保证一致性）。
 
 ### 8.2 短期记忆（trial / baseline）
 
@@ -499,7 +503,7 @@ STALL ready_us=... dispatch_us=... receive_us=... start_us=...
 - **baseline**：命名 + `bench_mean_us`（以未 profiled 的 `PYPTO_BENCH` 为准；
   profiled makespan ≠ 基准）+ 验收标准；`baseline diff` 做相对基线变化，
   需 level/时钟/拓扑/程序名兼容（沿用采集方口径）。
-- **不承诺长期历史**：`history --family` 等跨 run 聚合只覆盖保留 run；
+- **不承诺长期历史**：跨 run 聚合只覆盖保留 run；
   长期知识沉淀不在本系统范围。
 
 ---
@@ -541,7 +545,7 @@ profile_db/
 ├── src/profile_db/
 │   ├── db.py                 # 连接、迁移、写锁
 │   ├── schema/migrations/    # NNNN_*.sql（版本化 DDL）
-│   ├── ingest/               # 适配器注册表 + 各工件插件（ingest/adapters/*.py）
+│   ├── ingest/               # 适配器注册表 + 各工件插件（ingest/*.py 平铺模块）
 │   ├── derived/              # 衍生器：band/gap/cpm/stall/early_dispatch（纯函数）
 │   ├── query/                # Z0–Z4 + why + 对比查询；facts DSL v2 输出
 │   ├── lifecycle/            # 工作集判定、prune、重建
@@ -713,7 +717,7 @@ tests ────▶ 可直接触达任何层，但金质题库只走 api/CLI/M
 ### T6 可视化渲染层 ｜ 依赖：T3（可与 T4/T5 并行） ｜ 规模：M
 
 - **做什么**：R0–R3 渲染器 + 确定性样式常量 + 缓存（总量上限 LRU）+
-  `render_manifest.json` + 尺寸/字节预算与降采样。（**T6 已完成**，见
+  `<kind>-<params_key>.manifest.json` 清单 + 尺寸/字节预算与降采样。（**T6 已完成**，见
   README 状态表。）
 - **验收**：
   - [x] 同参数两次渲染 SHA-256 一致（两个独立缓存目录对拍，逐字节相等）；
@@ -766,7 +770,7 @@ tests ────▶ 可直接触达任何层，但金质题库只走 api/CLI/M
   `call_tool` 派发）+ `run_stdio()`（`stdio_server` + `anyio.run`）。
   查询工具返回预算受限 facts 文本；`pfdb.render` 返回 IMAGE fact 文本 +
   `ImageContent`（PNG base64 data URL）。服务只读连接、随会话生命周期，
-  tool schema 版本 `TOOL_SCHEMA_VERSION="1"` 经 `pfdb.version` 暴露。CLI 增
+  tool schema 版本 `TOOL_SCHEMA_VERSION="3"` 经 `pfdb.version` 暴露。CLI 增
   `pfdb serve --mcp [--path]`；示例 `examples/mock_agent.py` 用 MCP 客户端
   走完 6.4 全会话。依赖新增 `mcp>=1.0,<2`。5 条测试（注册表驱动工具、
   渲染出图、非法参数拒绝、无状态重启、mock 会话）全绿。
@@ -915,4 +919,4 @@ T9（T1/T2 后随时启动）    T10（最后）
 ```
 
 由以上数据锁定 5.3 决策：存储粒度 5µs（自适应上限 10k 带）、稀疏阈值
-≤25% 核数、idle_gap 记录阈值 5µs、显著间隔标记 1µs、拓扑全从工件读。
+≤25% 核数、idle_gap 记录阈值 5µs、拓扑全从工件读。

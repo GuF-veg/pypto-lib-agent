@@ -17,7 +17,7 @@ model documentation, which explains what each program computes:
 - [Compile and Runtime Workflow](../../../docs/run-and-validate/compile-runtime-workflow.md)
 
 For a caller who has not yet proven the environment, the setup sequence and its
-gates live in the `setup-and-run` skill. Do not re-derive them here; this skill
+gates live in the `setup-env` skill. Do not re-derive them here; this skill
 assumes an environment that already runs a case.
 
 ## Bound system-test execution
