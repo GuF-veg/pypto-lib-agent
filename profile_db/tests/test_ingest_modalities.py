@@ -48,7 +48,8 @@ def test_args_dump_and_scope_stats_are_parsed(tmp_path: Path) -> None:
             "WHERE run_id = 1 ORDER BY seq"
         ).fetchall()
         assert len(stats) == 5  # meta line + 4 records
-        assert stats[0][1] is None and json.loads(stats[0][4])["heap_max"] == 2097152
+        # current collector shape: per-ring capacities as lists
+        assert stats[0][1] is None and json.loads(stats[0][4])["heap_max"] == [2097152, 1048576, 1048576]
         assert stats[1][1] == "rmsnorm" and stats[1][3] == "begin"
     finally:
         db.close()

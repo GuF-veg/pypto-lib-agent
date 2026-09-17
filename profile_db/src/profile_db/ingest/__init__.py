@@ -300,6 +300,12 @@ def ingest_capture(
                 _artifact(kind, path, source_mod.rel_path(src, path), store_mode)
             )
 
+    # runtime_cfg carries the artifact-declared orchestrator source: a
+    # host-orchestrated capture splices a second clock domain, and µs
+    # values live on the causal composite the converter built.
+    runtime_cfg = dict(runtime_cfg or {})
+    runtime_cfg["orchestrator_source"] = swimlane_run.orchestrator_source
+
     meta = {
         "program": program,
         "platform": platform,

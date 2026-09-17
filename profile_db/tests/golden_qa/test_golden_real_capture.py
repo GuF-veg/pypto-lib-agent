@@ -12,23 +12,46 @@
 The strict snapshots live in the offline scenario; these pin the same
 queries against the fixed Qwen3Decode capture as consistency anchors:
 exact integer counts and tight approximate floats measured once from the
-converter (DESIGN appendix B + T1/T3 acceptance values)."""
+converter (DESIGN appendix B + T1/T3 acceptance values). Every test here
+is pinned to that one capture, so the module skips entirely when
+``PFDB_REAL_CAPTURE_DIR`` points elsewhere."""
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
-_CAPTURE = None
-for candidate in sorted(REPO_ROOT.glob("build_output/*/dfx_outputs")):
-    if (candidate / "chip_swimlane_records.json").is_file():
-        _CAPTURE = candidate
-        break
+_PINNED_ANCHOR = Path("build_output") / "Qwen3Decode_20260825_101508" / "dfx_outputs"
 
-pytestmark = pytest.mark.skipif(_CAPTURE is None, reason="no real capture under build_output")
+
+def _discover_capture() -> Path | None:
+    env_dir = os.environ.get("PFDB_REAL_CAPTURE_DIR")
+    if env_dir:
+        candidate = Path(env_dir)
+        return candidate if (candidate / "chip_swimlane_records.json").is_file() else None
+    anchor = REPO_ROOT / _PINNED_ANCHOR
+    if (anchor / "chip_swimlane_records.json").is_file():
+        return anchor
+    for candidate in sorted(REPO_ROOT.glob("build_output/*/dfx_outputs")):
+        if (candidate / "chip_swimlane_records.json").is_file():
+            return candidate
+    return None
+
+
+_CAPTURE = _discover_capture()
+_PINNED = _CAPTURE is not None and _CAPTURE == REPO_ROOT / _PINNED_ANCHOR
+
+pytestmark = [
+    pytest.mark.skipif(_CAPTURE is None, reason="no real capture under build_output"),
+    pytest.mark.skipif(
+        _CAPTURE is not None and not _PINNED,
+        reason="snapshot constants are pinned to the Qwen3Decode_20260825_101508 anchor",
+    ),
+]
 
 
 def _ingest(db) -> int:

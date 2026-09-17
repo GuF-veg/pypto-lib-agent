@@ -275,12 +275,20 @@ def insert_scheduler_phases(
     rows: list[tuple[Any, ...]] = []
     for lane, records in enumerate(lanes):
         for phase in records:
+            # scheduler-schema records carry the acted-on task token on
+            # dummy_task/predicated_skip/graph_prepare kinds; archived
+            # lanes have none.
+            raw_task = phase.get("task_id")
+            phase_task = (
+                normalize_task_id(int(raw_task)).canonical if raw_task is not None else None
+            )
             rows.append(
                 (
                     first_id + len(rows),
                     run_id,
                     lane,
                     phase.get("kind"),
+                    phase_task,
                     phase.get("start_time_us"),
                     phase.get("end_time_us"),
                     phase.get("loop_iter"),
@@ -293,9 +301,9 @@ def insert_scheduler_phases(
             )
     _executemany(
         conn,
-        "INSERT INTO scheduler_phase (phase_id, run_id, lane, kind, t0_us, t1_us, "
+        "INSERT INTO scheduler_phase (phase_id, run_id, lane, kind, task_id, t0_us, t1_us, "
         "loop_iter, tasks_processed, pop_hit, pop_miss, shared_at_start, shared_at_end) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS JSON), CAST(? AS JSON))",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS JSON), CAST(? AS JSON))",
         rows,
     )
 

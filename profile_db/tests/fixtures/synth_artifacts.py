@@ -24,6 +24,15 @@ Record shape reference (real Qwen3Decode capture):
   aicore_tasks row: [core_index, task_id, row_index, start_cycles, end_cycles, aux]
   deps edge keys: arg, consumer_dtype, consumer_shape, consumer_start_offset,
                   consumer_strides, flags, pred, source, succ, tensor_id
+
+Three capture schemas are generated (``schema=``):
+  ``legacy``  archived flat keys (aicpu_tasks + aicpu_scheduler_phases
+              with inline pop/shared metrics);
+  ``device``  current scheduler schema (scheduler_tasks +
+              scheduler_records.streams with per-record metrics, aicpu
+              lifecycle records carrying the earliest timestamp);
+  ``host``    scheduler schema with host-orchestrated phases (host
+              CLOCK_MONOTONIC ns) instead of device-cycle ones.
 """
 
 from __future__ import annotations
@@ -38,6 +47,11 @@ CLOCK_FREQ_HZ = 50_000_000  # 1 us == 50 cycles (matches observed captures)
 NUM_CORES = 8              # 4 AIC + 4 AIV
 CORE_TYPES = ["aic", "aic", "aic", "aic", "aiv", "aiv", "aiv", "aiv"]
 CORE_TO_THREAD = [0, 0, 1, 1, 2, 2, 3, 3]
+
+# Host timeline origin (ns) for the host-orchestrated fixture; the host
+# composite spans 9 us, which is the offset the converter splices onto
+# every device-domain us value in that schema.
+HOST_ORIGIN_NS = 10_000_000
 
 
 def _us_to_cycles(us: float) -> int:
@@ -124,79 +138,205 @@ def _edge(pred: str, succ: str, tensor_id: str, shape: list[int], dtype: str) ->
         "consumer_strides": [shape[1], 1],
         "flags": [],
         "pred": pred,
-        "source": "auto",
+        "source": "explicit",
         "succ": succ,
         "tensor_id": tensor_id,
     }
 
 
-def chip_records(level: int = 1) -> dict[str, Any]:
-    """Build the records document.
-
-    level=1 mirrors AICORE_TIMING captures (no AICPU stream). level=4
-    adds the AICPU task rows the runtime emits (matched by
-    (core, reg_task_id), dispatch before receive, finish after end) plus
-    one scheduler lane record and one orchestrator record, so the
-    upstream converter's join path is exercised.
-    """
+def _aicore_rows() -> list[list[int]]:
     rows: list[list[int]] = []
     for task_id, _name, _kernels, _blocks, spec in _TASKS:
         for core, row_index, start_us, end_us in spec:
             rows.append(
                 [core, int(task_id), row_index, _us_to_cycles(start_us), _us_to_cycles(end_us), 0]
             )
+    return rows
+
+
+def _scheduler_task_section(rows: list[list[int]]) -> dict[str, Any]:
+    """Current-schema scheduler timing: dispatch sits 100 cycles before
+    start and finish 50 cycles after end (same shape the legacy
+    ``aicpu_tasks`` rows carried)."""
+    return {
+        "schema_version": 1,
+        "producer": "aicpu",
+        "records": [
+            [core, row_index, start_c - 100, end_c + 50]
+            for core, _task, row_index, start_c, end_c, _aux in rows
+        ],
+    }
+
+
+def _scheduler_records_section(first_dispatch: int) -> dict[str, Any]:
+    """Current-schema scheduler phases: one stream whose records keep only
+    the fixed fields and whose per-record metrics carry pop/shared values
+    (pop only on the dispatch kind, mirroring the host emitter)."""
+    records = [
+        {
+            "start_cycles": first_dispatch,
+            "end_cycles": first_dispatch + 20,
+            "loop_iter": 0,
+            "kind": "dispatch",
+            "tasks_processed": 3,
+            "task_id": None,
+        },
+        {
+            "start_cycles": first_dispatch + 20,
+            "end_cycles": first_dispatch + 30,
+            "loop_iter": 0,
+            "kind": "complete",
+            "tasks_processed": 0,
+            "task_id": None,
+        },
+        {
+            "start_cycles": first_dispatch + 30,
+            "end_cycles": first_dispatch + 40,
+            "loop_iter": 0,
+            "kind": "dummy_task",
+            "tasks_processed": 1,
+            "task_id": int(_TASKS[0][0]),
+        },
+    ]
+    metrics = [
+        # pop counters are counts (how many queue pops hit/missed inside
+        # the window); only the dispatch kind carries them.
+        {
+            "record_index": 0,
+            "pop_hit": 2,
+            "pop_miss": 11,
+            "shared_at_start": [0, 0, 0],
+            "shared_at_end": [0, 0, 0],
+        },
+        {"record_index": 1, "shared_at_start": [0, 0, 0], "shared_at_end": [0, 0, 0]},
+        {"record_index": 2, "shared_at_start": [0, 0, 0], "shared_at_end": [0, 0, 0]},
+    ]
+    return {
+        "schema_version": 1,
+        "streams": [
+            {
+                "platform": "a2a3",
+                "runtime": "pto",
+                "producer": "aicpu",
+                "scheduler_id": 0,
+                "worker_id": 0,
+                "core_type": "aicpu",
+                "physical_core_id": None,
+                "capture": {"committed": len(records), "dropped": 0, "truncated": False},
+                "records": records,
+                "metrics": metrics,
+            }
+        ],
+    }
+
+
+def chip_records(level: int = 1, *, schema: str = "legacy") -> dict[str, Any]:
+    """Build the records document.
+
+    level=1 mirrors AICORE_TIMING captures (no scheduler timing stream).
+    level=4 adds the scheduler task rows, scheduler phase records, and
+    one orchestrator record, so the upstream converter's join path is
+    exercised. ``schema`` picks the capture generation (see module
+    docstring); ``device``/``host`` additionally carry aicpu lifecycle
+    records whose handshake timestamp is the earliest in the file, so
+    the base-time origin lands on the lifecycle stream.
+    """
+    if schema not in ("legacy", "device", "host"):
+        raise ValueError(f"unknown capture schema: {schema!r}")
+    rows = _aicore_rows()
+    metadata: dict[str, Any] = {
+        "clock_freq_hz": CLOCK_FREQ_HZ,
+        "num_cores": NUM_CORES,
+        "core_types": CORE_TYPES,
+        "core_to_thread": CORE_TO_THREAD,
+    }
     payload: dict[str, Any] = {
         "chip_swimlane_level": level,
-        "metadata": {
-            "clock_freq_hz": CLOCK_FREQ_HZ,
-            "num_cores": NUM_CORES,
-            "core_types": CORE_TYPES,
-            "core_to_thread": CORE_TO_THREAD,
-        },
+        "metadata": metadata,
         "aicore_tasks": rows,
     }
     if level == 1:
-        payload["aicpu_tasks"] = []
-        payload["aicpu_scheduler_phases"] = []
-        payload["aicpu_orchestrator_phases"] = []
+        if schema == "legacy":
+            payload["aicpu_tasks"] = []
+            payload["aicpu_scheduler_phases"] = []
+            payload["aicpu_orchestrator_phases"] = []
+        else:
+            payload["scheduler_tasks"] = {"schema_version": 1, "producer": "aicpu", "records": []}
+            payload["scheduler_records"] = {"schema_version": 1, "streams": []}
         return payload
 
-    # r2s is 0 in the synthetic rows, so receive == start; dispatch sits
-    # 100 cycles earlier and finish 50 cycles after end.
-    payload["aicpu_tasks"] = [
-        [core, row_index, start_c - 100, end_c + 50]
-        for core, _task, row_index, start_c, end_c, _aux in rows
-    ]
-    if level == 4:
-        first_dispatch = rows[0][3] - 100
-        payload["aicpu_scheduler_phases"] = [
-            [
-                {
-                    "kind": "dispatch",
-                    "start_cycles": first_dispatch,
-                    "end_cycles": first_dispatch + 20,
-                    "loop_iter": 0,
-                    "tasks_processed": 3,
-                    "pop_hit": True,
-                    "pop_miss": False,
-                    "shared_at_start": 0,
-                    "shared_at_end": 0,
-                }
-            ]
-        ]
-        payload["aicpu_orchestrator_phases"] = [
-            [
-                {
-                    "submit_idx": 0,
-                    "task_id": int(_TASKS[0][0]),
-                    "start_cycles": first_dispatch - 20,
-                    "end_cycles": first_dispatch,
-                }
-            ]
+    first_dispatch = rows[0][3] - 100
+    if schema == "legacy":
+        payload["aicpu_tasks"] = [
+            [core, row_index, start_c - 100, end_c + 50]
+            for core, _task, row_index, start_c, end_c, _aux in rows
         ]
     else:
-        payload["aicpu_scheduler_phases"] = []
-        payload["aicpu_orchestrator_phases"] = []
+        payload["scheduler_tasks"] = _scheduler_task_section(rows)
+        # Earliest timestamp in the whole capture: the lifecycle handshake
+        # precedes every task/scheduler stream, pinning base_time to it.
+        payload["aicpu_lifecycle_records"] = [
+            {
+                "aicpu_thread_id": 0,
+                "handshake_start_cycles": first_dispatch - 500,
+                "handshake_complete_cycles": first_dispatch - 400,
+            }
+        ]
+
+    if level == 4:
+        if schema == "legacy":
+            payload["aicpu_scheduler_phases"] = [
+                [
+                    {
+                        "kind": "dispatch",
+                        "start_cycles": first_dispatch,
+                        "end_cycles": first_dispatch + 20,
+                        "loop_iter": 0,
+                        "tasks_processed": 3,
+                        # archived flat schema carried boolean pop flags
+                        "pop_hit": True,
+                        "pop_miss": False,
+                        "shared_at_start": 0,
+                        "shared_at_end": 0,
+                    }
+                ]
+            ]
+        else:
+            payload["scheduler_records"] = _scheduler_records_section(first_dispatch)
+        if schema == "host":
+            metadata["orchestrator_source"] = "host"
+            metadata["host_orchestration_origin_ns"] = HOST_ORIGIN_NS
+            payload["host_orchestrator_phases"] = [
+                [
+                    {
+                        "submit_idx": 0,
+                        "task_id": int(_TASKS[0][0]),
+                        "start_host_ns": HOST_ORIGIN_NS,
+                        "end_host_ns": HOST_ORIGIN_NS + 5_000,
+                    },
+                    {
+                        "submit_idx": 1,
+                        "task_id": int(_TASKS[1][0]),
+                        "start_host_ns": HOST_ORIGIN_NS + 6_000,
+                        "end_host_ns": HOST_ORIGIN_NS + 9_000,
+                    },
+                ]
+            ]
+        else:
+            payload["aicpu_orchestrator_phases"] = [
+                [
+                    {
+                        "submit_idx": 0,
+                        "task_id": int(_TASKS[0][0]),
+                        "start_cycles": first_dispatch - 20,
+                        "end_cycles": first_dispatch,
+                    }
+                ]
+            ]
+    else:
+        if schema == "legacy":
+            payload["aicpu_scheduler_phases"] = []
+            payload["aicpu_orchestrator_phases"] = []
     return payload
 
 
@@ -219,12 +359,12 @@ def name_map_doc() -> dict[str, Any]:
     }
 
 
-def generate(root: Path | str, *, level: int = 1) -> Path:
+def generate(root: Path | str, *, level: int = 1, schema: str = "legacy") -> Path:
     """Write the synthetic artifact family under ``root``; returns ``root``."""
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
     files = {
-        "chip_swimlane_records.json": chip_records(level),
+        "chip_swimlane_records.json": chip_records(level, schema=schema),
         "deps.json": deps_doc(),
         f"name_map_{PROGRAM}_{TIMESTAMP}.json": name_map_doc(),
     }
@@ -255,6 +395,9 @@ _EDGE_KEYS = frozenset(
     }
 )
 _ARG_KEYS = frozenset({"idx", "type", "tensor_id", "dtype", "shape", "start_offset", "strides"})
+_SCHEDULER_RECORD_KEYS = frozenset(
+    {"start_cycles", "end_cycles", "loop_iter", "kind", "tasks_processed", "task_id"}
+)
 
 
 def validate_fixture(root: Path | str) -> None:
@@ -269,11 +412,16 @@ def validate_fixture(root: Path | str) -> None:
 
     level = rec.get("chip_swimlane_level")
     assert level in (1, 4), f"capture level must be 1 or 4, got {level!r}"
+    schema = "legacy" if "aicpu_tasks" in rec or "aicpu_scheduler_phases" in rec else "device"
     meta = rec.get("metadata", {})
     for key in ("clock_freq_hz", "num_cores", "core_types", "core_to_thread"):
         assert key in meta, f"metadata missing {key}"
     assert meta["clock_freq_hz"] > 0
     assert meta["num_cores"] == len(meta["core_types"]) == len(meta["core_to_thread"])
+    if "host_orchestrator_phases" in rec:
+        schema = "host"
+        assert meta.get("orchestrator_source") == "host", "host phases need orchestrator_source"
+        assert "aicpu_orchestrator_phases" not in rec, "clock-domain source is ambiguous"
 
     by_core: dict[int, list[tuple[int, int]]] = {}
     executing: set[str] = set()
@@ -294,18 +442,47 @@ def validate_fixture(root: Path | str) -> None:
 
     if level >= 2:
         aicore_keys = {(row[0], row[2]) for row in rec.get("aicore_tasks", [])}
-        aicpu_rows = rec.get("aicpu_tasks") or []
-        assert len(aicpu_rows) == len(aicore_keys), "aicpu_tasks must mirror aicore rows"
+        if schema == "legacy":
+            aicpu_rows = rec.get("aicpu_tasks") or []
+        else:
+            section = rec.get("scheduler_tasks")
+            assert isinstance(section, dict) and section.get("schema_version") == 1
+            assert section.get("producer") in ("aicpu", "aicore")
+            aicpu_rows = section.get("records") or []
+            for record in rec.get("aicpu_lifecycle_records") or []:
+                assert isinstance(record, dict), f"lifecycle record: {record}"
+        assert len(aicpu_rows) == len(aicore_keys), "scheduler timing must mirror aicore rows"
         for row in aicpu_rows:
-            assert isinstance(row, list) and len(row) == 4, f"aicpu row must have 4 ints: {row}"
-            assert (row[0], row[1]) in aicore_keys, f"aicpu row unmatched: {row}"
+            assert isinstance(row, list) and len(row) == 4, f"scheduler row must have 4 ints: {row}"
+            assert (row[0], row[1]) in aicore_keys, f"scheduler row unmatched: {row}"
         if level == 4:
-            for lane in rec.get("aicpu_scheduler_phases") or []:
-                for phase in lane:
-                    assert "kind" in phase and int(phase["start_cycles"]) < int(phase["end_cycles"])
-            for lane in rec.get("aicpu_orchestrator_phases") or []:
-                for phase in lane:
-                    assert {"submit_idx", "task_id", "start_cycles", "end_cycles"} <= set(phase), phase
+            if schema == "legacy":
+                for lane in rec.get("aicpu_scheduler_phases") or []:
+                    for phase in lane:
+                        assert "kind" in phase and int(phase["start_cycles"]) < int(phase["end_cycles"])
+                for lane in rec.get("aicpu_orchestrator_phases") or []:
+                    for phase in lane:
+                        assert {"submit_idx", "task_id", "start_cycles", "end_cycles"} <= set(phase), phase
+            else:
+                section = rec.get("scheduler_records")
+                assert isinstance(section, dict) and section.get("schema_version") == 1
+                for stream in section.get("streams") or []:
+                    records = stream.get("records") or []
+                    metrics = stream.get("metrics") or []
+                    for record in records:
+                        assert set(record) == _SCHEDULER_RECORD_KEYS, f"record keys: {sorted(record)}"
+                        assert int(record["start_cycles"]) < int(record["end_cycles"]), record
+                    for metric in metrics:
+                        assert 0 <= int(metric["record_index"]) < len(records), metric
+                        assert not (_SCHEDULER_RECORD_KEYS & set(metric) - {"record_index"}), metric
+                if schema == "device":
+                    for lane in rec.get("aicpu_orchestrator_phases") or []:
+                        for phase in lane:
+                            assert {"submit_idx", "task_id", "start_cycles", "end_cycles"} <= set(phase), phase
+                else:
+                    for lane in rec.get("host_orchestrator_phases") or []:
+                        for phase in lane:
+                            assert {"submit_idx", "task_id", "start_host_ns", "end_host_ns"} <= set(phase), phase
 
     deps_path = root / "deps.json"
     assert deps_path.is_file(), "missing deps.json"

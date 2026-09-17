@@ -392,3 +392,220 @@ def test_level4_converter_join_path(tmp_path: Path, db_file: Path) -> None:
         ).fetchone()[0] == 55.0
     finally:
         db.close()
+
+# ---------------------------------------------------------------------------
+# Current scheduler schema (scheduler_tasks + scheduler_records.streams)
+# ---------------------------------------------------------------------------
+
+
+def test_scheduler_stream_metrics_merge_and_validation(tmp_path: Path) -> None:
+    """Offline: metrics merge onto records by record_index, with the
+    upstream converter's validation rules enforced as IngestError."""
+    from profile_db.ingest.swimlane import _merge_scheduler_streams
+
+    doc = synth_artifacts.chip_records(4, schema="device")
+    lanes = _merge_scheduler_streams(doc["scheduler_records"])
+    assert len(lanes) == 1
+    dispatch, complete, dummy = lanes[0]
+    assert dispatch["kind"] == "dispatch" and dispatch["pop_hit"] == 2
+    assert dispatch["shared_at_start"] == [0, 0, 0]
+    assert "pop_hit" not in complete  # metrics only carry pop on dispatch
+    assert dummy["kind"] == "dummy_task" and dummy["task_id"] == 4294967297
+
+    section = json.loads(json.dumps(doc["scheduler_records"]))
+    section["streams"][0]["records"][0]["extra"] = 1
+    with pytest.raises(IngestError, match="exactly"):
+        _merge_scheduler_streams(section)
+
+    section = json.loads(json.dumps(doc["scheduler_records"]))
+    section["streams"][0]["metrics"][0]["record_index"] = 99
+    with pytest.raises(IngestError, match="out of range"):
+        _merge_scheduler_streams(section)
+
+    section = json.loads(json.dumps(doc["scheduler_records"]))
+    section["streams"][0]["metrics"][0]["kind"] = "complete"
+    with pytest.raises(IngestError, match="overwrites"):
+        _merge_scheduler_streams(section)
+
+    section = json.loads(json.dumps(doc["scheduler_records"]))
+    section["schema_version"] = 2
+    with pytest.raises(IngestError, match="schema_version"):
+        _merge_scheduler_streams(section)
+
+
+def test_base_time_tracks_scheduler_schema_streams() -> None:
+    """Offline: the lifecycle handshake is the earliest timestamp, so the
+    cycle origin must come from aicpu_lifecycle_records — exactly the
+    stream the archived parser never looked at."""
+    from profile_db.ingest import swimlane_us
+
+    doc = synth_artifacts.chip_records(4, schema="device")
+    lifecycle = doc["aicpu_lifecycle_records"][0]
+    assert swimlane_us.base_time_cycles(doc) == lifecycle["handshake_start_cycles"]
+    # legacy documents keep their previous origin: the orchestrator submit
+    # precedes the first scheduler dispatch there
+    legacy = synth_artifacts.chip_records(4, schema="legacy")
+    assert swimlane_us.base_time_cycles(legacy) == legacy["aicpu_orchestrator_phases"][0][0][
+        "start_cycles"
+    ]
+
+
+def test_host_mode_helpers_mirror_converter_composite() -> None:
+    """Offline: host detection, origin, and the causal-splice offset."""
+    from profile_db.ingest import swimlane_us
+
+    host = synth_artifacts.chip_records(4, schema="host")
+    device = synth_artifacts.chip_records(4, schema="device")
+    assert swimlane_us.host_mode(host) is True
+    assert swimlane_us.host_mode(device) is False
+    assert swimlane_us.host_origin_ns(host) == synth_artifacts.HOST_ORIGIN_NS
+    # (max host ns - origin) / 1000: two submits spanning 9 us
+    assert swimlane_us.host_composite_end_us(host) == 9.0
+    assert swimlane_us.host_composite_end_us(device) == 0.0
+    # non-positive cycles stay 0.0 even under the splice offset; the
+    # offset itself is added to the converted value (100 cycles = 2 us)
+    assert swimlane_us.to_us(0, 100, 50_000_000, host_offset_us=9.0) == 0.0
+    assert swimlane_us.to_us(200, 100, 50_000_000, host_offset_us=9.0) == 11.0
+
+
+def test_orchestrator_clock_domains_are_mutually_exclusive() -> None:
+    from profile_db.ingest.swimlane import _orchestrator_phase_lanes
+
+    doc = synth_artifacts.chip_records(4, schema="host")
+    doc["aicpu_orchestrator_phases"] = [
+        [{"submit_idx": 0, "task_id": 1, "start_cycles": 10, "end_cycles": 20}]
+    ]
+    with pytest.raises(IngestError, match="ambiguous"):
+        _orchestrator_phase_lanes(doc, 10)
+
+    host = synth_artifacts.chip_records(4, schema="host")
+    lanes = _orchestrator_phase_lanes(host, synth_artifacts.HOST_ORIGIN_NS)
+    assert lanes[0][0]["start_time_us"] == 0.0
+    assert lanes[0][1]["end_time_us"] == 9.0
+    assert "start_host_ns" not in lanes[0][0]
+
+
+@pytest.mark.skipif(
+    not _SIMPLER_AVAILABLE,
+    reason="requires the pypto environment (converter join path)",
+)
+def test_level4_scheduler_schema_converter_parity(tmp_path: Path, db_file: Path) -> None:
+    """Ingest a current-schema capture and pin every stored number against
+    the upstream converter, including the lifecycle-pinned cycle origin."""
+    from simpler_setup.tools.swimlane_converter import read_perf_data
+
+    source = synth_artifacts.generate(tmp_path / "cap", level=4, schema="device")
+    joined = read_perf_data(str(source / "chip_swimlane_records.json"))
+    report = ingest_capture(ProfileDB(db_file), source)
+    assert report["level"] == 4 and report["task_rows"] == 4
+
+    db = ProfileDB(db_file)
+    try:
+        conn = db.connection
+        assert _count(conn, "scheduler_phase", 1) == 3
+        rows = conn.execute(
+            "SELECT kind, task_id, t0_us, t1_us, pop_hit, pop_miss, "
+            "CAST(shared_at_start AS VARCHAR) FROM scheduler_phase "
+            "WHERE run_id = 1 ORDER BY phase_id"
+        ).fetchall()
+        # phase rows mirror the converter's converted lanes at zero tolerance
+        # (kind is spelled "phase" there); the lifecycle handshake pinned the
+        # shared cycle origin, so t0/t1 agree exactly.
+        converted = joined["aicpu_scheduler_phases"][0]
+        assert len(converted) == 3
+        for stored, reference in zip(rows, converted):
+            kind, phase_task, t0, t1, pop_hit, pop_miss, shared = stored
+            assert kind == reference["phase"]
+            assert t0 == reference["start_time_us"]
+            assert t1 == reference["end_time_us"]
+            assert pop_hit == reference.get("pop_hit")
+            assert pop_miss == reference.get("pop_miss")
+            assert json.loads(shared) == reference["shared_at_start"]
+        assert rows[0][1] is None  # dispatch acts on no single task
+        assert rows[2][1] == "4294967297"  # dummy_task carries its token
+        # joined task rows equal the converter output verbatim
+        stored_rows = {
+            (str(r[0]), int(r[1])): (r[2], r[3], r[4], r[5], r[6])
+            for r in conn.execute(
+                "SELECT task_id, core_index, start_us, end_us, dispatch_us, "
+                "receive_us, finish_us FROM task_row WHERE run_id = 1"
+            ).fetchall()
+        }
+        assert stored_rows == {
+            (str(t["task_id"]), int(t["core_id"])): (
+                float(t["start_time_us"]),
+                float(t["end_time_us"]),
+                float(t.get("dispatch_time_us") or 0.0),
+                float(t.get("receive_time_us") or 0.0),
+                float(t.get("finish_time_us") or 0.0),
+            )
+            for t in joined["tasks"]
+        }
+        span = max(r["finish_time_us"] for r in joined["tasks"]) - min(
+            r["dispatch_time_us"] for r in joined["tasks"]
+        )
+        assert conn.execute(
+            "SELECT makespan_us FROM run WHERE run_id = 1"
+        ).fetchone()[0] == span
+        cfg = conn.execute(
+            "SELECT CAST(runtime_cfg AS VARCHAR) FROM run WHERE run_id = 1"
+        ).fetchone()[0]
+        assert json.loads(cfg)["orchestrator_source"] == "aicpu"
+    finally:
+        db.close()
+
+
+@pytest.mark.skipif(
+    not _SIMPLER_AVAILABLE,
+    reason="requires the pypto environment (converter join path)",
+)
+def test_level4_host_schema_converter_parity(tmp_path: Path, db_file: Path) -> None:
+    """Host-orchestrated capture: device rows carry the causal-splice
+    offset, orchestrator phases live on the host timeline, and both match
+    the converter's composite exactly."""
+    from simpler_setup.tools.swimlane_converter import read_perf_data
+
+    source = synth_artifacts.generate(tmp_path / "cap", level=4, schema="host")
+    joined = read_perf_data(str(source / "chip_swimlane_records.json"))
+    report = ingest_capture(ProfileDB(db_file), source)
+    assert report["level"] == 4 and report["task_rows"] == 4
+
+    db = ProfileDB(db_file)
+    try:
+        conn = db.connection
+        # converter output carries host orch phases under the same key,
+        # already on the host timeline
+        orch = joined["aicpu_orchestrator_phases"]
+        assert len(orch) == 1 and len(orch[0]) == 2
+        stored_orch = conn.execute(
+            "SELECT submit_idx, task_id, t0_us, t1_us FROM orch_phase "
+            "WHERE run_id = 1 ORDER BY submit_idx"
+        ).fetchall()
+        assert stored_orch == [
+            (phase["submit_idx"], str(phase["task_id"]), phase["start_time_us"], phase["end_time_us"])
+            for phase in orch[0]
+        ]
+        # device-domain rows are offset by the host composite end (9 us);
+        # stored values equal the converter output, offset included
+        task_start = conn.execute(
+            "SELECT min(start_us) FROM task_row WHERE run_id = 1"
+        ).fetchone()[0]
+        relative = min(t["start_time_us"] for t in joined["tasks"])
+        assert task_start == relative
+        span = max(r["finish_time_us"] for r in joined["tasks"]) - min(
+            r["dispatch_time_us"] for r in joined["tasks"]
+        )
+        assert conn.execute(
+            "SELECT makespan_us FROM run WHERE run_id = 1"
+        ).fetchone()[0] == span
+        # scheduler phases are device-domain: they carry the same offset
+        phase_t0 = conn.execute(
+            "SELECT t0_us FROM scheduler_phase WHERE run_id = 1 ORDER BY phase_id LIMIT 1"
+        ).fetchone()[0]
+        assert phase_t0 == joined["aicpu_scheduler_phases"][0][0]["start_time_us"]
+        cfg = conn.execute(
+            "SELECT CAST(runtime_cfg AS VARCHAR) FROM run WHERE run_id = 1"
+        ).fetchone()[0]
+        assert json.loads(cfg)["orchestrator_source"] == "host"
+    finally:
+        db.close()

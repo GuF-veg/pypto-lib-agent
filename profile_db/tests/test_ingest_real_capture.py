@@ -12,21 +12,44 @@
 The numbers asserted here are the DESIGN.md T1 acceptance values measured
 on the Qwen3Decode level-4 capture; parity comparisons recompute the
 expected values from the upstream converter instead of hardcoding µs.
+``PFDB_REAL_CAPTURE_DIR`` points the module at any other capture (e.g. a
+fresh one from an updated runtime); the constant-pinned tests then skip
+and only the parity tests run.
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-_CAPTURE = None
-for candidate in sorted(REPO_ROOT.glob("build_output/*/dfx_outputs")):
-    if (candidate / "chip_swimlane_records.json").is_file():
-        _CAPTURE = candidate
-        break
+# The capture the T1 constants below were measured on; newer captures
+# must not silently steal the anchor slot.
+_PINNED_ANCHOR = Path("build_output") / "Qwen3Decode_20260825_101508" / "dfx_outputs"
+
+
+def _discover_capture() -> Path | None:
+    env_dir = os.environ.get("PFDB_REAL_CAPTURE_DIR")
+    if env_dir:
+        candidate = Path(env_dir)
+        return candidate if (candidate / "chip_swimlane_records.json").is_file() else None
+    anchor = REPO_ROOT / _PINNED_ANCHOR
+    if (anchor / "chip_swimlane_records.json").is_file():
+        return anchor
+    for candidate in sorted(REPO_ROOT.glob("build_output/*/dfx_outputs")):
+        if (candidate / "chip_swimlane_records.json").is_file():
+            return candidate
+    return None
+
+
+_CAPTURE = _discover_capture()
+_PINNED = _CAPTURE is not None and _CAPTURE == REPO_ROOT / _PINNED_ANCHOR
+_pinned_only = pytest.mark.skipif(
+    not _PINNED, reason="constants are pinned to the Qwen3Decode_20260825_101508 anchor"
+)
 
 pytestmark = pytest.mark.skipif(
     _CAPTURE is None,
@@ -45,6 +68,7 @@ def _count(conn, table: str) -> int:
     return int(row[0])
 
 
+@_pinned_only
 def test_real_capture_counts_and_artifacts(db_file: Path) -> None:
     pytest.importorskip("simpler_setup")
     from profile_db.db import ProfileDB
@@ -167,6 +191,7 @@ def test_sampled_tasks_match_converter_output(db_file: Path) -> None:
         db.close()
 
 
+@_pinned_only
 def test_real_capture_reingest_is_idempotent(db_file: Path) -> None:
     pytest.importorskip("simpler_setup")
     from profile_db.db import ProfileDB
@@ -311,6 +336,7 @@ def test_derived_stall_segments_sum_to_gap(db_file: Path) -> None:
         db.close()
 
 
+@_pinned_only
 def test_derived_band_distribution_matches_calibration(db_file: Path) -> None:
     """The 5-µs density index reproduces the DESIGN appendix-B numbers of
     this capture: aic 3.5% empty bands, aiv 47.7% empty (bimodal), drain
@@ -350,6 +376,7 @@ def test_derived_band_distribution_matches_calibration(db_file: Path) -> None:
         db.close()
 
 
+@_pinned_only
 def test_derived_flags_evidence_and_rederive_stable(db_file: Path) -> None:
     pytest.importorskip("simpler_setup")
     from profile_db.db import ProfileDB

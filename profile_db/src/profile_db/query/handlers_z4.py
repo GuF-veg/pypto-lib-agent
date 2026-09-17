@@ -301,11 +301,11 @@ def scheduler(conn, params: SchedulerParams) -> list[Fact]:
     facts: list[Fact] = []
     sched_rows = common.q(
         conn,
-        "SELECT lane, kind, t0_us, t1_us, tasks_processed, loop_iter FROM scheduler_phase "
+        "SELECT lane, kind, task_id, t0_us, t1_us, tasks_processed, loop_iter FROM scheduler_phase "
         "WHERE run_id = ? AND t0_us < ? AND t1_us > ? ORDER BY lane, t0_us",
         [run_id, hi, lo],
     )
-    for lane, kind, t0, t1, processed, loop in sched_rows:
+    for lane, kind, phase_task, t0, t1, processed, loop in sched_rows:
         facts.append(
             Fact(
                 "SCHED",
@@ -313,6 +313,7 @@ def scheduler(conn, params: SchedulerParams) -> list[Fact]:
                     run_id=run_id,
                     lane=lane,
                     kind=kind,
+                    task_id=phase_task,
                     t0_us=common.us(t0),
                     t1_us=common.us(t1),
                     tasks_processed=processed,

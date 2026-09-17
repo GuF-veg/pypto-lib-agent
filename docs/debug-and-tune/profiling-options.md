@@ -99,22 +99,43 @@ trace is intentionally skipped there.
 | `name_map_Qwen3Decode_<ts>.json` | `callable_id_to_name` map that resolves a task id's encoded callable index to a kernel name (`rmsnorm`, `q_proj`, …). |
 | `merged_swimlane_<ts>.json` | Perfetto-convertible merged trace (real device only). |
 
-`chip_swimlane_records.json` contains:
+`chip_swimlane_records.json` contains (current scheduler schema):
 
 - `chip_swimlane_level` — the recorded capture level.
 - `metadata` — `clock_freq_hz` (50 MHz in an observed capture, so
   1 µs = 50 cycles), `num_cores` (60 there: 20 AIC + 40 AIV),
-  `core_types`, `core_to_thread`.
+  `core_types`, `core_to_thread`; host-orchestrated captures add
+  `orchestrator_source: "host"`, `host_orchestration_origin_ns`, and a
+  `host_capture` completeness block.
 - `aicore_tasks` — one row per executed kernel block:
-  `[core_index, task_id, row_index, start_cycles, end_cycles, aux]`.
-- `aicpu_tasks` — one row per AICPU-lane task record:
-  `[lane_index, row_index, start_cycles, end_cycles]`.
-- `aicpu_scheduler_phases` — per-lane lists of scheduler phase records
-  (`kind`: `dispatch` / `complete` / `resolve` / `release`, cycle window,
-  `loop_iter`, `tasks_processed`, `pop_hit` / `pop_miss`,
-  `shared_at_start` / `shared_at_end` queue depths).
+  `[core_index, task_id, row_index, start_cycles, end_cycles,
+  receive_to_start_cycles]` (v3 shape; archived v2 rows carry 5 columns).
+- `scheduler_tasks` — `{schema_version: 1, producer, records}`; each
+  record is `[core_id, reg_task_id, dispatch_cycles, finish_cycles]`.
+  (Archived captures spell this as top-level `aicpu_tasks`.)
+- `scheduler_records` — `{schema_version: 1, streams[]}`; each stream
+  carries per-stream metadata (`scheduler_id`, `worker_id`, `capture`
+  commit/drop counters) plus:
+  - `records[]` — fixed fields `start_cycles`, `end_cycles`,
+    `loop_iter`, `kind`, `tasks_processed`, `task_id` (only
+    `dummy_task` / `predicated_skip` / `graph_prepare` kinds carry the
+    acted-on task token; others are `null`);
+  - `metrics[]` — per-record extras keyed by `record_index`:
+    `pop_hit` / `pop_miss` (dispatch kind only; counts of queue pops
+    that hit/missed inside the record's window) and the
+    `shared_at_start` / `shared_at_end` per-queue depth lists.
+  The `kind` enum: `complete`, `dispatch`, `release`, `dummy`,
+  `early_dispatch`, `resolve`, `resolve_standalone`, `dummy_task`,
+  `predicated_skip`, `drain`, `drain_prepare`, `drain_publish`,
+  `async_poll`, `graph_prepare`. (Archived captures spell this section
+  as flat `aicpu_scheduler_phases` lanes with inline metrics.)
 - `aicpu_orchestrator_phases` — per-lane lists of orchestrator submit
-  records (`submit_idx`, `task_id`, cycle window).
+  records (`submit_idx`, `task_id`, cycle window). Host-orchestrated
+  captures instead carry `host_orchestrator_phases` stamped in host
+  `CLOCK_MONOTONIC` ns (`start_host_ns` / `end_host_ns`); both keys
+  together mean an ambiguous clock domain and are rejected.
+- `aicpu_lifecycle_records` — one record per AICPU thread with
+  lifecycle handshake/config/exit cycle fields.
 
 The raw file holds **separate cycle-domain streams** (AICore clock vs
 AICPU clock). Join them only through

@@ -34,7 +34,7 @@ RECORD_NAMES = (
     "l2_perf_records.json",
 )
 
-_NAME_MAP_PATTERN = re.compile(r"^name_map_(.+)_(\d{8}_\d{6})\.json$")
+_NAME_MAP_PATTERN = re.compile(r"^name_map_(?P<program>.+?)(?:_(?P<ts>\d{8}_\d{6}))?\.json$")
 _DIR_TS_PATTERN = re.compile(r"_(20\d{6}_\d{6})$")
 
 _LEVEL_KEYS = ("chip_swimlane_level", "l2_swimlane_level")
@@ -76,9 +76,13 @@ def discover_source(path: Path | str) -> Source:
             f"capture {directory} must contain exactly one name_map_*.json (found {len(name_maps)})"
         )
     name_map = name_maps[0]
+    # Current runners name the file after the work dir (no timestamp);
+    # older ones appended _YYYYMMDD_HHMMSS. The program is everything
+    # after the prefix in both spellings, and the timestamp stays None
+    # when absent.
     match = _NAME_MAP_PATTERN.match(name_map.name)
-    program = match.group(1) if match else None
-    captured_at = match.group(2) if match else None
+    program = match.group("program") if match else None
+    captured_at = match.group("ts") if match else None
     return Source(
         path=directory,
         records=records,

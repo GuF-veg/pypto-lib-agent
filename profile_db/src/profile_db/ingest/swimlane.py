@@ -18,9 +18,15 @@ cycle origin (base_time), and the us conversion. Level-1 captures carry
 no AICPU stream at all (empty by construction upstream), so they can take
 a local conversion path that parity tests pin against the converter.
 
-Legacy records files keyed ``l2_swimlane_level`` are materialized to a
-temporary file carrying the ``chip_swimlane_level`` spelling the
-converter reads.
+Two record schemas are accepted: the current scheduler schema
+(``scheduler_tasks`` + ``scheduler_records.streams`` with per-record
+metrics, merged here exactly the way the converter merges them) and the
+archived flat keys (``aicpu_tasks`` / ``aicpu_scheduler_phases``).
+Host-orchestrated captures (``host_orchestrator_phases`` in host
+CLOCK_MONOTONIC ns) are spliced onto the same causal composite the
+converter builds. Legacy records files keyed ``l2_swimlane_level`` are
+materialized to a temporary file carrying the ``chip_swimlane_level``
+spelling the converter reads.
 """
 
 from __future__ import annotations
@@ -91,6 +97,7 @@ class Swimlane:
     rows: list[RowTime] = field(default_factory=list)
     scheduler_phases: list[list[dict[str, Any]]] = field(default_factory=list)
     orchestrator_phases: list[list[dict[str, Any]]] = field(default_factory=list)
+    orchestrator_source: str = "aicpu"  # metadata-declared producer of the stream
 
 
 def _materialize_chip_spelling(records_path: Path, records: dict[str, Any]) -> tuple[Path, bool]:
@@ -109,6 +116,92 @@ def _materialize_chip_spelling(records_path: Path, records: dict[str, Any]) -> t
     json.dump(normalized, tmp)
     tmp.close()
     return Path(tmp.name), True
+
+
+# Fixed per-record fields of scheduler_records.streams[].records[]; the
+# converter rejects any record whose key set differs.
+_SCHEDULER_RECORD_FIELDS = frozenset(
+    {"start_cycles", "end_cycles", "loop_iter", "kind", "tasks_processed", "task_id"}
+)
+
+
+def _merge_scheduler_streams(section: Any) -> list[list[dict[str, Any]]]:
+    """``scheduler_records{schema_version, streams}`` -> per-stream lanes
+    with each stream's ``metrics`` merged onto its record by
+    ``record_index``. Validation mirrors the upstream converter so a
+    corrupt stream fails loudly instead of shifting phase rows."""
+    if not isinstance(section, dict):
+        raise IngestError("scheduler_records must be an object")
+    if int(section.get("schema_version") or 0) != 1:
+        raise IngestError(f"unsupported scheduler_records schema_version: {section.get('schema_version')!r}")
+    streams = section.get("streams")
+    if not isinstance(streams, list):
+        raise IngestError("scheduler_records.streams must be an array")
+    lanes: list[list[dict[str, Any]]] = []
+    for stream_index, stream in enumerate(streams):
+        if not isinstance(stream, dict):
+            raise IngestError(f"scheduler_records.streams[{stream_index}] must be an object")
+        records = stream.get("records")
+        metrics = stream.get("metrics") or []
+        if not isinstance(records, list) or not isinstance(metrics, list):
+            raise IngestError(f"scheduler stream {stream_index} records/metrics must be arrays")
+        merged: list[dict[str, Any]] = []
+        for record_index, record in enumerate(records):
+            if not isinstance(record, dict) or set(record) != _SCHEDULER_RECORD_FIELDS:
+                raise IngestError(
+                    f"scheduler stream {stream_index} record {record_index} must contain exactly "
+                    f"{sorted(_SCHEDULER_RECORD_FIELDS)}"
+                )
+            if int(record["end_cycles"]) < int(record["start_cycles"]):
+                raise IngestError(f"scheduler stream {stream_index} record {record_index} has a negative interval")
+            merged.append(dict(record))
+        for metric in metrics:
+            if not isinstance(metric, dict) or "record_index" not in metric:
+                raise IngestError(f"scheduler stream {stream_index} has malformed metrics")
+            record_index = int(metric["record_index"])
+            if record_index < 0 or record_index >= len(merged):
+                raise IngestError(
+                    f"scheduler stream {stream_index} metric record_index {record_index} is out of range"
+                )
+            metric_values = {key: value for key, value in metric.items() if key != "record_index"}
+            overwritten = set(metric_values) & _SCHEDULER_RECORD_FIELDS
+            if overwritten:
+                raise IngestError(
+                    f"scheduler stream {stream_index} metric overwrites fixed record fields: {sorted(overwritten)}"
+                )
+            merged[record_index].update(metric_values)
+        lanes.append(merged)
+    return lanes
+
+
+def _scheduler_phase_lanes(records: dict[str, Any]) -> list[list[dict[str, Any]]]:
+    """Scheduler phase lanes in either schema; each stream is one lane and
+    the lane ordinal is the stream index (both mirror the converter)."""
+    section = records.get("scheduler_records")
+    if section is not None:
+        return _merge_scheduler_streams(section)
+    return [list(lane) for lane in records.get("aicpu_scheduler_phases") or []]
+
+
+def _orchestrator_phase_lanes(
+    records: dict[str, Any], origin_ns: int
+) -> list[list[dict[str, Any]]]:
+    """Orchestrator lanes: device-cycled ``aicpu_orchestrator_phases`` or
+    host-stamped ``host_orchestrator_phases`` (us on the host timeline,
+    relative to the origin). Both present means an ambiguous clock-domain
+    source and is rejected, mirroring the converter."""
+    device_lanes = records.get("aicpu_orchestrator_phases") or []
+    host_lanes = records.get("host_orchestrator_phases") or []
+    if device_lanes and host_lanes:
+        raise IngestError(
+            "both AICPU and host orchestrator phases are present; clock-domain source is ambiguous"
+        )
+    if host_lanes:
+        try:
+            return [[swimlane_us.host_phase_us(phase, origin_ns) for phase in lane] for lane in host_lanes]
+        except ValueError as exc:
+            raise IngestError(str(exc)) from exc
+    return [list(lane) for lane in device_lanes]
 
 
 def _core_type_of(core_id: int, metadata: dict[str, Any]) -> str:
@@ -134,7 +227,9 @@ def _raw_row_ordinals(records: dict[str, Any]) -> dict[tuple[int, int], list[int
     return by_key
 
 
-def _joined_rows_level1(records: dict[str, Any], base: int, freq: int) -> list[dict[str, Any]]:
+def _joined_rows_level1(
+    records: dict[str, Any], base: int, freq: int, host_offset_us: float
+) -> list[dict[str, Any]]:
     """Level-1 rows: no AICPU stream exists, so dispatch/finish stay 0.0
     (the converter synthesizes the same values)."""
     metadata = records.get("metadata") or {}
@@ -148,9 +243,9 @@ def _joined_rows_level1(records: dict[str, Any], base: int, freq: int) -> list[d
                 "task_id": token,
                 "core_id": core_id,
                 "core_type": _core_type_of(core_id, metadata),
-                "start_time_us": swimlane_us.to_us(start_c, base, freq),
-                "end_time_us": swimlane_us.to_us(int(raw[4]), base, freq),
-                "receive_time_us": swimlane_us.to_us(start_c - r2s, base, freq),
+                "start_time_us": swimlane_us.to_us(start_c, base, freq, host_offset_us),
+                "end_time_us": swimlane_us.to_us(int(raw[4]), base, freq, host_offset_us),
+                "receive_time_us": swimlane_us.to_us(start_c - r2s, base, freq, host_offset_us),
                 "dispatch_time_us": 0.0,
                 "finish_time_us": 0.0,
             }
@@ -177,15 +272,21 @@ def load(records_path: Path, records: dict[str, Any]) -> Swimlane:
             f"metadata num_cores={num_cores} does not match core_types length {len(core_types)}"
         )
 
+    is_host_mode = swimlane_us.host_mode(records)
+    origin_ns = swimlane_us.host_origin_ns(records)
+    host_offset_us = swimlane_us.host_composite_end_us(records) if is_host_mode else 0.0
     base = swimlane_us.base_time_cycles(records)
 
     converter_path, is_temp = _materialize_chip_spelling(records_path, records)
     try:
         if level == 1:
-            joined = {"tasks": _joined_rows_level1(records, base, clock_freq_hz)}
+            joined = {"tasks": _joined_rows_level1(records, base, clock_freq_hz, host_offset_us)}
         else:
             read_perf_data = _load_converter()
-            joined = read_perf_data(str(converter_path))
+            try:
+                joined = read_perf_data(str(converter_path))
+            except ValueError as exc:
+                raise IngestError(f"upstream converter rejected the capture: {exc}") from exc
     finally:
         if is_temp:
             converter_path.unlink(missing_ok=True)
@@ -214,16 +315,11 @@ def load(records_path: Path, records: dict[str, Any]) -> Swimlane:
             )
         )
 
-    scheduler_phases = []
-    for lane in records.get("aicpu_scheduler_phases") or []:
-        scheduler_phases.append(
-            [swimlane_us.phase_us(phase, base, clock_freq_hz) for phase in lane]
-        )
-    orchestrator_phases = []
-    for lane in records.get("aicpu_orchestrator_phases") or []:
-        orchestrator_phases.append(
-            [swimlane_us.phase_us(phase, base, clock_freq_hz) for phase in lane]
-        )
+    scheduler_phases = [
+        [swimlane_us.phase_us(phase, base, clock_freq_hz, host_offset_us) for phase in lane]
+        for lane in _scheduler_phase_lanes(records)
+    ]
+    orchestrator_phases = _orchestrator_phase_lanes(records, origin_ns)
 
     # makespan = max(FIN) - min(dispatch) (DESIGN.md 5.3). Level-1 captures
     # carry no AICPU stream, so those two columns are 0.0 placeholders and
@@ -239,8 +335,7 @@ def load(records_path: Path, records: dict[str, Any]) -> Swimlane:
     raw_rows = records.get("aicore_tasks") or []
     raw_span = (
         (max(int(r[4]) for r in raw_rows) - min(int(r[3]) for r in raw_rows))
-        * 1_000_000.0
-        / float(clock_freq_hz)
+        * (1_000_000.0 / float(clock_freq_hz))
         if raw_rows
         else 0.0
     )
@@ -256,4 +351,5 @@ def load(records_path: Path, records: dict[str, Any]) -> Swimlane:
         rows=rows,
         scheduler_phases=scheduler_phases,
         orchestrator_phases=orchestrator_phases,
+        orchestrator_source="host" if is_host_mode else "aicpu",
     )

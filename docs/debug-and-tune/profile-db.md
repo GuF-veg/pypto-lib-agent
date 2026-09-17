@@ -66,6 +66,16 @@ Optional evidence is auto-discovered when present beside/inside the capture:
 `trace.clean.json` / `visualize_data.bin`) are never copied or registered —
 only their metadata and metrics enter the database.
 
+Both capture generations are accepted: the current scheduler schema
+(`scheduler_tasks` + `scheduler_records.streams` with per-record metrics,
+`host_orchestrator_phases` on host-orchestrated runs) and the archived
+flat keys (`aicpu_tasks` / `aicpu_scheduler_phases`). Scheduler-phase
+rows store the acted-on task token (`scheduler_phase.task_id`, filled
+for `dummy_task` / `predicated_skip` / `graph_prepare` records) and the
+run's `runtime_cfg` records the `orchestrator_source` the capture
+declared. See
+[profiling-options.md](profiling-options.md) for the artifact schema.
+
 The golden harness writes `dfx_outputs/profile_capture_manifest.json` whenever
 DFX modalities were requested. Ingest uses it to distinguish `not_requested`,
 `not_emitted`, `empty`, `parse_error`, and `available`; legacy or external

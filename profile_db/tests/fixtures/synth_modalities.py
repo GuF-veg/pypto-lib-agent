@@ -86,18 +86,21 @@ def scope_stats_dir(root: Path) -> Path:
     lines = [
         json.dumps(
             {
+                # Current collector shape: per-ring capacities as lists,
+                # tensormap as a run-wide scalar ("version" was dropped).
                 "tensormap_max": 1024,
-                "heap_max": 2097152,
-                "dep_pool_max": 16384,
+                "task_window_max": [64, 64, 64],
+                "heap_max": [2097152, 1048576, 1048576],
+                "dep_pool_max": [16384, 8192, 8192],
                 "total": 4,
                 "dropped": 0,
                 "fatal": False,
             }
         ),
-        json.dumps({"site": "rmsnorm", "ring": 0, "phase": "begin", "heap": 100}),
-        json.dumps({"site": "rmsnorm", "ring": 0, "phase": "end", "heap": 500}),
-        json.dumps({"site": "q_proj", "ring": 1, "phase": "begin", "heap": 200}),
-        json.dumps({"site": "q_proj", "ring": 1, "phase": "end", "heap": 900}),
+        json.dumps({"site": "rmsnorm", "ring": 0, "phase": "begin", "heap_start": 100}),
+        json.dumps({"site": "rmsnorm", "ring": 0, "phase": "end", "heap_end": 500}),
+        json.dumps({"site": "q_proj", "ring": 1, "phase": "begin", "heap_start": 200}),
+        json.dumps({"site": "q_proj", "ring": 1, "phase": "end", "heap_end": 900}),
     ]
     (stats / "scope_stats.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return stats
