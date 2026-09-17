@@ -19,6 +19,7 @@ kernel behavior:
 
 Task mapping:
 
+- Operator development (write, verify, tune): `.claude/skills/operator-dev/SKILL.md`
 - Environment setup: `.claude/skills/setup-env/SKILL.md`
 - Kernel style pass: `.claude/skills/fmt-coding-style/SKILL.md`
 - Precision debugging: `.claude/skills/bisect-precision/SKILL.md`

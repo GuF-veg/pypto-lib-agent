@@ -1,0 +1,4 @@
+interface:
+  display_name: "PyPTO Operator Development"
+  short_description: "Write, verify, and tune a PyPTO operator end to end"
+  default_prompt: "Use $operator-dev to develop the operator: route the task to the language-guide chapters and a runnable template, write the kernel, prove it with the golden harness on -p a2a3, then baseline, capture, and query pfdb through the profile-feedback skill before each tuning decision. Report correctness and performance evidence; never fabricate numbers or skip the golden re-run after a performance edit."
