@@ -67,7 +67,16 @@ def compat_reasons(a: Mapping[str, Any], b: Mapping[str, Any]) -> list[str]:
     reasons: list[str] = []
     for key in ("program", "swimlane_level", "clock_freq_hz", "num_cores"):
         if a.get(key) != b.get(key):
-            reasons.append(f"{key} differs: {a.get(key)!r} vs {b.get(key)!r}")
+            reason = f"{key} differs: {a.get(key)!r} vs {b.get(key)!r}"
+            if key == "program":
+                # The default program name comes from the name_map filename,
+                # which carries the one-shot build-dir hash — two captures of
+                # one kernel differ unless ingest normalized them.
+                reason += (
+                    " (two captures of one kernel compare only after re-ingesting"
+                    " both with the same --program)"
+                )
+            reasons.append(reason)
     if list(a.get("core_types") or []) != list(b.get("core_types") or []):
         reasons.append(f"core_types differs: {list(a.get('core_types') or [])} vs {list(b.get('core_types') or [])}")
     return reasons

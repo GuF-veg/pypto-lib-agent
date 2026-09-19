@@ -97,7 +97,7 @@ def test_manifest_fields_complete(tmp_path: Path) -> None:
         result = _render(db, "whole", tmp_path / "r")
         manifest = result.manifest
         for key in (
-            "kind", "run_id", "params", "params_key", "generator_version",
+            "kind", "run_id", "params", "params_key", "run_fingerprint", "generator_version",
             "python_version", "matplotlib_version", "width", "height", "dpi",
             "us_per_px", "x_axis_us", "legend", "num_rows", "size_bytes",
             "sha256", "downsampled",
@@ -195,6 +195,58 @@ def test_cache_hit_is_served_and_byte_identical(tmp_path: Path) -> None:
         assert (first.image_path.with_name(first.image_path.stem + ".manifest.json")).is_file()
     finally:
         db.close()
+
+
+def _register_records_artifact(db: ProfileDB, sha256: str) -> None:
+    db.connection.execute(
+        "INSERT INTO artifact (artifact_id, run_id, kind, rel_path, sha256, size_bytes, store_mode) "
+        "VALUES (1, 1, 'chip_swimlane_records', 'dfx_outputs/chip_swimlane_records.json', ?, 10, 'link')",
+        [sha256],
+    )
+
+
+def test_render_cache_is_scoped_by_run_data(tmp_path: Path) -> None:
+    """Two databases sharing one render directory never serve each other's
+    images for a reused run_id: the cache key carries the run's records
+    sha256, so different data means a different key (regression: the key
+    once omitted the data fingerprint and stale cross-database hits were
+    served silently)."""
+    render_dir = tmp_path / "shared-render"
+    first = ProfileDB.memory()
+    second = ProfileDB.memory()
+    try:
+        _load(first)
+        _register_records_artifact(first, "a" * 64)
+        result_a = _render(first, "whole", render_dir)
+        assert result_a.cache_hit is False
+
+        # Same run_id and params in another database, but different data
+        # and therefore a different records fingerprint.
+        shifted_rows = [
+            (task_id, core, engine, start + 100.0, end + 100.0, dispatch, receive, finish)
+            for task_id, core, engine, start, end, dispatch, receive, finish in _ROWS
+        ]
+        load(
+            second,
+            core_types=("aic", "aic", "aiv", "aiv"),
+            tasks=_TASKS,
+            rows=shifted_rows,
+            edges=_EDGES,
+        )
+        _register_records_artifact(second, "b" * 64)
+        result_b = _render(second, "whole", render_dir)
+        assert result_b.cache_hit is False
+        assert result_b.params_key != result_a.params_key
+        assert result_b.sha256 != result_a.sha256
+        assert result_b.manifest["x_axis_us"] != result_a.manifest["x_axis_us"]
+
+        # Within one database the identical request still hits the cache.
+        again = _render(second, "whole", render_dir)
+        assert again.cache_hit is True
+        assert again.sha256 == result_b.sha256
+    finally:
+        first.close()
+        second.close()
 
 
 def test_cache_byte_cap_evicts_lru(tmp_path: Path) -> None:
@@ -406,6 +458,14 @@ def test_params_key_tracks_generator_version(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(cache_module, "RENDER_VERSION", "profile_db.render/x")
     after = params_key("whole", 1, {})
     assert before != after
+
+
+def test_params_key_scopes_by_run_fingerprint() -> None:
+    no_fingerprint = params_key("whole", 1, {})
+    fingerprinted = params_key("whole", 1, {}, run_fingerprint="a" * 64)
+    assert no_fingerprint != fingerprinted
+    assert params_key("whole", 1, {}, run_fingerprint="b" * 64) != fingerprinted
+    assert params_key("whole", 1, {}, run_fingerprint="a" * 64) == fingerprinted
 
 
 def test_cache_get_drops_corrupted_entry(tmp_path: Path) -> None:

@@ -34,6 +34,16 @@ _MIGRATION_NAME = re.compile(r"^(\d{4})_[A-Za-z0-9_]+\.sql$")
 # Highest migration version shipped by this package.
 SCHEMA_VERSION = 7
 
+# Artifact kinds that identify a run's records file (the accepted records
+# filenames minus ``.json``). The records file's sha256 is the run identity
+# used for idempotent ingest and for scoping the render cache; the tuple
+# lives here so both the ingest and render layers can import it.
+RECORD_KINDS = (
+    "chip_swimlane_records",
+    "l2_swimlane_records",
+    "l2_perf_records",
+)
+
 
 def discover_migrations(directory: Path = MIGRATIONS_DIR) -> dict[int, Path]:
     """Map ``version -> file`` for every migration in ``directory``."""

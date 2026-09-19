@@ -26,13 +26,8 @@ from typing import Any, Mapping, Sequence
 import duckdb
 
 from profile_db.ingest.text_evidence import redact_paths
+from profile_db.schema import RECORD_KINDS
 from profile_db.task_ids import normalize_task_id
-
-RECORD_KINDS = (
-    "chip_swimlane_records",
-    "l2_swimlane_records",
-    "l2_perf_records",
-)
 
 
 def next_id(conn: duckdb.DuckDBPyConnection, table: str, column: str) -> int:

@@ -33,6 +33,7 @@ import matplotlib
 from profile_db.errors import RenderError
 from profile_db.render import renderers
 from profile_db.render.cache import RENDER_VERSION, RenderCache, params_key
+from profile_db.schema import RECORD_KINDS
 from profile_db.render.styles import (
     DEFAULT_CACHE_MAX_BYTES,
     DEFAULT_IMAGE_MAX_BYTES,
@@ -97,6 +98,7 @@ def _manifest(
     run_id: int,
     params: Mapping[str, Any],
     key: str,
+    fingerprint: str | None,
     info: FigureInfo,
     dpi: int,
     width_px: int,
@@ -110,6 +112,7 @@ def _manifest(
         "run_id": run_id,
         "params": dict(params),
         "params_key": key,
+        "run_fingerprint": fingerprint,
         "generator_version": RENDER_VERSION,
         "python_version": _python_version(),
         "matplotlib_version": matplotlib.__version__,
@@ -127,6 +130,20 @@ def _manifest(
     if info.note is not None:
         manifest["note"] = info.note
     return manifest
+
+
+def _run_fingerprint(conn, run_id: int) -> str | None:
+    """The run's records-file sha256 (run identity), or None when the run
+    has no records artifact registered. The value scopes the render cache
+    key to one run's data, so a ``run_id`` reused by a different database
+    sharing the render directory can never hit another capture's image."""
+    placeholders = ", ".join("?" for _ in RECORD_KINDS)
+    row = conn.execute(
+        f"SELECT sha256 FROM artifact WHERE run_id = ? AND kind IN ({placeholders}) "
+        "LIMIT 1",
+        [run_id, *RECORD_KINDS],
+    ).fetchone()
+    return str(row[0]) if row and row[0] is not None else None
 
 
 def render(
@@ -148,7 +165,8 @@ def render(
     if kind not in KINDS:
         raise RenderError(f"unknown render kind {kind!r}; use one of: {', '.join(KINDS)}")
     params = _normalize_params(kind, t0_us, t1_us, task_id, core_index)
-    key = params_key(kind, run_id, params)
+    fingerprint = _run_fingerprint(conn, run_id)
+    key = params_key(kind, run_id, params, run_fingerprint=fingerprint)
 
     store = cache if cache is not None else RenderCache(Path(render_dir), max_bytes=cache_max_bytes)
 
@@ -179,6 +197,7 @@ def render(
             "run_id": run_id,
             "params": dict(params),
             "params_key": key,
+            "run_fingerprint": fingerprint,
             "generator_version": RENDER_VERSION,
             "unavailable": True,
             "note": info.note,
@@ -201,7 +220,9 @@ def render(
     png_bytes, dpi, downsampled = _rasterize(fig, image_max_bytes, DPI)
     width_px = int(round(FIGURE_WIDTH_IN * dpi))
     height_px = int(round(FIGURE_HEIGHT_IN * dpi))
-    manifest = _manifest(kind, run_id, params, key, info, dpi, width_px, height_px, png_bytes, downsampled)
+    manifest = _manifest(
+        kind, run_id, params, key, fingerprint, info, dpi, width_px, height_px, png_bytes, downsampled
+    )
     image_path = store.put(run_id, kind, key, png_bytes, manifest)
     return RenderResult(
         kind=kind,

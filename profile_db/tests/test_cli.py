@@ -61,7 +61,7 @@ def test_init_honours_pfdb_path_env(tmp_path: Path) -> None:
 def test_version_flag() -> None:
     result = _run("--version")
     assert result.returncode == 0
-    assert result.stdout.strip() == "pfdb 0.3.0"
+    assert result.stdout.strip() == "pfdb 0.3.1"
 
 
 def test_missing_command_is_usage_error() -> None:

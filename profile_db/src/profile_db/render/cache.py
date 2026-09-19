@@ -15,12 +15,15 @@ Layout (DESIGN.md 7)::
     <render_dir>/<run_id>/<kind>-<params_key>.manifest.json
 
 ``params_key`` is the SHA-256 (first 16 hex chars) of the canonical JSON
-of the render parameters plus the generator version, so a repeated
-request with identical parameters — under the same renderer identity —
-hits the same file. The cache keeps a byte budget (default 200 MB): after
-a write pushes the total over budget, the least-recently-used files are
-evicted. Access time is tracked with ``os.utime`` so hits survive process
-restarts.
+of the render parameters, the generator version, and the run's data
+fingerprint (the records-file sha256 that defines run identity), so a
+repeated request with identical parameters — under the same renderer
+identity and the same run data — hits the same file. Two databases that
+share one render directory never collide: different data means a
+different fingerprint means a different key. The cache keeps a byte
+budget (default 200 MB): after a write pushes the total over budget, the
+least-recently-used files are evicted. Access time is tracked with
+``os.utime`` so hits survive process restarts.
 """
 
 from __future__ import annotations
@@ -42,13 +45,27 @@ _PNG_SUFFIX = ".png"
 RENDER_VERSION = "profile_db.render/2"
 
 
-def params_key(kind: str, run_id: int, params: Mapping[str, Any]) -> str:
-    """Deterministic 16-hex-char cache key for one render request."""
+def params_key(
+    kind: str,
+    run_id: int,
+    params: Mapping[str, Any],
+    run_fingerprint: str | None = None,
+) -> str:
+    """Deterministic 16-hex-char cache key for one render request.
+
+    ``run_fingerprint`` is the run's records-file sha256 (the same value
+    that defines run identity for idempotent ingest). It scopes the key
+    to one run's data: renders of a reused ``run_id`` in a different (or
+    rebuilt) database miss instead of serving another capture's image.
+    ``None`` (no records artifact registered) degrades to the empty
+    fingerprint.
+    """
     canonical = json.dumps(
         {
             "kind": kind,
             "run_id": run_id,
             "version": RENDER_VERSION,
+            "run_fingerprint": run_fingerprint or "",
             **dict(sorted(params.items())),
         },
         ensure_ascii=True,

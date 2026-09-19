@@ -71,7 +71,7 @@ Do not bind the wrong `build_output/_jit_*` timestamp. Ingest the
 
 | Command | What it does |
 |---|---|
-| `pfdb ingest <dfx_outputs> [--platform …] [--rank …] [--bench "min=… median=… mean=… max=… rounds=…"] [--bench-log <file>]… [--copy] [--no-prune]` | Turn one existing capture directory into a run. Link mode by default. Each `--bench-log` is one independent raw-sample stratum. Idempotent. Auto-prunes to the latest 3 runs after ingest. |
+| `pfdb ingest <dfx_outputs> [--program …] [--platform …] [--rank …] [--bench "min=… median=… mean=… max=… rounds=…"] [--bench-log <file>]… [--copy] [--no-prune]` | Turn one existing capture directory into a run. Link mode by default. Each `--bench-log` is one independent raw-sample stratum. Idempotent. Auto-prunes to the latest 3 runs after ingest. Pass the same `--program` for every capture of one kernel: the default name embeds the one-shot build-dir hash, and `compare` / `baseline diff` refuse runs whose program differs. |
 | `pfdb ingest-incore <collection> --run <id>` | Attach an in-core simulator collection (`manifest_export.csv`) to an existing run. Raw traces are never copied. |
 
 **Campaigns longer than three captures must pass `--no-prune`.** Auto-keep-3

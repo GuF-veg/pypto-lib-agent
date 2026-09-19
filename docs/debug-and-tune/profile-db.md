@@ -140,10 +140,14 @@ pfdb render core   --run 1 --core 5
 
 Each render writes `<db>/.pfdb/render/<run>/<kind>-<params_key>.png` plus a
 same-named `.manifest.json` (sha256, size, µs/px, legend, generator and
-matplotlib versions). Repeated requests with identical parameters hit the cache
-and are byte-identical; the cache key includes the generator version, so a
-renderer upgrade invalidates old entries as one unit. A cached PNG whose bytes
-no longer match its manifest sha256 is dropped and re-rendered.
+matplotlib versions, run fingerprint). Repeated requests with identical
+parameters hit the cache and are byte-identical; the cache key includes the
+generator version (a renderer upgrade invalidates old entries as one unit)
+and the run's data fingerprint (the records-file sha256 that defines run
+identity), so two databases sharing one render directory — or a rebuilt
+database reusing run ids — never serve another capture's cached image. A
+cached PNG whose bytes no longer match its manifest sha256 is dropped and
+re-rendered.
 
 Every figure is self-describing on the multimodal channel: the legend is drawn
 in the image (below the axes, never covering data), core rows carry integer

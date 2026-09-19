@@ -465,8 +465,9 @@ STALL ready_us=... dispatch_us=... receive_us=... start_us=...
 - **确定性**：样式参数集中在一个常量模块；同 `(run, kind, params)` 渲染结果
   SHA-256 稳定（Python/matplotlib 版本记录在清单里）。
 - **缓存与清单**：`render/<run>/<kind>-<params_key>.png` + 同名
-  `<kind>-<params_key>.manifest.json`（宽高、µs/px、图例、生成版本）。缓存随库作废
-  （prune 连带清理），重复请求命中缓存。
+  `<kind>-<params_key>.manifest.json`（宽高、µs/px、图例、生成版本、run 指纹）。缓存随库作废
+  （prune 连带清理），重复请求命中缓存；缓存键含 run 数据指纹（records
+  sha256，即 run 身份），同目录多库或重建库复用 run_id 时不会串图。
 - **预算**：图像受尺寸/字节上限约束，超限自动降采样并在 manifest 标注。
 - 文本模型路径：查询返回 `IMAGE` fact（清单元数据），模型可忽略像素只用
   语义事实；多模态模型请求实际图像。

@@ -142,6 +142,9 @@ def test_compare_incompatible_rejected(tmp_path: Path) -> None:
             db.compare(1, 2)
         assert "not comparable" in str(exc.value)
         assert "program differs" in str(exc.value)
+        # The program mismatch carries the normalization hint: the default
+        # program name embeds the one-shot build-dir hash.
+        assert "--program" in str(exc.value)
     finally:
         db.close()
 

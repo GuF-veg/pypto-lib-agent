@@ -45,8 +45,9 @@
   why-late 一致）/ R3 core（空闲段着色），确定性样式常量 + Agg 后端；
   图内图例（坐标区下方，不遮数据）、整数核刻度；缓存
   `<kind>-<params_key>.png` + 同名 `.manifest.json`（SHA-256、尺寸、µs/px、
-  图例、生成版本，缓存键含生成器版本、升级即整体失效），字节预算超限
-  自动降采样、总量上限 LRU 逐出；`ProfileDB.render(...)` 与 CLI
+  图例、生成版本、run 指纹；缓存键含生成器版本与 run 数据指纹
+  （records sha256），多库共享渲染目录或重建库复用 run_id 均不串图），
+  字节预算超限自动降采样、总量上限 LRU 逐出；`ProfileDB.render(...)` 与 CLI
   `pfdb render` 均返回 `IMAGE` fact（含 `legend` 映射）+ `ImageRef`，
   同参数重复渲染 SHA-256 逐字节一致，空窗/无边任务/未知目标不崩。
 - ✅ T7 MCP 服务：`pfdb serve --mcp`（stdio、会话级生命周期、不常驻）——
