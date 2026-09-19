@@ -147,3 +147,7 @@ installed: run it from the repository root so that `golden` is importable, and
 pass `-p`/`-d` to choose a device or simulator. The full story, including the
 `g++-15` toolchain shim that simulator runs need, is in
 [Compiling and Running](09-compiling-and-running.md).
+
+## The git commit hash of PyPTO
+
+This documents based on the `2f892f96` commit of `main` branch of PyPTO.
