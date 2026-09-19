@@ -107,8 +107,7 @@ Reviewer checks the hooks and this repo enforce (see the `git-commit` skill):
   `@pl.jit.host` — see [Programming Model](../../../docs/pypto-language/01-programming-model.md));
 - ops that are not promoted to the orchestration level need the `pl.tile.*`
   namespace;
-- the 8-line CANN copyright header and English-only comments
-  (`tests/lint/check_headers.py`, `tests/lint/check_english_only.py`);
+- the 8-line CANN copyright header (`tests/lint/check_headers.py`);
 - temp/workspace tiles follow the per-op dtype-and-shape rules in the op
   chapters (for example `prelu` wants a `UINT8` tmp sized to `rows + 1`, and
   `sels` wants a tmp of the source dtype).

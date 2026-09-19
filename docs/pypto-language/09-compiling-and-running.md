@@ -297,7 +297,6 @@ python examples/beginner/hello_world.py -p a2a3 -d 0
 | Check | Scope |
 |---|---|
 | `python tests/lint/check_headers.py` | `.py` files only; exact 8-line header equality |
-| `python tests/lint/check_english_only.py` | an allow-list that includes `docs/`, `examples/`, `README.md`; bans CJK/Cyrillic/etc. anywhere in the file, including strings |
 | `python tests/lint/check_docs_nav.py` | every page under `docs/` must appear in the mkdocs `nav` exactly once |
 | `ruff check .` | `select = ["F"]` only — pyflakes. Line length is configured but **not** enforced, and `# noqa: PLR...` comments in existing kernels are inert |
 

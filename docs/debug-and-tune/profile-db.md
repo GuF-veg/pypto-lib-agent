@@ -230,7 +230,7 @@ Before tagging a `profile_db` release, confirm all of the following:
 
 - [ ] `pytest profile_db/tests -v` passes offline (no device, no network);
 - [ ] `python -m ruff check profile_db tools --config ruff.toml` is clean;
-- [ ] `pre-commit run --all-files` is 4/4 (headers, english-only, public-docs, ruff);
+- [ ] `pre-commit run --all-files` is 3/3 (headers, public-docs, ruff);
 - [ ] `PYTHONPATH=profile_db/src lint-imports` keeps the layering contract;
 - [ ] `pfdb --help` and every command shown in this guide runs against a
       synthetic capture (`profile_db/tests/fixtures/synth_artifacts.py`);

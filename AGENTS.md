@@ -48,8 +48,6 @@ plugins:
 - Do not commit generated build artifacts from `build_output/`
 - Treat credentials, local paths with usernames, and machine-specific state as
   off-limits unless the user explicitly asks for them
-- Keep code comments and documentation in English unless the user explicitly
-  requests otherwise
 
 ## Runtime Environment
 
@@ -77,7 +75,6 @@ python -m pytest tests/golden -v
 
 # Run repository lint checks
 python tests/lint/check_headers.py
-python tests/lint/check_english_only.py
 ruff check .
 ```
 

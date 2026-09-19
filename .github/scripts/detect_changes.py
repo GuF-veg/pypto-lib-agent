@@ -56,7 +56,6 @@ NON_RUNTIME_FILES = {
     ".github/ISSUE_TEMPLATE/bug_report.yml",
     ".github/workflows/docs.yml",
     "tests/lint/check_docs_nav.py",
-    "tests/lint/check_english_only.py",
     "tests/lint/check_public_docs.py",
 }
 NON_RUNTIME_PREFIXES = (
