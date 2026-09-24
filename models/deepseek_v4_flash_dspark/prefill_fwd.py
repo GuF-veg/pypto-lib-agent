@@ -18,10 +18,10 @@ import pypto.language.distributed as pld
 from golden import run
 from pypto.ir import DistributedConfig
 
-from dspark_proj import MAIN_HIDDEN_DIM, TARGET_LAYER_IDS
 from moe import (
     AUX_PAD,
     D,
+    EXPERTS_PER_RANK,
     HC_DIM,
     HC_MULT,
     IDX_PAD,
@@ -48,6 +48,7 @@ from prefill_swa import (
 from prefill_hca import (
     COMPRESS_RATIO as HCA_COMPRESS_RATIO,
     HCA_CMP_BLOCK_NUM,
+    CMP_STORAGE_BLOCK_SIZE as HCA_CMP_STORAGE_BLOCK_SIZE,
     HCA_STATE_BLOCK_NUM,
     HCA_STATE_BLOCK_SIZE,
     HCA_STATE_MAX_BLOCKS,
@@ -94,9 +95,7 @@ from prefill_cp_token_allgather import (
 )
 from prefill_metadata import QUERY_START_LOC_DYN, REQUESTS_DYN, lower_local_request_ids
 from prefill_o_proj import (
-    O_PROJ_LOCAL_COLS,
     O_PROJ_LOCAL_GROUPS,
-    O_PROJ_SCRATCH_COLS,
     O_PROJ_SCRATCH_D,
     O_PROJ_SCRATCH_GROUPS,
     O_PROJ_SCRATCH_INPUT,
@@ -137,16 +136,19 @@ MODEL_NUM_LAYERS = MODEL_CONFIG.num_hidden_layers
 FWD_NUM_LAYERS = 43
 CSA_NUM_LAYERS = 21
 HCA_NUM_LAYERS = 20
-HCA_CMP_STORAGE_BLOCK_SIZE = BLOCK_SIZE
 CSA_CMP_STORAGE_BLOCK_SIZE = BLOCK_SIZE
 HCA_COMPRESS_STATE_DIM = 2 * HCA_MAIN_OUT_DIM
 CSA_COMPRESS_STATE_DIM = 2 * CSA_MAIN_OUT_DIM
 CSA_INNER_COMPRESS_STATE_DIM = 2 * INNER_OUT_DIM
 # Layer schedule: SWA 0-1, CSA even 2-42, and HCA odd 3-41.
 
-# Runtime ring heaps by scope depth.
-PREFILL_RING_HEAP = (2 * 1024 * 1024 * 1024, 2 * 1024 * 1024 * 1024, 4 * 1024 * 1024 * 1024, 8 * 1024 * 1024 * 1024)
+# Runtime ring heaps by scope depth, halved to fit the EP8 density default
+# (32 experts/rank) -- matches pypto-serving's own halved EP8 CI profile.
+PREFILL_RING_HEAP = (1 * 1024 * 1024 * 1024, 1 * 1024 * 1024 * 1024, 2 * 1024 * 1024 * 1024, 4 * 1024 * 1024 * 1024)
 LM_HEAD_COMM_EPOCH = 1
+
+TARGET_LAYER_IDS = (40, 41, 42)  # dspark_target_layer_ids
+MAIN_HIDDEN_DIM = len(TARGET_LAYER_IDS) * D
 
 # tiling
 LOGITS_ZERO_TILE = 4096
@@ -234,7 +236,13 @@ RESIDENT_WEIGHT_NAMES = frozenset(
 # Resident attention tensors selected by layer inside each child.
 ATTENTION_RESIDENT_NAMES = RESIDENT_WEIGHT_NAMES.difference(MOE_LAYER_STACKED_NAMES)
 ATTENTION_LAYER_STACKED_NAMES = ATTENTION_RESIDENT_NAMES
-FLATTENED_LAYER_STACKED_NAMES = frozenset(MOE_LAYER_STACKED_NAMES).union(ATTENTION_LAYER_STACKED_NAMES, CACHE_NAMES)
+# NZ weights that stack their layers on a new leading axis instead of the row
+# axis: NZ cannot address a row window, so `_make_stacked_spec` must stack
+# (torch.stack) rather than flatten (torch.cat) these onto the existing row axis.
+NZ_ROW_STACKED_NAMES = frozenset({"wq_a", "wq_b", "shared_w1", "shared_w3", "shared_w2", "csa_weights_proj"})
+FLATTENED_LAYER_STACKED_NAMES = frozenset(MOE_LAYER_STACKED_NAMES).union(
+    ATTENTION_LAYER_STACKED_NAMES, CACHE_NAMES,
+).difference(NZ_ROW_STACKED_NAMES)
 
 # Rank-sharded resident caches.
 RESIDENT_CACHE_NAMES = frozenset(CACHE_NAMES)
@@ -248,7 +256,7 @@ def _copy_target_hc_row(
     source: pl.Tensor,
     target: pl.Out[pl.Tensor],
 ):
-    """Copy one post-layer HC row into the fused target-head input."""
+    """Preserve one auxiliary HC row before the next layer overwrites it."""
     token = pl.tile.get_block_idx()
     row = pl.load(source, [token, 0, 0], [1, HC_MULT, D])
     target = pl.store(row, [token, 0, 0], target)
@@ -263,8 +271,8 @@ def prefill_fwd(
     hc_attn_scale: pl.Tensor[[FWD_NUM_LAYERS * 3], pl.FP32],
     hc_attn_base: pl.Tensor[[FWD_NUM_LAYERS * MIX_HC], pl.FP32],
     attn_norm_w: pl.Tensor[[FWD_NUM_LAYERS * D], pl.BF16],
-    wq_a: pl.Tensor[[FWD_NUM_LAYERS * D, Q_LORA], pl.BF16],
-    wq_b: pl.Tensor[[FWD_NUM_LAYERS * Q_LORA, H * HEAD_DIM], pl.INT8],
+    wq_a: pl.Tensor[[FWD_NUM_LAYERS, D, Q_LORA], pl.BF16, pl.NZ],
+    wq_b: pl.Tensor[[FWD_NUM_LAYERS, Q_LORA, H * HEAD_DIM], pl.INT8, pl.NZ],
     wq_b_scale: pl.Tensor[[FWD_NUM_LAYERS * H * HEAD_DIM], pl.FP32],
     wkv: pl.Tensor[[FWD_NUM_LAYERS * D, HEAD_DIM], pl.BF16],
     gamma_cq: pl.Tensor[[FWD_NUM_LAYERS * Q_LORA], pl.BF16],
@@ -272,7 +280,7 @@ def prefill_fwd(
     kv_cache: pl.InOut[pl.Tensor[[FWD_ORI_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
     attn_sink: pl.Tensor[[FWD_NUM_LAYERS * H], pl.FP32],
     wo_a: pl.Tensor[[FWD_NUM_LAYERS * O_PROJ_LOCAL_GROUPS, O_LORA, O_GROUP_IN], pl.BF16],
-    wo_b: pl.Tensor[[FWD_NUM_LAYERS * D, O_PROJ_LOCAL_COLS], pl.INT8],
+    wo_b: pl.Tensor[[FWD_NUM_LAYERS * O_PROJ_LOCAL_GROUPS, D, O_LORA], pl.INT8],
     wo_b_scale: pl.Tensor[[FWD_NUM_LAYERS * D], pl.FP32],
     hca_cmp_kv: pl.InOut[pl.Tensor[[FWD_HCA_CMP_BLOCK_NUM_DYN, HCA_CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
     csa_cmp_kv: pl.InOut[pl.Tensor[[FWD_CSA_CMP_BLOCK_NUM_DYN, CSA_CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
@@ -289,7 +297,7 @@ def prefill_fwd(
     csa_hadamard_idx: pl.Tensor[[CSA_NUM_LAYERS * IDX_HEAD_DIM, IDX_HEAD_DIM], pl.BF16],
     csa_idx_wq_b: pl.Tensor[[CSA_NUM_LAYERS * Q_LORA, IDX_N_HEADS * IDX_HEAD_DIM], pl.INT8],
     csa_idx_wq_b_scale: pl.Tensor[[CSA_NUM_LAYERS * IDX_N_HEADS * IDX_HEAD_DIM], pl.FP32],
-    csa_weights_proj: pl.Tensor[[CSA_NUM_LAYERS * D, IDX_N_HEADS], pl.BF16],
+    csa_weights_proj: pl.Tensor[[CSA_NUM_LAYERS, D, IDX_N_HEADS], pl.BF16, pl.NZ],
     csa_inner_wkv: pl.Tensor[[CSA_NUM_LAYERS * INNER_OUT_DIM, D], pl.BF16],
     csa_inner_wgate: pl.Tensor[[CSA_NUM_LAYERS * INNER_OUT_DIM, D], pl.BF16],
     csa_inner_ape: pl.Tensor[[CSA_NUM_LAYERS * CSA_COMPRESS_RATIO, INNER_OUT_DIM], pl.FP32],
@@ -329,20 +337,20 @@ def prefill_fwd(
     gate_w: pl.Tensor[[FWD_NUM_LAYERS * N_EXPERTS_GLOBAL, D], pl.FP32],
     gate_bias: pl.Tensor[[FWD_NUM_LAYERS * N_EXPERTS_GLOBAL], pl.FP32],
     tid2eid: pl.Tensor[[FWD_NUM_LAYERS * VOCAB, TOPK], pl.INT32],
-    routed_w1: pl.Tensor[[FWD_NUM_LAYERS * N_LOCAL, MOE_INTER, D], pl.INT8],
+    routed_w1: pl.Tensor[[FWD_NUM_LAYERS * N_LOCAL, MOE_INTER, D], pl.INT8, pl.NZ],
     routed_w1_scale: pl.Tensor[[FWD_NUM_LAYERS * N_LOCAL, MOE_INTER], pl.FP32],
-    routed_w3: pl.Tensor[[FWD_NUM_LAYERS * N_LOCAL, MOE_INTER, D], pl.INT8],
+    routed_w3: pl.Tensor[[FWD_NUM_LAYERS * N_LOCAL, MOE_INTER, D], pl.INT8, pl.NZ],
     routed_w3_scale: pl.Tensor[[FWD_NUM_LAYERS * N_LOCAL, MOE_INTER], pl.FP32],
-    routed_w2: pl.Tensor[[FWD_NUM_LAYERS * N_LOCAL, D, MOE_INTER], pl.INT8],
+    routed_w2: pl.Tensor[[FWD_NUM_LAYERS * N_LOCAL, D, MOE_INTER], pl.INT8, pl.NZ],
     routed_w2_scale: pl.Tensor[[FWD_NUM_LAYERS * N_LOCAL, D], pl.FP32],
-    shared_w1: pl.Tensor[[FWD_NUM_LAYERS * MOE_INTER, D], pl.INT8],
+    shared_w1: pl.Tensor[[FWD_NUM_LAYERS, MOE_INTER, D], pl.INT8, pl.NZ],
     shared_w1_scale: pl.Tensor[[FWD_NUM_LAYERS * MOE_INTER], pl.FP32],
-    shared_w3: pl.Tensor[[FWD_NUM_LAYERS * MOE_INTER, D], pl.INT8],
+    shared_w3: pl.Tensor[[FWD_NUM_LAYERS, MOE_INTER, D], pl.INT8, pl.NZ],
     shared_w3_scale: pl.Tensor[[FWD_NUM_LAYERS * MOE_INTER], pl.FP32],
-    shared_w2: pl.Tensor[[FWD_NUM_LAYERS * D, MOE_INTER], pl.INT8],
+    shared_w2: pl.Tensor[[FWD_NUM_LAYERS, D, MOE_INTER], pl.INT8, pl.NZ],
     shared_w2_scale: pl.Tensor[[FWD_NUM_LAYERS * D], pl.FP32],
     o_proj_wo_a_full: pl.Out[pl.Tensor[[O_PROJ_SCRATCH_GROUPS, O_PROJ_SCRATCH_RANK, O_PROJ_SCRATCH_INPUT], pl.BF16]],
-    o_proj_wo_b_full: pl.Out[pl.Tensor[[O_PROJ_SCRATCH_D, O_PROJ_SCRATCH_COLS], pl.INT8]],
+    o_proj_wo_b_full: pl.Out[pl.Tensor[[O_PROJ_SCRATCH_GROUPS, O_PROJ_SCRATCH_D, O_LORA], pl.INT8]],
     attn_stage: pl.InOut[pl.Tensor[[FWD_GROUP_TOKENS_DYN, HC_MULT, D], pl.FP32]],
     x_mixed: pl.Out[pl.Tensor[[FWD_GROUP_TOKENS_DYN, D], pl.BF16]],
     post_ffn: pl.Out[pl.Tensor[[FWD_GROUP_TOKENS_DYN, HC_MULT], pl.FP32]],
@@ -352,7 +360,7 @@ def prefill_fwd(
     hc_head_scale: pl.Tensor[[1], pl.FP32],
     hc_head_base: pl.Tensor[[HC_MULT], pl.FP32],
     final_norm_w: pl.Tensor[[D], pl.BF16],
-    lm_head_weight: pl.Tensor[[VOCAB_PER_TP, D], pl.BF16],
+    lm_head_weight: pl.Tensor[[VOCAB_PER_TP, D], pl.BF16, pl.NZ],
     logit_row_indices: pl.Tensor[[MAX_LOGIT_ROWS], pl.INT32],
     dspark_target_hidden: pl.Out[pl.Tensor[[FWD_TOKENS_DYN, MAIN_HIDDEN_DIM], pl.BF16]],
     x_out: pl.Out[pl.Tensor[[FWD_GROUP_TOKENS_DYN, D], pl.BF16]],
@@ -443,8 +451,8 @@ def prefill_fwd(
         hc_attn_scale_l0 = pl.slice(hc_attn_scale, [3], [scale_start_l0])
         hc_attn_base_l0 = pl.slice(hc_attn_base, [MIX_HC], [mix_start_l0])
         attn_norm_w_l0 = pl.slice(attn_norm_w, [D], [d_start_l0])
-        wq_a_l0 = pl.slice(wq_a, [D, Q_LORA], [d_start_l0, 0])
-        wq_b_l0 = pl.slice(wq_b, [Q_LORA, H * HEAD_DIM], [q_lora_start_l0, 0])
+        wq_a_l0 = wq_a[layer_l0]
+        wq_b_l0 = wq_b[layer_l0]
         wq_b_scale_l0 = pl.slice(wq_b_scale, [H * HEAD_DIM], [q_head_start_l0])
         wkv_l0 = pl.slice(wkv, [D, HEAD_DIM], [d_start_l0, 0])
         gamma_cq_l0 = pl.slice(gamma_cq, [Q_LORA], [q_lora_start_l0])
@@ -452,7 +460,7 @@ def prefill_fwd(
         kv_cache_l0 = pl.slice(kv_cache, [ori_block_num, BLOCK_SIZE, 1, HEAD_DIM], [layer_l0 * ori_block_num, 0, 0, 0])
         attn_sink_l0 = pl.slice(attn_sink, [H], [attn_head_start_l0])
         wo_a_l0 = pl.slice(wo_a, [O_PROJ_LOCAL_GROUPS, O_LORA, O_GROUP_IN], [o_proj_group_start_l0, 0, 0])
-        wo_b_l0 = pl.slice(wo_b, [D, O_PROJ_LOCAL_COLS], [d_start_l0, 0])
+        wo_b_l0 = pl.slice(wo_b, [O_PROJ_LOCAL_GROUPS, D, O_LORA], [o_proj_group_start_l0, 0, 0])
         wo_b_scale_l0 = pl.slice(wo_b_scale, [D], [d_start_l0])
 
         hc_ffn_fn_l0 = pl.slice(hc_ffn_fn, [MIX_HC, HC_DIM], [mix_start_l0, 0])
@@ -468,11 +476,11 @@ def prefill_fwd(
         routed_w3_scale_l0 = pl.slice(routed_w3_scale, [N_LOCAL, MOE_INTER], [local_expert_start_l0, 0])
         routed_w2_l0 = pl.slice(routed_w2, [N_LOCAL, D, MOE_INTER], [local_expert_start_l0, 0, 0])
         routed_w2_scale_l0 = pl.slice(routed_w2_scale, [N_LOCAL, D], [local_expert_start_l0, 0])
-        shared_w1_l0 = pl.slice(shared_w1, [MOE_INTER, D], [moe_start_l0, 0])
+        shared_w1_l0 = shared_w1[layer_l0]
         shared_w1_scale_l0 = pl.slice(shared_w1_scale, [MOE_INTER], [moe_start_l0])
-        shared_w3_l0 = pl.slice(shared_w3, [MOE_INTER, D], [moe_start_l0, 0])
+        shared_w3_l0 = shared_w3[layer_l0]
         shared_w3_scale_l0 = pl.slice(shared_w3_scale, [MOE_INTER], [moe_start_l0])
-        shared_w2_l0 = pl.slice(shared_w2, [D, MOE_INTER], [d_start_l0, 0])
+        shared_w2_l0 = shared_w2[layer_l0]
         shared_w2_scale_l0 = pl.slice(shared_w2_scale, [D], [d_start_l0])
 
         with pl.scope():
@@ -535,8 +543,8 @@ def prefill_fwd(
         hc_attn_scale_l1 = pl.slice(hc_attn_scale, [3], [scale_start_l1])
         hc_attn_base_l1 = pl.slice(hc_attn_base, [MIX_HC], [mix_start_l1])
         attn_norm_w_l1 = pl.slice(attn_norm_w, [D], [d_start_l1])
-        wq_a_l1 = pl.slice(wq_a, [D, Q_LORA], [d_start_l1, 0])
-        wq_b_l1 = pl.slice(wq_b, [Q_LORA, H * HEAD_DIM], [q_lora_start_l1, 0])
+        wq_a_l1 = wq_a[layer_l1]
+        wq_b_l1 = wq_b[layer_l1]
         wq_b_scale_l1 = pl.slice(wq_b_scale, [H * HEAD_DIM], [q_head_start_l1])
         wkv_l1 = pl.slice(wkv, [D, HEAD_DIM], [d_start_l1, 0])
         gamma_cq_l1 = pl.slice(gamma_cq, [Q_LORA], [q_lora_start_l1])
@@ -544,7 +552,7 @@ def prefill_fwd(
         kv_cache_l1 = pl.slice(kv_cache, [ori_block_num, BLOCK_SIZE, 1, HEAD_DIM], [layer_l1 * ori_block_num, 0, 0, 0])
         attn_sink_l1 = pl.slice(attn_sink, [H], [attn_head_start_l1])
         wo_a_l1 = pl.slice(wo_a, [O_PROJ_LOCAL_GROUPS, O_LORA, O_GROUP_IN], [o_proj_group_start_l1, 0, 0])
-        wo_b_l1 = pl.slice(wo_b, [D, O_PROJ_LOCAL_COLS], [d_start_l1, 0])
+        wo_b_l1 = pl.slice(wo_b, [O_PROJ_LOCAL_GROUPS, D, O_LORA], [o_proj_group_start_l1, 0, 0])
         wo_b_scale_l1 = pl.slice(wo_b_scale, [D], [d_start_l1])
 
         hc_ffn_fn_l1 = pl.slice(hc_ffn_fn, [MIX_HC, HC_DIM], [mix_start_l1, 0])
@@ -560,11 +568,11 @@ def prefill_fwd(
         routed_w3_scale_l1 = pl.slice(routed_w3_scale, [N_LOCAL, MOE_INTER], [local_expert_start_l1, 0])
         routed_w2_l1 = pl.slice(routed_w2, [N_LOCAL, D, MOE_INTER], [local_expert_start_l1, 0, 0])
         routed_w2_scale_l1 = pl.slice(routed_w2_scale, [N_LOCAL, D], [local_expert_start_l1, 0])
-        shared_w1_l1 = pl.slice(shared_w1, [MOE_INTER, D], [moe_start_l1, 0])
+        shared_w1_l1 = shared_w1[layer_l1]
         shared_w1_scale_l1 = pl.slice(shared_w1_scale, [MOE_INTER], [moe_start_l1])
-        shared_w3_l1 = pl.slice(shared_w3, [MOE_INTER, D], [moe_start_l1, 0])
+        shared_w3_l1 = shared_w3[layer_l1]
         shared_w3_scale_l1 = pl.slice(shared_w3_scale, [MOE_INTER], [moe_start_l1])
-        shared_w2_l1 = pl.slice(shared_w2, [D, MOE_INTER], [d_start_l1, 0])
+        shared_w2_l1 = shared_w2[layer_l1]
         shared_w2_scale_l1 = pl.slice(shared_w2_scale, [D], [d_start_l1])
 
         with pl.scope():
@@ -610,10 +618,9 @@ def prefill_fwd(
     group_rows = pl.tensor.dim(x_hc, 0)
     local_tokens = pl.tensor.dim(input_ids, 0)
     local_start = pl.cast(tp_rank, pl.INDEX) * pl.cast(local_tokens, pl.INDEX)
-    target_l40_start = pl.cast(group_rows, pl.INDEX)
-    target_l41_start = target_l40_start + pl.cast(local_tokens, pl.INDEX)
-    target_head_rows = group_rows + 2 * local_tokens
-    target_hc_stack = pl.create_tensor([target_head_rows, HC_MULT, D], dtype=pl.FP32)
+    target_l41_start = pl.cast(local_tokens, pl.INDEX)
+    target_hc_rows = 2 * local_tokens
+    target_hc_stack = pl.create_tensor([target_hc_rows, HC_MULT, D], dtype=pl.FP32)
 
     # Layers 2-41: CSA/HCA pairs.
     for pair_order in pl.range(HCA_NUM_LAYERS):
@@ -638,8 +645,8 @@ def prefill_fwd(
             hc_attn_scale_csa = pl.slice(hc_attn_scale, [3], [scale_start_csa])
             hc_attn_base_csa = pl.slice(hc_attn_base, [MIX_HC], [mix_start_csa])
             attn_norm_w_csa = pl.slice(attn_norm_w, [D], [d_start_csa])
-            wq_a_csa = pl.slice(wq_a, [D, Q_LORA], [d_start_csa, 0])
-            wq_b_csa = pl.slice(wq_b, [Q_LORA, H * HEAD_DIM], [q_lora_start_csa, 0])
+            wq_a_csa = wq_a[csa_layer]
+            wq_b_csa = wq_b[csa_layer]
             wq_b_scale_csa = pl.slice(wq_b_scale, [H * HEAD_DIM], [q_head_start_csa])
             wkv_csa = pl.slice(wkv, [D, HEAD_DIM], [d_start_csa, 0])
             gamma_cq_csa = pl.slice(gamma_cq, [Q_LORA], [q_lora_start_csa])
@@ -647,7 +654,7 @@ def prefill_fwd(
             kv_cache_csa = pl.slice(kv_cache, [ori_block_num, BLOCK_SIZE, 1, HEAD_DIM], [csa_layer * ori_block_num, 0, 0, 0])
             attn_sink_csa = pl.slice(attn_sink, [H], [attn_head_start_csa])
             wo_a_csa = pl.slice(wo_a, [O_PROJ_LOCAL_GROUPS, O_LORA, O_GROUP_IN], [o_proj_group_start_csa, 0, 0])
-            wo_b_csa = pl.slice(wo_b, [D, O_PROJ_LOCAL_COLS], [d_start_csa, 0])
+            wo_b_csa = pl.slice(wo_b, [O_PROJ_LOCAL_GROUPS, D, O_LORA], [o_proj_group_start_csa, 0, 0])
             wo_b_scale_csa = pl.slice(wo_b_scale, [D], [d_start_csa])
 
             hc_ffn_fn_csa = pl.slice(hc_ffn_fn, [MIX_HC, HC_DIM], [mix_start_csa, 0])
@@ -663,11 +670,11 @@ def prefill_fwd(
             routed_w3_scale_csa = pl.slice(routed_w3_scale, [N_LOCAL, MOE_INTER], [local_expert_start_csa, 0])
             routed_w2_csa = pl.slice(routed_w2, [N_LOCAL, D, MOE_INTER], [local_expert_start_csa, 0, 0])
             routed_w2_scale_csa = pl.slice(routed_w2_scale, [N_LOCAL, D], [local_expert_start_csa, 0])
-            shared_w1_csa = pl.slice(shared_w1, [MOE_INTER, D], [moe_start_csa, 0])
+            shared_w1_csa = shared_w1[csa_layer]
             shared_w1_scale_csa = pl.slice(shared_w1_scale, [MOE_INTER], [moe_start_csa])
-            shared_w3_csa = pl.slice(shared_w3, [MOE_INTER, D], [moe_start_csa, 0])
+            shared_w3_csa = shared_w3[csa_layer]
             shared_w3_scale_csa = pl.slice(shared_w3_scale, [MOE_INTER], [moe_start_csa])
-            shared_w2_csa = pl.slice(shared_w2, [D, MOE_INTER], [d_start_csa, 0])
+            shared_w2_csa = shared_w2[csa_layer]
             shared_w2_scale_csa = pl.slice(shared_w2_scale, [D], [d_start_csa])
 
             csa_compress_start_csa = attention_order * CSA_MAIN_OUT_DIM
@@ -676,7 +683,6 @@ def prefill_fwd(
             csa_idx_head_start_csa = attention_order * IDX_HEAD_DIM
             csa_idx_q_lora_start_csa = attention_order * Q_LORA
             csa_idx_q_head_start_csa = attention_order * IDX_N_HEADS * IDX_HEAD_DIM
-            csa_idx_proj_start_csa = attention_order * D
             csa_inner_start_csa = attention_order * INNER_OUT_DIM
             csa_state_start_csa = attention_order * csa_state_block_num
             csa_inner_state_start_csa = attention_order * inner_state_block_num
@@ -695,7 +701,7 @@ def prefill_fwd(
             csa_hadamard_idx_csa = pl.slice(csa_hadamard_idx, [IDX_HEAD_DIM, IDX_HEAD_DIM], [csa_idx_head_start_csa, 0])
             csa_idx_wq_b_csa = pl.slice(csa_idx_wq_b, [Q_LORA, IDX_N_HEADS * IDX_HEAD_DIM], [csa_idx_q_lora_start_csa, 0])
             csa_idx_wq_b_scale_csa = pl.slice(csa_idx_wq_b_scale, [IDX_N_HEADS * IDX_HEAD_DIM], [csa_idx_q_head_start_csa])
-            csa_weights_proj_csa = pl.slice(csa_weights_proj, [D, IDX_N_HEADS], [csa_idx_proj_start_csa, 0])
+            csa_weights_proj_csa = csa_weights_proj[attention_order]
             csa_inner_wkv_csa = pl.slice(csa_inner_wkv, [INNER_OUT_DIM, D], [csa_inner_start_csa, 0])
             csa_inner_wgate_csa = pl.slice(csa_inner_wgate, [INNER_OUT_DIM, D], [csa_inner_start_csa, 0])
             csa_inner_ape_csa = pl.slice(csa_inner_ape, [CSA_COMPRESS_RATIO, INNER_OUT_DIM], [csa_ape_start_csa, 0])
@@ -782,7 +788,7 @@ def prefill_fwd(
                         target_hc_l40 = pl.slice(
                             target_hc_stack,
                             [local_tokens, HC_MULT, D],
-                            [target_l40_start, 0, 0],
+                            [0, 0, 0],
                         )
                         with pl.spmd(local_tokens, name_hint="prefill_fwd_capture_target_hc_l40"):
                             target_hc_l40 = _copy_target_hc_row(target_x_hc_l40, target_hc_l40)
@@ -806,8 +812,8 @@ def prefill_fwd(
             hc_attn_scale_hca = pl.slice(hc_attn_scale, [3], [scale_start_hca])
             hc_attn_base_hca = pl.slice(hc_attn_base, [MIX_HC], [mix_start_hca])
             attn_norm_w_hca = pl.slice(attn_norm_w, [D], [d_start_hca])
-            wq_a_hca = pl.slice(wq_a, [D, Q_LORA], [d_start_hca, 0])
-            wq_b_hca = pl.slice(wq_b, [Q_LORA, H * HEAD_DIM], [q_lora_start_hca, 0])
+            wq_a_hca = wq_a[hca_layer]
+            wq_b_hca = wq_b[hca_layer]
             wq_b_scale_hca = pl.slice(wq_b_scale, [H * HEAD_DIM], [q_head_start_hca])
             wkv_hca = pl.slice(wkv, [D, HEAD_DIM], [d_start_hca, 0])
             gamma_cq_hca = pl.slice(gamma_cq, [Q_LORA], [q_lora_start_hca])
@@ -815,7 +821,7 @@ def prefill_fwd(
             kv_cache_hca = pl.slice(kv_cache, [ori_block_num, BLOCK_SIZE, 1, HEAD_DIM], [hca_layer * ori_block_num, 0, 0, 0])
             attn_sink_hca = pl.slice(attn_sink, [H], [attn_head_start_hca])
             wo_a_hca = pl.slice(wo_a, [O_PROJ_LOCAL_GROUPS, O_LORA, O_GROUP_IN], [o_proj_group_start_hca, 0, 0])
-            wo_b_hca = pl.slice(wo_b, [D, O_PROJ_LOCAL_COLS], [d_start_hca, 0])
+            wo_b_hca = pl.slice(wo_b, [O_PROJ_LOCAL_GROUPS, D, O_LORA], [o_proj_group_start_hca, 0, 0])
             wo_b_scale_hca = pl.slice(wo_b_scale, [D], [d_start_hca])
 
             hc_ffn_fn_hca = pl.slice(hc_ffn_fn, [MIX_HC, HC_DIM], [mix_start_hca, 0])
@@ -831,11 +837,11 @@ def prefill_fwd(
             routed_w3_scale_hca = pl.slice(routed_w3_scale, [N_LOCAL, MOE_INTER], [local_expert_start_hca, 0])
             routed_w2_hca = pl.slice(routed_w2, [N_LOCAL, D, MOE_INTER], [local_expert_start_hca, 0, 0])
             routed_w2_scale_hca = pl.slice(routed_w2_scale, [N_LOCAL, D], [local_expert_start_hca, 0])
-            shared_w1_hca = pl.slice(shared_w1, [MOE_INTER, D], [moe_start_hca, 0])
+            shared_w1_hca = shared_w1[hca_layer]
             shared_w1_scale_hca = pl.slice(shared_w1_scale, [MOE_INTER], [moe_start_hca])
-            shared_w3_hca = pl.slice(shared_w3, [MOE_INTER, D], [moe_start_hca, 0])
+            shared_w3_hca = shared_w3[hca_layer]
             shared_w3_scale_hca = pl.slice(shared_w3_scale, [MOE_INTER], [moe_start_hca])
-            shared_w2_hca = pl.slice(shared_w2, [D, MOE_INTER], [d_start_hca, 0])
+            shared_w2_hca = shared_w2[hca_layer]
             shared_w2_scale_hca = pl.slice(shared_w2_scale, [D], [d_start_hca])
 
             hca_compress_start_hca = attention_order * HCA_MAIN_OUT_DIM
@@ -939,8 +945,8 @@ def prefill_fwd(
         hc_attn_scale_last = pl.slice(hc_attn_scale, [3], [scale_start_last])
         hc_attn_base_last = pl.slice(hc_attn_base, [MIX_HC], [mix_start_last])
         attn_norm_w_last = pl.slice(attn_norm_w, [D], [d_start_last])
-        wq_a_last = pl.slice(wq_a, [D, Q_LORA], [d_start_last, 0])
-        wq_b_last = pl.slice(wq_b, [Q_LORA, H * HEAD_DIM], [q_lora_start_last, 0])
+        wq_a_last = wq_a[layer_last]
+        wq_b_last = wq_b[layer_last]
         wq_b_scale_last = pl.slice(wq_b_scale, [H * HEAD_DIM], [q_head_start_last])
         wkv_last = pl.slice(wkv, [D, HEAD_DIM], [d_start_last, 0])
         gamma_cq_last = pl.slice(gamma_cq, [Q_LORA], [q_lora_start_last])
@@ -948,7 +954,7 @@ def prefill_fwd(
         kv_cache_last = pl.slice(kv_cache, [ori_block_num, BLOCK_SIZE, 1, HEAD_DIM], [layer_last * ori_block_num, 0, 0, 0])
         attn_sink_last = pl.slice(attn_sink, [H], [attn_head_start_last])
         wo_a_last = pl.slice(wo_a, [O_PROJ_LOCAL_GROUPS, O_LORA, O_GROUP_IN], [o_proj_group_start_last, 0, 0])
-        wo_b_last = pl.slice(wo_b, [D, O_PROJ_LOCAL_COLS], [d_start_last, 0])
+        wo_b_last = pl.slice(wo_b, [O_PROJ_LOCAL_GROUPS, D, O_LORA], [o_proj_group_start_last, 0, 0])
         wo_b_scale_last = pl.slice(wo_b_scale, [D], [d_start_last])
 
         hc_ffn_fn_last = pl.slice(hc_ffn_fn, [MIX_HC, HC_DIM], [mix_start_last, 0])
@@ -964,11 +970,11 @@ def prefill_fwd(
         routed_w3_scale_last = pl.slice(routed_w3_scale, [N_LOCAL, MOE_INTER], [local_expert_start_last, 0])
         routed_w2_last = pl.slice(routed_w2, [N_LOCAL, D, MOE_INTER], [local_expert_start_last, 0, 0])
         routed_w2_scale_last = pl.slice(routed_w2_scale, [N_LOCAL, D], [local_expert_start_last, 0])
-        shared_w1_last = pl.slice(shared_w1, [MOE_INTER, D], [moe_start_last, 0])
+        shared_w1_last = shared_w1[layer_last]
         shared_w1_scale_last = pl.slice(shared_w1_scale, [MOE_INTER], [moe_start_last])
-        shared_w3_last = pl.slice(shared_w3, [MOE_INTER, D], [moe_start_last, 0])
+        shared_w3_last = shared_w3[layer_last]
         shared_w3_scale_last = pl.slice(shared_w3_scale, [MOE_INTER], [moe_start_last])
-        shared_w2_last = pl.slice(shared_w2, [D, MOE_INTER], [d_start_last, 0])
+        shared_w2_last = shared_w2[layer_last]
         shared_w2_scale_last = pl.slice(shared_w2_scale, [D], [d_start_last])
 
         csa_compress_start_last = csa_order_last * CSA_MAIN_OUT_DIM
@@ -977,7 +983,6 @@ def prefill_fwd(
         csa_idx_head_start_last = csa_order_last * IDX_HEAD_DIM
         csa_idx_q_lora_start_last = csa_order_last * Q_LORA
         csa_idx_q_head_start_last = csa_order_last * IDX_N_HEADS * IDX_HEAD_DIM
-        csa_idx_proj_start_last = csa_order_last * D
         csa_inner_start_last = csa_order_last * INNER_OUT_DIM
         csa_state_start_last = csa_order_last * csa_state_block_num
         csa_inner_state_start_last = csa_order_last * inner_state_block_num
@@ -996,7 +1001,7 @@ def prefill_fwd(
         csa_hadamard_idx_last = pl.slice(csa_hadamard_idx, [IDX_HEAD_DIM, IDX_HEAD_DIM], [csa_idx_head_start_last, 0])
         csa_idx_wq_b_last = pl.slice(csa_idx_wq_b, [Q_LORA, IDX_N_HEADS * IDX_HEAD_DIM], [csa_idx_q_lora_start_last, 0])
         csa_idx_wq_b_scale_last = pl.slice(csa_idx_wq_b_scale, [IDX_N_HEADS * IDX_HEAD_DIM], [csa_idx_q_head_start_last])
-        csa_weights_proj_last = pl.slice(csa_weights_proj, [D, IDX_N_HEADS], [csa_idx_proj_start_last, 0])
+        csa_weights_proj_last = csa_weights_proj[csa_order_last]
         csa_inner_wkv_last = pl.slice(csa_inner_wkv, [INNER_OUT_DIM, D], [csa_inner_start_last, 0])
         csa_inner_wgate_last = pl.slice(csa_inner_wgate, [INNER_OUT_DIM, D], [csa_inner_start_last, 0])
         csa_inner_ape_last = pl.slice(csa_inner_ape, [CSA_COMPRESS_RATIO, INNER_OUT_DIM], [csa_ape_start_last, 0])
@@ -1083,37 +1088,29 @@ def prefill_fwd(
                 group_base, tp_rank, pl.const(43, pl.INT32),
             )
 
-    # Project the full layer-42 group and local layer-40/41 rows in one
-    # target-head launch.
+    # Auxiliary taps use HC means; only the main output uses the learned head.
     with pl.scope():
         if group_tokens > 0:
-            target_hc_l42 = pl.slice(
-                target_hc_stack,
-                [group_rows, HC_MULT, D],
-                [0, 0, 0],
-            )
-            with pl.spmd(group_rows, name_hint="prefill_fwd_capture_target_hc_l42"):
-                target_hc_l42 = _copy_target_hc_row(x_hc, target_hc_l42)
-            target_hidden_stack = pl.create_tensor([target_head_rows, D], dtype=pl.BF16)
-            target_hidden_stack = hc_head(
-                target_hc_stack,
-                hc_head_fn, hc_head_scale, hc_head_base,
-                target_hidden_stack,
-            )
-            layer42_hidden = pl.slice(target_hidden_stack, [group_rows, D], [0, 0])
             for token in pl.spmd(local_tokens, name_hint="prefill_fwd_store_target_hidden"):
-                target_l40_row = target_l40_start + token
                 target_l41_row = target_l41_start + token
                 target_l42_row = local_start + token
-                dspark_target_hidden[token : token + 1, 0:D] = target_hidden_stack[
-                    target_l40_row : target_l40_row + 1, 0:D,
+                target_hc_l40_row = target_hc_stack[token : token + 1, 0 : HC_MULT, 0:D]
+                target_hidden_l40 = pl.mul(pl.col_sum(pl.reshape(target_hc_l40_row, [HC_MULT, D])), 1.0 / HC_MULT)
+                dspark_target_hidden[token : token + 1, 0:D] = pl.cast(target_hidden_l40, pl.BF16, mode="rint")
+                target_hc_l41_row = target_hc_stack[
+                    target_l41_row : target_l41_row + 1, 0 : HC_MULT, 0:D,
                 ]
-                dspark_target_hidden[token : token + 1, D : 2 * D] = target_hidden_stack[
-                    target_l41_row : target_l41_row + 1, 0:D,
-                ]
-                dspark_target_hidden[token : token + 1, 2 * D : 3 * D] = target_hidden_stack[
-                    target_l42_row : target_l42_row + 1, 0:D,
-                ]
+                target_hidden_l41 = pl.mul(pl.col_sum(pl.reshape(target_hc_l41_row, [HC_MULT, D])), 1.0 / HC_MULT)
+                dspark_target_hidden[token : token + 1, D : 2 * D] = pl.cast(
+                    target_hidden_l41, pl.BF16, mode="rint",
+                )
+                target_hc_l42_row = x_hc[target_l42_row : target_l42_row + 1, 0 : HC_MULT, 0:D]
+                target_hidden_l42 = pl.mul(pl.col_sum(pl.reshape(target_hc_l42_row, [HC_MULT, D])), 1.0 / HC_MULT)
+                dspark_target_hidden[token : token + 1, 2 * D : 3 * D] = pl.cast(
+                    target_hidden_l42, pl.BF16, mode="rint",
+                )
+            layer42_hidden = pl.create_tensor([group_rows, D], dtype=pl.BF16)
+            layer42_hidden = hc_head(x_hc, hc_head_fn, hc_head_scale, hc_head_base, layer42_hidden)
             final_norm_tid = rms_norm(layer42_hidden, final_norm_w, x_out)
             lm_head(
                 x_out, lm_head_weight, logit_row_indices, logits,
@@ -1151,8 +1148,8 @@ def l3_prefill_fwd(
     hc_attn_scale: pl.Tensor[[N_RANKS, FWD_NUM_LAYERS * 3], pl.FP32],
     hc_attn_base: pl.Tensor[[N_RANKS, FWD_NUM_LAYERS * MIX_HC], pl.FP32],
     attn_norm_w: pl.Tensor[[N_RANKS, FWD_NUM_LAYERS * D], pl.BF16],
-    wq_a: pl.Tensor[[N_RANKS, FWD_NUM_LAYERS * D, Q_LORA], pl.BF16],
-    wq_b: pl.Tensor[[N_RANKS, FWD_NUM_LAYERS * Q_LORA, H * HEAD_DIM], pl.INT8],
+    wq_a: pl.Tensor[[N_RANKS, FWD_NUM_LAYERS, D, Q_LORA], pl.BF16],
+    wq_b: pl.Tensor[[N_RANKS, FWD_NUM_LAYERS, Q_LORA, H * HEAD_DIM], pl.INT8],
     wq_b_scale: pl.Tensor[[N_RANKS, FWD_NUM_LAYERS * H * HEAD_DIM], pl.FP32],
     wkv: pl.Tensor[[N_RANKS, FWD_NUM_LAYERS * D, HEAD_DIM], pl.BF16],
     gamma_cq: pl.Tensor[[N_RANKS, FWD_NUM_LAYERS * Q_LORA], pl.BF16],
@@ -1160,7 +1157,7 @@ def l3_prefill_fwd(
     kv_cache: pl.InOut[pl.Tensor[[N_RANKS, FWD_ORI_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
     attn_sink: pl.Tensor[[N_RANKS, FWD_NUM_LAYERS * H], pl.FP32],
     wo_a: pl.Tensor[[N_RANKS, FWD_NUM_LAYERS * O_PROJ_LOCAL_GROUPS, O_LORA, O_GROUP_IN], pl.BF16],
-    wo_b: pl.Tensor[[N_RANKS, FWD_NUM_LAYERS * D, O_PROJ_LOCAL_COLS], pl.INT8],
+    wo_b: pl.Tensor[[N_RANKS, FWD_NUM_LAYERS * O_PROJ_LOCAL_GROUPS, D, O_LORA], pl.INT8],
     wo_b_scale: pl.Tensor[[N_RANKS, FWD_NUM_LAYERS * D], pl.FP32],
     hca_cmp_kv: pl.InOut[pl.Tensor[[N_RANKS, FWD_HCA_CMP_BLOCK_NUM_DYN, HCA_CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
     csa_cmp_kv: pl.InOut[pl.Tensor[[N_RANKS, FWD_CSA_CMP_BLOCK_NUM_DYN, CSA_CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
@@ -1177,7 +1174,7 @@ def l3_prefill_fwd(
     csa_hadamard_idx: pl.Tensor[[N_RANKS, CSA_NUM_LAYERS * IDX_HEAD_DIM, IDX_HEAD_DIM], pl.BF16],
     csa_idx_wq_b: pl.Tensor[[N_RANKS, CSA_NUM_LAYERS * Q_LORA, IDX_N_HEADS * IDX_HEAD_DIM], pl.INT8],
     csa_idx_wq_b_scale: pl.Tensor[[N_RANKS, CSA_NUM_LAYERS * IDX_N_HEADS * IDX_HEAD_DIM], pl.FP32],
-    csa_weights_proj: pl.Tensor[[N_RANKS, CSA_NUM_LAYERS * D, IDX_N_HEADS], pl.BF16],
+    csa_weights_proj: pl.Tensor[[N_RANKS, CSA_NUM_LAYERS, D, IDX_N_HEADS], pl.BF16],
     csa_inner_wkv: pl.Tensor[[N_RANKS, CSA_NUM_LAYERS * INNER_OUT_DIM, D], pl.BF16],
     csa_inner_wgate: pl.Tensor[[N_RANKS, CSA_NUM_LAYERS * INNER_OUT_DIM, D], pl.BF16],
     csa_inner_ape: pl.Tensor[[N_RANKS, CSA_NUM_LAYERS * CSA_COMPRESS_RATIO, INNER_OUT_DIM], pl.FP32],
@@ -1223,14 +1220,14 @@ def l3_prefill_fwd(
     routed_w3_scale: pl.Tensor[[N_RANKS, FWD_NUM_LAYERS * N_LOCAL, MOE_INTER], pl.FP32],
     routed_w2: pl.Tensor[[N_RANKS, FWD_NUM_LAYERS * N_LOCAL, D, MOE_INTER], pl.INT8],
     routed_w2_scale: pl.Tensor[[N_RANKS, FWD_NUM_LAYERS * N_LOCAL, D], pl.FP32],
-    shared_w1: pl.Tensor[[N_RANKS, FWD_NUM_LAYERS * MOE_INTER, D], pl.INT8],
+    shared_w1: pl.Tensor[[N_RANKS, FWD_NUM_LAYERS, MOE_INTER, D], pl.INT8],
     shared_w1_scale: pl.Tensor[[N_RANKS, FWD_NUM_LAYERS * MOE_INTER], pl.FP32],
-    shared_w3: pl.Tensor[[N_RANKS, FWD_NUM_LAYERS * MOE_INTER, D], pl.INT8],
+    shared_w3: pl.Tensor[[N_RANKS, FWD_NUM_LAYERS, MOE_INTER, D], pl.INT8],
     shared_w3_scale: pl.Tensor[[N_RANKS, FWD_NUM_LAYERS * MOE_INTER], pl.FP32],
-    shared_w2: pl.Tensor[[N_RANKS, FWD_NUM_LAYERS * D, MOE_INTER], pl.INT8],
+    shared_w2: pl.Tensor[[N_RANKS, FWD_NUM_LAYERS, D, MOE_INTER], pl.INT8],
     shared_w2_scale: pl.Tensor[[N_RANKS, FWD_NUM_LAYERS * D], pl.FP32],
     o_proj_wo_a_full: pl.Out[pl.Tensor[[N_RANKS, O_PROJ_SCRATCH_GROUPS, O_PROJ_SCRATCH_RANK, O_PROJ_SCRATCH_INPUT], pl.BF16]],
-    o_proj_wo_b_full: pl.Out[pl.Tensor[[N_RANKS, O_PROJ_SCRATCH_D, O_PROJ_SCRATCH_COLS], pl.INT8]],
+    o_proj_wo_b_full: pl.Out[pl.Tensor[[N_RANKS, O_PROJ_SCRATCH_GROUPS, O_PROJ_SCRATCH_D, O_LORA], pl.INT8]],
     attn_stage: pl.InOut[pl.Tensor[[N_RANKS, FWD_GROUP_TOKENS_DYN, HC_MULT, D], pl.FP32]],
     x_mixed: pl.Out[pl.Tensor[[N_RANKS, FWD_GROUP_TOKENS_DYN, D], pl.BF16]],
     post_ffn: pl.Out[pl.Tensor[[N_RANKS, FWD_GROUP_TOKENS_DYN, HC_MULT], pl.FP32]],
@@ -1464,7 +1461,7 @@ def _make_o_proj_tp_stacked_spec(name, base_specs):
     if name == "wo_a":
         packed_shape = [N_RANKS, FWD_NUM_LAYERS * O_PROJ_LOCAL_GROUPS, O_LORA, O_GROUP_IN]
     elif name == "wo_b":
-        packed_shape = [N_RANKS, FWD_NUM_LAYERS * D, O_PROJ_LOCAL_COLS]
+        packed_shape = [N_RANKS, FWD_NUM_LAYERS * O_PROJ_LOCAL_GROUPS, D, O_LORA]
     else:
         raise ValueError(f"unsupported o-projection TP weight {name!r}")
 
@@ -1477,16 +1474,11 @@ def _make_o_proj_tp_stacked_spec(name, base_specs):
                 raise ValueError(f"{name} fixture rank axis must be TP={TP_SIZE} or EP={N_RANKS}, got {source_ranks}")
             for rank in range(N_RANKS):
                 source_rank = rank if source_ranks == N_RANKS else rank % TP_SIZE
-                if name == "wo_a":
-                    layer_start = layer * O_PROJ_LOCAL_GROUPS
-                    target = packed[rank, layer_start : layer_start + O_PROJ_LOCAL_GROUPS]
-                    source = full[source_rank]
-                    target.copy_(source)
-                else:
-                    row_start = layer * D
-                    target = packed[rank, row_start : row_start + D]
-                    source = full[source_rank]
-                    target.copy_(source)
+                # Both wo_a and wo_b bank-stack along the leading O_PROJ_LOCAL_GROUPS axis.
+                layer_start = layer * O_PROJ_LOCAL_GROUPS
+                target = packed[rank, layer_start : layer_start + O_PROJ_LOCAL_GROUPS]
+                source = full[source_rank]
+                target.copy_(source)
         return packed
 
     return TensorSpec(name, packed_shape, spec.dtype, init_value=init_value)
@@ -1907,8 +1899,8 @@ def build_tensor_specs(
             ),
         ),
         TensorSpec(
-            "o_proj_wo_b_full", [N_RANKS, O_PROJ_SCRATCH_D, O_PROJ_SCRATCH_COLS], torch.int8,
-            init_value=lambda: torch.zeros(N_RANKS, O_PROJ_SCRATCH_D, O_PROJ_SCRATCH_COLS, dtype=torch.int8),
+            "o_proj_wo_b_full", [N_RANKS, O_PROJ_SCRATCH_GROUPS, O_PROJ_SCRATCH_D, O_LORA], torch.int8,
+            init_value=lambda: torch.zeros(N_RANKS, O_PROJ_SCRATCH_GROUPS, O_PROJ_SCRATCH_D, O_LORA, dtype=torch.int8),
         ),
     ]
     for spec in o_proj_scratch_specs:
@@ -1960,8 +1952,10 @@ def build_tensor_specs(
         return norm.unsqueeze(0).expand(N_RANKS, -1).contiguous()
 
     def init_lm_head_weight():
+        from utils import pack_nz
+
         shards = (torch.randn(TP_SIZE, VOCAB_PER_TP, D) / D**0.5).to(torch.bfloat16)
-        return torch.stack([shards[rank % TP_SIZE] for rank in range(N_RANKS)], dim=0)
+        return pack_nz(torch.stack([shards[rank % TP_SIZE] for rank in range(N_RANKS)], dim=0))
 
     # Group leaders publish one last-token row per packed request.
     request_last_rows = (2, 6) if fixture_case == "ragged2" else (num_tokens - 1,)
@@ -2085,9 +2079,8 @@ def x_out_compare(actual, _expected, **kwargs):
 
 
 def dspark_target_hidden_compare(actual, _expected, **kwargs):
-    """Validate all taps are written and the layer-42 local projection is exact."""
+    """Validate all taps are written and layer 42 is the local HC mean."""
     import torch
-    from hc_head import golden_hc_head
 
     inputs = kwargs.get("inputs", {})
     device_x_hc = kwargs.get("actual_outputs", {}).get("x_hc")
@@ -2112,14 +2105,8 @@ def dspark_target_hidden_compare(actual, _expected, **kwargs):
             if bool(active_rows.any()) and not bool(torch.count_nonzero(part[active_rows])):
                 return False, f"    rank {rank} target layer {TARGET_LAYER_IDS[slot]} was not written"
 
-        expected_l42 = torch.empty(local_tokens, D, dtype=torch.bfloat16)
-        golden_hc_head({
-            "x_hc": device_x_hc[rank, local_start : local_start + local_tokens].cpu(),
-            "hc_head_fn": inputs["hc_head_fn"][rank],
-            "hc_head_scale": inputs["hc_head_scale"][rank],
-            "hc_head_base": inputs["hc_head_base"][rank],
-            "y": expected_l42,
-        })
+        expected_l42 = device_x_hc[rank, local_start : local_start + local_tokens].cpu().float().mean(dim=1)
+        expected_l42 = expected_l42.to(torch.bfloat16)
         actual_l42 = actual[rank, :, 2 * D : 3 * D].float()
         expected_l42 = expected_l42.float()
         tolerance = 1e-4 + (1.0 / 128) * expected_l42.abs()
@@ -2135,12 +2122,15 @@ def logits_compare(actual, _expected, **kwargs):
     """Recompute every active logit row from the device x_out and the TP vocab shards."""
     import torch
 
+    from utils import unpack_nz
+
     inputs = kwargs.get("inputs", {})
     device_x_out = kwargs.get("actual_outputs", {}).get("x_out")
     row_indices = inputs.get("logit_row_indices")
     weight = inputs.get("lm_head_weight")
     if device_x_out is None or row_indices is None or weight is None:
         return False, "    missing device x_out or LM-head inputs"
+    weight = unpack_nz(weight)
     if not bool(torch.isfinite(actual).all()):
         return False, "    logits contain NaN or Inf"
     for rank in range(actual.shape[0]):
@@ -2215,6 +2205,10 @@ def main():
     parser.add_argument(
         "--ep", type=int, default=N_RANKS, choices=[2, 4, 8, 16],
         help="EP world size / rank count (parsed at import by moe).",
+    )
+    parser.add_argument(
+        "--experts-per-rank", type=int, default=EXPERTS_PER_RANK,
+        help="routed experts per rank (parsed at import by moe).",
     )
     parser.add_argument(
         "--tp", type=int, default=TP_SIZE, choices=[1, 2, 4],

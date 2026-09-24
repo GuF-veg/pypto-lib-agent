@@ -28,20 +28,25 @@ HC_DIM = M.hc_dim
 
 # tiling
 T_TILE = 4
+PREFILL_T_TILE = 8
 INACTIVE_FILL_T_TILE = 16
 INACTIVE_FILL_D_TILE = 256
 assert (DECODE_BATCH * DECODE_SEQ) % T_TILE == 0
 assert (PREFILL_BATCH * PREFILL_SEQ) % T_TILE == 0
 
 
-@pl.jit.inline
-def hc_post(
+def _hc_post(
     x: pl.Tensor[[T_DYN, D], pl.BF16],
     residual: pl.Tensor[[T_DYN, HC_MULT, D], pl.FP32],
     post: pl.Tensor[[T_DYN, HC_MULT], pl.FP32],
     comb: pl.Tensor[[T_DYN, HC_MULT * HC_MULT], pl.FP32],
     y: pl.Out[pl.Tensor[[T_DYN, HC_MULT, D], pl.FP32]],
 ):
+    x.bind_dynamic(0, T_DYN)
+    residual.bind_dynamic(0, T_DYN)
+    post.bind_dynamic(0, T_DYN)
+    comb.bind_dynamic(0, T_DYN)
+    y.bind_dynamic(0, T_DYN)
     t_dim = pl.tensor.dim(x, 0)
 
     residual_flat = pl.reshape(residual, [t_dim, HC_DIM])
@@ -86,14 +91,14 @@ def hc_post_prefill(
 
     residual_flat = pl.reshape(residual, [t_dim, HC_DIM])
     y_flat = pl.reshape(y, [t_dim, HC_DIM])
-    active_tiles = (active_tokens + T_TILE - 1) // T_TILE
+    active_tiles = (active_tokens + PREFILL_T_TILE - 1) // PREFILL_T_TILE
 
     if active_tokens > 0:
         for block in pl.spmd(active_tiles * HC_MULT, name_hint="hc_post_prefill"):
             token_block = block // HC_MULT
             out_h = block % HC_MULT
-            t0 = token_block * T_TILE
-            for t in pl.pipeline(t0, t0 + T_TILE, stage=2):
+            t0 = token_block * PREFILL_T_TILE
+            for t in pl.pipeline(t0, t0 + PREFILL_T_TILE, stage=2):
                 if t < active_tokens:
                     post_w = pl.read(post, [t, out_h])
                     x_row = pl.cast(x[t : t + 1, 0:D], target_type=pl.FP32)
@@ -122,22 +127,8 @@ def hc_post_prefill(
     return y
 
 
-@pl.jit
-def hc_post_test(
-    x: pl.Tensor[[T_DYN, D], pl.BF16],
-    residual: pl.Tensor[[T_DYN, HC_MULT, D], pl.FP32],
-    post: pl.Tensor[[T_DYN, HC_MULT], pl.FP32],
-    comb: pl.Tensor[[T_DYN, HC_MULT * HC_MULT], pl.FP32],
-    y: pl.Out[pl.Tensor[[T_DYN, HC_MULT, D], pl.FP32]],
-):
-    x.bind_dynamic(0, T_DYN)
-    residual.bind_dynamic(0, T_DYN)
-    post.bind_dynamic(0, T_DYN)
-    comb.bind_dynamic(0, T_DYN)
-    y.bind_dynamic(0, T_DYN)
-
-    hc_post(x, residual, post, comb, y)
-    return y
+hc_post = pl.jit.inline(_hc_post)
+hc_post_test = pl.jit(_hc_post)
 
 
 def golden_hc_post(tensors):

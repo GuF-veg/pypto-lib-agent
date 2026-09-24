@@ -68,6 +68,8 @@ assert CP_INDEXER_SCORE_CAP % CP_INDEXER_LEAF_LEN == 0
 
 # tiling
 CACHE_TILE = 32
+CP_SCORE_CACHE_TILE = 128
+assert BLOCK_SIZE % CP_SCORE_CACHE_TILE == 0
 # Per-token sort-tile width. The sort32/mrgsort/gather path requires a wide tile: a narrow (256)
 # sort faults on device (507018) even with a proper prefix. 2048 matches the indexer KV length and
 # is the confirmed fault-free width. The real score occupies only the first INDEXER_SCORE_CAP
@@ -116,9 +118,9 @@ def prefill_indexer(
     x: pl.Tensor[[T, D], pl.BF16],
     qr: pl.Tensor[[T, Q_LORA], pl.INT8],
     qr_scale: pl.Tensor[[T, 1], pl.FP32],
-    wq_b: pl.Tensor[[Q_LORA, IDX_N_HEADS * IDX_HEAD_DIM], pl.INT8],
+    wq_b: pl.Tensor[[Q_LORA, IDX_N_HEADS * IDX_HEAD_DIM], pl.INT8, pl.NZ],
     wq_b_scale: pl.Tensor[[IDX_N_HEADS * IDX_HEAD_DIM], pl.FP32],
-    weights_proj: pl.Tensor[[D, IDX_N_HEADS], pl.BF16],
+    weights_proj: pl.Tensor[[D, IDX_N_HEADS], pl.BF16, pl.NZ],
     cos: pl.Tensor[[T, ROPE_HEAD_DIM // 2], pl.FP32],
     sin: pl.Tensor[[T, ROPE_HEAD_DIM // 2], pl.FP32],
     freqs_cos: pl.Tensor[[MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16],
@@ -423,9 +425,9 @@ def _prefill_indexer_cp_score_topk(
     x: pl.Tensor[[T, D], pl.BF16],
     qr: pl.Tensor[[T, Q_LORA], pl.INT8],
     qr_scale: pl.Tensor[[T, 1], pl.FP32],
-    wq_b: pl.Tensor[[Q_LORA, IDX_N_HEADS * IDX_HEAD_DIM], pl.INT8],
+    wq_b: pl.Tensor[[Q_LORA, IDX_N_HEADS * IDX_HEAD_DIM], pl.INT8, pl.NZ],
     wq_b_scale: pl.Tensor[[IDX_N_HEADS * IDX_HEAD_DIM], pl.FP32],
-    weights_proj: pl.Tensor[[D, IDX_N_HEADS], pl.BF16],
+    weights_proj: pl.Tensor[[D, IDX_N_HEADS], pl.BF16, pl.NZ],
     cos: pl.Tensor[[T, ROPE_HEAD_DIM // 2], pl.FP32],
     sin: pl.Tensor[[T, ROPE_HEAD_DIM // 2], pl.FP32],
     hadamard: pl.Tensor[[IDX_HEAD_DIM, IDX_HEAD_DIM], pl.BF16],
@@ -578,8 +580,8 @@ def _prefill_indexer_cp_score_topk(
         token0 = score_idx * SCORE_TOKEN_TILE
         last_pos = pl.read(position_ids, [num_tokens - 1])
         visible_limit = pl.min((last_pos + 1) // COMPRESS_RATIO, candidate_rows)
-        for cb in pl.range((visible_limit + CACHE_TILE - 1) // CACHE_TILE):
-            cache0 = cb * CACHE_TILE
+        for cb in pl.range((visible_limit + CP_SCORE_CACHE_TILE - 1) // CP_SCORE_CACHE_TILE):
+            cache0 = cb * CP_SCORE_CACHE_TILE
             logical_block = cache0 // BLOCK_SIZE
             page_offset = cache0 % BLOCK_SIZE
             if visible_limit > cache0 and logical_block < IDX_CACHE_MAX_BLOCKS:
@@ -587,9 +589,9 @@ def _prefill_indexer_cp_score_topk(
                 # Recipes page 0 is a zero sentinel, never a data page.
                 if physical_block_raw > 0 and physical_block_raw < idx_block_num:
                     kv_row0 = (pl.cast(physical_block_raw, pl.INDEX) * BLOCK_SIZE + page_offset)
-                    kv_q_i8_full = kv_cache_i8_flat[kv_row0 : kv_row0 + CACHE_TILE, 0:IDX_HEAD_DIM]
+                    kv_q_i8_full = kv_cache_i8_flat[kv_row0 : kv_row0 + CP_SCORE_CACHE_TILE, 0:IDX_HEAD_DIM]
                     kv_cache_scale_dq = pl.cast(
-                        kv_scale_flat[kv_row0 : kv_row0 + CACHE_TILE, :],
+                        kv_scale_flat[kv_row0 : kv_row0 + CP_SCORE_CACHE_TILE, :],
                         target_type=pl.FP32,
                         mode="none",
                     )
@@ -613,18 +615,18 @@ def _prefill_indexer_cp_score_topk(
                             weight_row = pl.cast(weights[t : t + 1, :], target_type=pl.FP32, mode="none")
                             weighted_heads = pl.col_expand_mul(relu_score_s, weight_row)
                             weighted_sum = pl.row_sum(weighted_heads)
-                            weighted_score_s = pl.reshape(weighted_sum, [1, CACHE_TILE])
+                            weighted_score_s = pl.reshape(weighted_sum, [1, CP_SCORE_CACHE_TILE])
                             pos = pl.read(position_ids, [t])
                             visible_t = pl.min((pos + 1) // COMPRESS_RATIO, candidate_rows)
                             if visible_t > cache0:
-                                valid_len_t = pl.min(CACHE_TILE, visible_t - cache0)
+                                valid_len_t = pl.min(CP_SCORE_CACHE_TILE, visible_t - cache0)
                             else:
                                 valid_len_t = 0
                             weighted_visible = pl.set_validshape(weighted_score_s, 1, valid_len_t)
                             weighted_valid_t = pl.fillpad(weighted_visible, pad_value=pl.PadValue.min)
-                            neg_inf_tile = pl.full([1, CACHE_TILE], dtype=pl.FP32, value=FP32_NEG_INF)
+                            neg_inf_tile = pl.full([1, CP_SCORE_CACHE_TILE], dtype=pl.FP32, value=FP32_NEG_INF)
                             weighted_valid_t = pl.maximum(weighted_valid_t, neg_inf_tile)
-                            score_wide[t : t + 1, cache0 : cache0 + CACHE_TILE] = weighted_valid_t
+                            score_wide[t : t + 1, cache0 : cache0 + CP_SCORE_CACHE_TILE] = weighted_valid_t
 
     # Select the model-configured TopK=512 with the incore tile path used by
     # #1080.  The old orchestration-level 4096 merge lowers to an illegal
@@ -669,7 +671,7 @@ def topk_prefix_contract_error(topk_indices, position_ids, num_tokens):
 
 
 def golden_prefill_indexer_core(tensors):
-    from utils import int8_quant_per_row
+    from utils import int8_quant_per_row, unpack_nz
     import torch
 
     compressor_tensors = {
@@ -715,7 +717,7 @@ def golden_prefill_indexer_core(tensors):
     # Q: int8 qr x int8 wq_b -> dequant -> per-token interleaved RoPE -> Hadamard rotation.
     qr = tensors["qr"]
     qr_scale = tensors["qr_scale"].float()
-    wq_b = tensors["wq_b"]
+    wq_b = unpack_nz(tensors["wq_b"])
     wq_b_scale = tensors["wq_b_scale"].float()
     hadamard = tensors["hadamard"].float()
     cos = tensors["cos"].float().view(T, 1, -1)
@@ -729,7 +731,7 @@ def golden_prefill_indexer_core(tensors):
     q = torch.cat([q[..., :-rd], torch.stack([y0, y1], dim=-1).flatten(-2)], dim=-1)
     q = q.to(torch.bfloat16).float() @ hadamard
 
-    weights = (tensors["x"].float() @ tensors["weights_proj"].float()) * WEIGHTS_SCALE  # [T, heads]
+    weights = (tensors["x"].float() @ unpack_nz(tensors["weights_proj"]).float()) * WEIGHTS_SCALE  # [T, heads]
 
     # C8: the compressor already stored INT8 KV + a per-position dequant scale. Gather both in
     # compressed-position order through the paged block table (no score-time re-quant).
@@ -780,9 +782,9 @@ def prefill_indexer_test(
     x: pl.Tensor[[T, D], pl.BF16],
     qr: pl.Tensor[[T, Q_LORA], pl.INT8],
     qr_scale: pl.Tensor[[T, 1], pl.FP32],
-    wq_b: pl.Tensor[[Q_LORA, IDX_N_HEADS * IDX_HEAD_DIM], pl.INT8],
+    wq_b: pl.Tensor[[Q_LORA, IDX_N_HEADS * IDX_HEAD_DIM], pl.INT8, pl.NZ],
     wq_b_scale: pl.Tensor[[IDX_N_HEADS * IDX_HEAD_DIM], pl.FP32],
-    weights_proj: pl.Tensor[[D, IDX_N_HEADS], pl.BF16],
+    weights_proj: pl.Tensor[[D, IDX_N_HEADS], pl.BF16, pl.NZ],
     cos: pl.Tensor[[T, ROPE_HEAD_DIM // 2], pl.FP32],
     sin: pl.Tensor[[T, ROPE_HEAD_DIM // 2], pl.FP32],
     freqs_cos: pl.Tensor[[MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16],
@@ -853,7 +855,7 @@ def gen_shared_weight(shape, dequant_std, chan_cv):
 
 
 def build_tensor_specs(start_pos: int = START_POS, num_tokens: int = T):
-    from utils import int8_quant_per_row
+    from utils import int8_quant_per_row, pack_nz
     import torch
     from golden import ScalarSpec, TensorSpec
     from utils import build_rope_tables, materialize_half_rope_tables
@@ -987,7 +989,7 @@ def build_tensor_specs(start_pos: int = START_POS, num_tokens: int = T):
     # idx wq_b uses the real MXFP8 grid (not a benign randn int8); qr is per-row int8 like the
     # runtime W8A8C16 activation path.
     wq_b_i8_T, wq_b_scale = gen_shared_weight((IDX_N_HEADS * IDX_HEAD_DIM, Q_LORA), dequant_std=0.108, chan_cv=0.56)
-    wq_b_i8 = wq_b_i8_T.t().contiguous()
+    wq_b_i8 = pack_nz(wq_b_i8_T.t().contiguous())
     qr_i8, qr_scale = int8_quant_per_row(torch.rand(T, Q_LORA))
 
     return [
@@ -996,7 +998,7 @@ def build_tensor_specs(start_pos: int = START_POS, num_tokens: int = T):
         TensorSpec("qr_scale", [T, 1], torch.float32, init_value=lambda: qr_scale),
         TensorSpec("wq_b", [Q_LORA, IDX_N_HEADS * IDX_HEAD_DIM], torch.int8, init_value=lambda: wq_b_i8),
         TensorSpec("wq_b_scale", [IDX_N_HEADS * IDX_HEAD_DIM], torch.float32, init_value=lambda: wq_b_scale),
-        TensorSpec("weights_proj", [D, IDX_N_HEADS], torch.bfloat16, init_value=init_weights_proj),
+        TensorSpec("weights_proj", [D, IDX_N_HEADS], torch.bfloat16, init_value=lambda: pack_nz(init_weights_proj().to(torch.bfloat16))),
         TensorSpec("cos", [T, ROPE_HEAD_DIM // 2], torch.float32, init_value=init_cos),
         TensorSpec("sin", [T, ROPE_HEAD_DIM // 2], torch.float32, init_value=init_sin),
         TensorSpec("freqs_cos", [MAX_SEQ_LEN, ROPE_HEAD_DIM], torch.bfloat16, init_value=init_freqs_cos),

@@ -57,6 +57,8 @@ AIV_CORES = 48
 QK_TASKS = AIC_CORES                  # 1 AIC + 2 AIV records each -> 24 AIC + 48 AIV
 MERGE_TASKS = AIV_CORES               # pure AIV, one full wave
 GATHER_RUN = 16          # window sub-tile probed for physical contiguity -> one bulk DMA
+GATHER_PARTS = 2
+GATHER_PART_ROWS = WIN // GATHER_PARTS
 REQUEST_KV_ROWS = WIN + S - 1
 H_TILE = 32
 QK_PRE_LAUNCH = 2
@@ -67,8 +69,9 @@ ATTN_K_TILE = 128
 ROPE_TILE = 16
 ROPE_INTERLEAVE_TILE = 2 * ROPE_TILE
 T_PAD = ((T + 16 - 1) // 16) * 16  # T padded up to the 16-row cube M floor
-ROPE_CS_T_TILE = 8  # rope cos/sin row block; T is a multiple of 8 by the batch contract
-BIAS_T_TILE = 8     # swa_valid_bias row block, same contract
+ROPE_CS_T_TILE = S  # rope cos/sin row block: one request per block
+ROPE_CS_WORKERS = 16
+BIAS_T_TILE = 8     # swa_valid_bias row block; 32B-aligned FP32 rows
 TOPK = WIN               # SWA sparse-K width: sliding window only
 SPARSE_BLOCKS = 1        # the SWA window fits one attention K tile
 PADDED_TOPK = SPARSE_BLOCKS * ATTN_K_TILE
@@ -81,6 +84,8 @@ ATTENTION_WINDOW_ROWS = LOCAL_O_GROUPS * GROUP_T_PAD
 
 if BLOCK_SIZE % GATHER_RUN != 0:
     raise ValueError("a contiguous run must not straddle two paged blocks")
+if WIN % (GATHER_PARTS * GATHER_RUN) != 0:
+    raise ValueError("the SWA window must contain complete gather partitions")
 if WIN != ATTN_K_TILE:
     raise ValueError(f"SWA decode expects WIN ({WIN}) == ATTN_K_TILE ({ATTN_K_TILE})")
 if H_TILE % HEADS_PER_GROUP != 0:
@@ -116,16 +121,30 @@ def sparse_attn_swa(
     # drops only the rows that have slid out of its window.
     swa_kv_flat = pl.create_tensor([request_count * REQUEST_KV_ROWS, HEAD_DIM], dtype=pl.BF16)
     gather_tids = pl.array.create(1, pl.TASK_ID)
-    with pl.spmd(request_count, name_hint="swa_gather_kv") as gather_tid:
-        g_req = pl.tile.get_block_idx()
+    with pl.spmd(request_count * GATHER_PARTS, name_hint="swa_gather_kv") as gather_tid:
+        g_worker = pl.tile.get_block_idx()
+        g_req = g_worker // GATHER_PARTS
+        g_part = g_worker % GATHER_PARTS
         g_t0 = g_req * S
         g_base = g_req * REQUEST_KV_ROWS
         g_first_len = pl.read(swa_lens, [g_t0])
-        g_zero_rows = pl.full([REQUEST_KV_ROWS, HEAD_DIM], dtype=pl.BF16, value=0.0)
-        swa_kv_flat[g_base : g_base + REQUEST_KV_ROWS, 0 : HEAD_DIM] = g_zero_rows
+        g_part_row0 = g_part * GATHER_PART_ROWS
+        if g_part == 0:
+            g_zero_rows = pl.full([GATHER_PART_ROWS, HEAD_DIM], dtype=pl.BF16, value=0.0)
+            swa_kv_flat[g_base : g_base + GATHER_PART_ROWS, 0 : HEAD_DIM] = g_zero_rows
+        else:
+            g_zero_tail = pl.full(
+                [REQUEST_KV_ROWS - GATHER_PART_ROWS, HEAD_DIM],
+                dtype=pl.BF16,
+                value=0.0,
+            )
+            swa_kv_flat[
+                g_base + GATHER_PART_ROWS : g_base + REQUEST_KV_ROWS,
+                0 : HEAD_DIM,
+            ] = g_zero_tail
 
-        for g_sub in pl.range((WIN - 1) // GATHER_RUN):
-            g_sr0 = g_sub * GATHER_RUN
+        for g_sub in pl.range(GATHER_PART_ROWS // GATHER_RUN):
+            g_sr0 = g_part_row0 + g_sub * GATHER_RUN
             g_sdst = g_base + g_sr0
             if g_sr0 + GATHER_RUN <= g_first_len:
                 g_first = pl.read(swa_indices, [g_t0, g_sr0])
@@ -152,22 +171,22 @@ def sparse_attn_swa(
                             g_dst = g_base + g_row
                             swa_kv_flat[g_dst : g_dst + 1, 0 : HEAD_DIM] = ori_kv_flat[g_slot : g_slot + 1, 0 : HEAD_DIM]
 
-        for g_row in pl.range(((WIN - 1) // GATHER_RUN) * GATHER_RUN, WIN):
-            if g_row < g_first_len:
-                g_slot_i32 = pl.read(swa_indices, [g_t0, g_row])
-                if g_slot_i32 >= 0:
-                    g_slot = pl.cast(g_slot_i32, pl.INDEX)
-                    g_dst = g_base + g_row
-                    swa_kv_flat[g_dst : g_dst + 1, 0 : HEAD_DIM] = ori_kv_flat[g_slot : g_slot + 1, 0 : HEAD_DIM]
-
         for g_token in pl.unroll(S - 1):
             g_t = g_t0 + g_token + 1
             g_len = pl.read(swa_lens, [g_t])
             g_slot_i32 = pl.read(swa_indices, [g_t, g_len - 1])
+            g_dst_row = g_first_len + g_token
             if g_slot_i32 >= 0:
-                g_slot = pl.cast(g_slot_i32, pl.INDEX)
-                g_dst = g_base + g_first_len + g_token
-                swa_kv_flat[g_dst : g_dst + 1, 0 : HEAD_DIM] = ori_kv_flat[g_slot : g_slot + 1, 0 : HEAD_DIM]
+                if g_part == 0 and g_dst_row < GATHER_PART_ROWS:
+                    g_slot = pl.cast(g_slot_i32, pl.INDEX)
+                    g_dst = g_base + g_dst_row
+                    g_slot_row = ori_kv_flat[g_slot : g_slot + 1, 0 : HEAD_DIM]
+                    swa_kv_flat[g_dst : g_dst + 1, 0 : HEAD_DIM] = g_slot_row
+                if g_part == GATHER_PARTS - 1 and g_dst_row >= GATHER_PART_ROWS:
+                    g_slot = pl.cast(g_slot_i32, pl.INDEX)
+                    g_dst = g_base + g_dst_row
+                    g_slot_row = ori_kv_flat[g_slot : g_slot + 1, 0 : HEAD_DIM]
+                    swa_kv_flat[g_dst : g_dst + 1, 0 : HEAD_DIM] = g_slot_row
 
     gather_tids[0] = gather_tid
 
@@ -185,6 +204,11 @@ def sparse_attn_swa(
         qk_task = pl.tile.get_block_idx()
         pl.system.set_ffts(ffts_workspace)
         qk_count = pl.max((t_dim - qk_task + QK_TASKS - 1) // QK_TASKS, 0)
+        qk_kv_l1 = pl.create_tile(
+            [QK_TRANSFER_SLOTS * ATTN_K_TILE, HEAD_DIM],
+            dtype=pl.BF16,
+            target_memory=pl.MemorySpace.Mat,
+        )
         for qk_tick in pl.range(qk_count + QK_PRE_LAUNCH):
             if qk_tick < qk_count:
                 qk_t = qk_task + qk_tick * QK_TASKS
@@ -196,23 +220,29 @@ def sparse_attn_swa(
                 qk_drop = pl.max(qk_first_len + qk_token - WIN, 0)
                 qk_base = qk_request * REQUEST_KV_ROWS + qk_drop
                 qk_q = pl.load(q_flat, [qk_t * H, 0], [H, HEAD_DIM], target_memory=pl.MemorySpace.Mat)
-                qk_kv = pl.load(swa_kv_flat, [qk_base, 0], [ATTN_K_TILE, HEAD_DIM], target_memory=pl.MemorySpace.Mat)
-                qk_scores = pl.matmul(qk_q, pl.tile.transpose_view(qk_kv), out_dtype=pl.FP32)
+                qk_l1_row = (qk_tick % QK_TRANSFER_SLOTS) * ATTN_K_TILE
+                qk_kv_l1 = pl.gather_row(
+                    qk_kv_l1,
+                    swa_kv_flat,
+                    [qk_l1_row, 0],
+                    [qk_base, 0],
+                    [ATTN_K_TILE, HEAD_DIM],
+                )
+                qk_kv_l1_t = pl.tile.transpose_view(qk_kv_l1)
+                qk_kv_t = pl.tile.slice(qk_kv_l1_t, [HEAD_DIM, ATTN_K_TILE], [0, qk_l1_row])
+                qk_scores = pl.matmul(qk_q, qk_kv_t, out_dtype=pl.FP32)
                 pl.store(qk_scores, [qk_row, 0], score_transfer)
                 pl.system.sync_set(QK_SCORE_READY_EVENT, pipe=pl.PipeType.FIX, ffts_mode=2, core_type=pl.KernelType.AIC)
             if qk_tick >= QK_PRE_LAUNCH:
                 pv_item = qk_tick - QK_PRE_LAUNCH
                 pv_t = qk_task + pv_item * QK_TASKS
                 pv_slot = qk_task * QK_TRANSFER_SLOTS + pv_item % QK_TRANSFER_SLOTS
-                pv_request = pv_t // S
-                pv_first_len = pl.read(swa_lens, [pv_request * S])
-                pv_drop = pl.max(pv_first_len + pv_t % S - WIN, 0)
-                pv_base = pv_request * REQUEST_KV_ROWS + pv_drop
                 pl.system.sync_wait(QK_PROB_READY_EVENT, pipe=pl.PipeType.MTE2, core_type=pl.KernelType.AIC)
                 pv_probability = pl.load(
                     probability_transfer, [pv_slot * H, 0], [H, ATTN_K_TILE], target_memory=pl.MemorySpace.Mat,
                 )
-                pv_kv = pl.load(swa_kv_flat, [pv_base, 0], [ATTN_K_TILE, HEAD_DIM], target_memory=pl.MemorySpace.Mat)
+                pv_l1_row = (pv_item % QK_TRANSFER_SLOTS) * ATTN_K_TILE
+                pv_kv = pl.tile.slice(qk_kv_l1, [ATTN_K_TILE, HEAD_DIM], [pv_l1_row, 0])
                 pv_output = pl.matmul(pv_probability, pv_kv, out_dtype=pl.FP32)
                 pl.store(pv_output, [pv_t * H, 0], sparse_blk_oi)
 
@@ -242,7 +272,7 @@ def sparse_attn_swa(
     rope_cos_il = pl.create_tensor([T_PAD, ROPE_DIM], dtype=pl.FP32)
     rope_sin_signed = pl.create_tensor([T_PAD, ROPE_DIM], dtype=pl.FP32)
     rope_swap_idx = pl.create_tensor([H_TILE, ROPE_DIM], dtype=pl.INT32)
-    with pl.at(level=pl.Level.CORE_GROUP, name_hint="rope_cs") as rope_tid:
+    with pl.at(level=pl.Level.CORE_GROUP, name_hint="rope_swap") as swap_tid:
         swap_ones = pl.full([H_TILE, ROPE_DIM], dtype=pl.FP32, value=1.0)
         swap_range_i32 = pl.arange(0, [1, ROPE_DIM], dtype=pl.INT32)
         swap_range = pl.cast(swap_range_i32, target_type=pl.FP32)
@@ -256,22 +286,24 @@ def sparse_attn_swa(
         swap_idx_f = pl.sub(swap_next, swap_stride)
         rope_swap_idx[:, :] = pl.cast(swap_idx_f, target_type=pl.INT32)
 
-        cs_ones = pl.full([ROPE_CS_T_TILE, ROPE_INTERLEAVE_TILE], dtype=pl.FP32, value=1.0)
-        cs_range_i32 = pl.arange(0, [1, ROPE_INTERLEAVE_TILE], dtype=pl.INT32)
-        cs_range = pl.cast(cs_range_i32, target_type=pl.FP32)
-        cs_col = pl.col_expand_mul(cs_ones, cs_range)
-        cs_half = pl.mul(cs_col, 0.5)
-        cs_dup_i32 = pl.cast(cs_half, target_type=pl.INT32, mode="trunc")
-        cs_dup_f = pl.cast(cs_dup_i32, target_type=pl.FP32)
-        cs_dup_idx = pl.cast(cs_dup_f, target_type=pl.INT32)
-        cs_lane = pl.sub(cs_col, pl.mul(cs_dup_f, 2.0))
-        cs_sign_base = pl.sub(pl.mul(cs_lane, 2.0), 1.0)
-        cs_sign = pl.neg(cs_sign_base)
-        for cp in pl.range(HALF_ROPE // ROPE_TILE):
-            cp_r0 = cp * ROPE_TILE
-            cp_c0 = 2 * cp_r0
-            for cs_rb in pl.range(rope_cs_blocks):
-                cs_t0 = cs_rb * ROPE_CS_T_TILE
+    with pl.spmd(pl.min(rope_cs_blocks, ROPE_CS_WORKERS), name_hint="rope_cs", deps=[swap_tid]) as rope_tid:
+        for cs_block in pl.range(pl.tile.get_block_idx(), rope_cs_blocks, pl.min(rope_cs_blocks, ROPE_CS_WORKERS)):
+            cs_rb = cs_block
+            cs_t0 = cs_rb * ROPE_CS_T_TILE
+            cs_ones = pl.full([ROPE_CS_T_TILE, ROPE_INTERLEAVE_TILE], dtype=pl.FP32, value=1.0)
+            cs_range_i32 = pl.arange(0, [1, ROPE_INTERLEAVE_TILE], dtype=pl.INT32)
+            cs_range = pl.cast(cs_range_i32, target_type=pl.FP32)
+            cs_col = pl.col_expand_mul(cs_ones, cs_range)
+            cs_half = pl.mul(cs_col, 0.5)
+            cs_dup_i32 = pl.cast(cs_half, target_type=pl.INT32, mode="trunc")
+            cs_dup_f = pl.cast(cs_dup_i32, target_type=pl.FP32)
+            cs_dup_idx = pl.cast(cs_dup_f, target_type=pl.INT32)
+            cs_lane = pl.sub(cs_col, pl.mul(cs_dup_f, 2.0))
+            cs_sign_base = pl.sub(pl.mul(cs_lane, 2.0), 1.0)
+            cs_sign = pl.neg(cs_sign_base)
+            for cp in pl.range(HALF_ROPE // ROPE_TILE):
+                cp_r0 = cp * ROPE_TILE
+                cp_c0 = 2 * cp_r0
                 cs_cos = pl.cast(freqs_cos[cs_t0 : cs_t0 + ROPE_CS_T_TILE, cp_r0 : cp_r0 + ROPE_TILE], target_type=pl.FP32)
                 cs_sin = pl.cast(freqs_sin[cs_t0 : cs_t0 + ROPE_CS_T_TILE, cp_r0 : cp_r0 + ROPE_TILE], target_type=pl.FP32)
                 cs_cos_dup = pl.gather(cs_cos, dim=-1, index=cs_dup_idx)

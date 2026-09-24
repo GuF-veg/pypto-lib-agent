@@ -94,8 +94,7 @@ SWA_TILE_WIN_ROWS = min(ATTN_K_TILE, WIN)
 SWA_RUNS = (SWA_TILE_WIN_ROWS + 2 * (BLOCK_SIZE - 1)) // BLOCK_SIZE
 
 
-@pl.jit.inline
-def sparse_attn_csa(
+def _sparse_attn_csa(
     q: pl.Tensor[[T, H, HEAD_DIM], pl.BF16],
     ori_kv: pl.Tensor[[ORI_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
     window_swa_indices: pl.Tensor[[T, WIN], pl.INT32],
@@ -106,11 +105,12 @@ def sparse_attn_csa(
     attn_sink: pl.Tensor[[H], pl.FP32],
     freqs_cos: pl.Tensor[[T, ROPE_DIM], pl.BF16],
     freqs_sin: pl.Tensor[[T, ROPE_DIM], pl.BF16],
-    wo_a: pl.Tensor[[O_GROUPS, O_LORA, O_GROUP_IN], pl.BF16],
-    wo_b: pl.Tensor[[D, O_GROUPS * O_LORA], pl.INT8],
+    wo_a: pl.Tensor[[O_GROUPS, O_LORA, O_GROUP_IN], pl.BF16, pl.NZ],
+    wo_b: pl.Tensor[[O_GROUPS, D, O_LORA], pl.INT8, pl.NZ],
     wo_b_scale: pl.Tensor[[D], pl.FP32],
-    attn_out: pl.Tensor[[T, D], pl.BF16],
+    attn_out: pl.Out[pl.Tensor[[T, D], pl.BF16]],
 ):
+    cmp_block_table.bind_dynamic(1, CMP_TABLE_BLOCKS_DYN)
     """Run sparse decode attention, inverse RoPE, and grouped output projection."""
     # Compressed index contract: -1 invalid, [0, ...) compressed KV slots.
     ori_block_num = pl.tensor.dim(ori_kv, 0)
@@ -443,13 +443,13 @@ def sparse_attn_csa(
                 d0 = dc * PROJ_B_D_TILE
                 for nf in pl.range(PROJ_B_D_TILE // PROJ_B_MM_N_TILE):
                     n0 = d0 + nf * PROJ_B_MM_N_TILE
-                    acc_b = pl.create_tensor([MM_T_TILE, PROJ_B_MM_N_TILE], dtype=pl.INT32)
+                    acc_b = pl.create_tensor([1, MM_T_TILE, PROJ_B_MM_N_TILE], dtype=pl.INT32)
                     for kb in pl.pipeline(0, O_LORA // B_K_TILE, stage=2):
-                        k0 = col_g + kb * B_K_TILE
-                        b_act = o_r_i8_pad[:, k0 : k0 + B_K_TILE]
-                        b_weight = wo_b[n0 : n0 + PROJ_B_MM_N_TILE, k0 : k0 + B_K_TILE]
+                        k0 = kb * B_K_TILE
+                        b_act = o_r_i8_pad[:, g * O_LORA + k0 : g * O_LORA + k0 + B_K_TILE]
+                        b_weight = wo_b[g : g + 1, n0 : n0 + PROJ_B_MM_N_TILE, k0 : k0 + B_K_TILE]
                         acc_b = pl.matmul_acc(acc_b, b_act, b_weight, b_trans=True, init_cond=(kb == 0))
-                    partials[0:MM_T_TILE, g * D + n0 : g * D + n0 + PROJ_B_MM_N_TILE] = acc_b
+                    partials = pl.assemble(partials, acc_b, [0, g * D + n0])
             proj_b_tids[g] = pb_tid
 
     # proj_b_act sums the O_GROUPS INT32 partials -- each dequantized by its group's
@@ -480,39 +480,15 @@ def sparse_attn_csa(
 
     return attn_out
 
-@pl.jit
-def sparse_attn_test(
-    q: pl.Tensor[[T, H, HEAD_DIM], pl.BF16],
-    ori_kv: pl.Tensor[[ORI_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
-    window_swa_indices: pl.Tensor[[T, WIN], pl.INT32],
-    cmp_kv: pl.Tensor[[CMP_BLOCK_NUM_DYN, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
-    cmp_block_table: pl.Tensor[[B, CMP_TABLE_BLOCKS_DYN], pl.INT32],
-    idx_topk: pl.Tensor[[T, IDX_TOPK], pl.INT32],
-    position_ids: pl.Tensor[[T, 1], pl.INT32],
-    attn_sink: pl.Tensor[[H], pl.FP32],
-    freqs_cos: pl.Tensor[[T, ROPE_DIM], pl.BF16],
-    freqs_sin: pl.Tensor[[T, ROPE_DIM], pl.BF16],
-    wo_a: pl.Tensor[[O_GROUPS, O_LORA, O_GROUP_IN], pl.BF16],
-    wo_b: pl.Tensor[[D, O_GROUPS * O_LORA], pl.INT8],
-    wo_b_scale: pl.Tensor[[D], pl.FP32],
-    attn_out: pl.Out[pl.Tensor[[T, D], pl.BF16]],
-):
-    cmp_block_table.bind_dynamic(1, CMP_TABLE_BLOCKS_DYN)
-    sparse_attn_csa(
-        q,
-        ori_kv, window_swa_indices,
-        cmp_kv, cmp_block_table, idx_topk,
-        position_ids, attn_sink,
-        freqs_cos, freqs_sin,
-        wo_a, wo_b, wo_b_scale,
-        attn_out,
-    )
-    return attn_out
+sparse_attn_csa = pl.jit.inline(_sparse_attn_csa)
+sparse_attn_test = pl.jit(_sparse_attn_csa)
 
 
 def golden_sparse_attn(tensors):
     """Torch reference: sparse_attn decode path followed by grouped o_proj."""
     import torch
+
+    from utils import unpack_nz
 
     q = tensors["q"].float()
     ori_kv = tensors["ori_kv"].float()
@@ -527,8 +503,8 @@ def golden_sparse_attn(tensors):
     attn_sink = tensors["attn_sink"].float()
     cos = tensors["freqs_cos"].float()
     sin = tensors["freqs_sin"].float()
-    wo_a = tensors["wo_a"].float()
-    wo_b_i8 = tensors["wo_b"]
+    wo_a = unpack_nz(tensors["wo_a"]).float()
+    wo_b_i8 = unpack_nz(tensors["wo_b"])
     wo_b_scale = tensors["wo_b_scale"].float()
 
     o = torch.zeros(T, H, HEAD_DIM)
@@ -624,10 +600,10 @@ def golden_sparse_attn(tensors):
     scale_q_g = INT8_SCALE_MAX / amax_g
     o_r_i8_g = torch.round(o_r_g * scale_q_g).to(torch.int32).to(torch.float16).to(torch.int8)
     scale_dq_g = 1.0 / scale_q_g                                              # [T, G, 1]
-    wo_b_g = wo_b_i8.reshape(D, O_GROUPS, O_LORA)
+    wo_b_g = wo_b_i8
     out = torch.zeros(T, D, dtype=torch.float32)
     for g in range(O_GROUPS):
-        p_g = o_r_i8_g[:, g].to(torch.int32) @ wo_b_g[:, g].to(torch.int32).T   # [T, D]
+        p_g = o_r_i8_g[:, g].to(torch.int32) @ wo_b_g[g].to(torch.int32).T   # [T, D]
         out = out + p_g.float() * scale_dq_g[:, g]                             # per-row group scale
     out = out * wo_b_scale.unsqueeze(0)                                        # per-channel weight scale
 
@@ -643,6 +619,7 @@ def build_tensor_specs(
     import torch
     from golden import TensorSpec
     from utils import block_table, quant_w_per_channel, swa_indices_and_lens
+    from utils import pack_nz
     from utils import build_rope_tables, materialize_token_rope_tables
 
     cmp_valid = IDX_TOPK
@@ -740,15 +717,15 @@ def build_tensor_specs(
         return shared_rope_sin.clone()
 
     def init_wo_a():
-        """Initialize the grouped first-stage output-projection weights."""
-        return (torch.rand(O_GROUPS, O_LORA, O_GROUP_IN) - 0.5) / (O_GROUP_IN ** 0.5)
+        """Initialize the grouped first-stage output-projection weights, NZ-packed."""
+        return pack_nz(((torch.rand(O_GROUPS, O_LORA, O_GROUP_IN) - 0.5) / (O_GROUP_IN ** 0.5)).to(torch.bfloat16))
 
     wo_b_bf16 = ((torch.rand(D, O_GROUPS * O_LORA) - 0.5) / ((O_GROUPS * O_LORA) ** 0.5)).to(torch.bfloat16)
     wo_b_i8, wo_b_scale = quant_w_per_channel(wo_b_bf16)
 
     def init_wo_b():
-        """Initialize the second-stage output-projection weights in per-channel INT8 form."""
-        return wo_b_i8
+        """Initialize the second-stage output-projection weights, group-major and NZ-packed."""
+        return pack_nz(wo_b_i8.reshape(D, O_GROUPS, O_LORA).permute(1, 0, 2).contiguous())
 
     def init_wo_b_scale():
         """Initialize the dequant scales paired with the INT8 second-stage weights."""
@@ -766,7 +743,7 @@ def build_tensor_specs(
         TensorSpec("freqs_cos", [T, ROPE_DIM], torch.bfloat16, init_value=init_cos),
         TensorSpec("freqs_sin", [T, ROPE_DIM], torch.bfloat16, init_value=init_sin),
         TensorSpec("wo_a", [O_GROUPS, O_LORA, O_GROUP_IN], torch.bfloat16, init_value=init_wo_a),
-        TensorSpec("wo_b", [D, O_GROUPS * O_LORA], torch.int8, init_value=init_wo_b),
+        TensorSpec("wo_b", [O_GROUPS, D, O_LORA], torch.int8, init_value=init_wo_b),
         TensorSpec("wo_b_scale", [D], torch.float32, init_value=init_wo_b_scale),
         TensorSpec("attn_out", [T, D], torch.bfloat16),
     ]

@@ -11,28 +11,39 @@
 
 
 # Sub-kernels freeze EP / n_routed_experts into their shapes at import
-# time, so read --ep from argv and override config before importing them below.
+# time: read --ep / --experts-per-rank from argv and override config before
+# importing them below.
 import dataclasses
+import functools
 import sys
 
 import config
 
 _EP_CHOICES = (2, 4, 8, 16)
 _EP_DEFAULT = 2
+# Fixed reference for the default density -- not config.EP, which a caller
+# (e.g. dspark_drafter.py) may already have overwritten before importing this.
+_CHECKPOINT_N_ROUTED_EXPERTS = config.FLASH.n_routed_experts
 
 
-def _parse_ep_argv():
+def _parse_int_argv(name, default):
     for i, tok in enumerate(sys.argv):
-        if tok == "--ep" and i + 1 < len(sys.argv):
+        if tok == name and i + 1 < len(sys.argv):
             return int(sys.argv[i + 1])
-        if tok.startswith("--ep="):
+        if tok.startswith(name + "="):
             return int(tok.split("=", 1)[1])
-    return _EP_DEFAULT
+    return default
 
 
-EP = _parse_ep_argv()
+EP = _parse_int_argv("--ep", _EP_DEFAULT)
+# Capped by EP so the default density (32/rank) can't overflow the checkpoint's
+# 256 experts past EP8 -- gate.py's score buffers are fixed at that width.
+_EXPERTS_PER_RANK_DEFAULT = min(_CHECKPOINT_N_ROUTED_EXPERTS // 8, _CHECKPOINT_N_ROUTED_EXPERTS // EP)
+EXPERTS_PER_RANK = _parse_int_argv("--experts-per-rank", _EXPERTS_PER_RANK_DEFAULT)
+if EXPERTS_PER_RANK <= 0:
+    raise ValueError(f"--experts-per-rank must be a positive integer (got {EXPERTS_PER_RANK})")
+config.FLASH = dataclasses.replace(config.FLASH, n_routed_experts=EXPERTS_PER_RANK * EP)
 config.EP = EP
-config.FLASH = dataclasses.replace(config.FLASH, n_routed_experts=config.FLASH.n_routed_experts // 16 * EP)
 config.RECV_MAX = EP * config.MOE_TOKENS
 
 import pypto.language as pl
@@ -68,6 +79,8 @@ MOE_INTER = M.moe_intermediate_size
 N_RANKS = EP
 N_EXPERTS_GLOBAL = M.n_routed_experts
 N_LOCAL = N_EXPERTS_GLOBAL // N_RANKS
+# TaskAllocator ring heap, scaled from the 256 MiB runtime default per 16 local experts.
+MOE_RING_HEAP = (1 << 28) * max(1, N_LOCAL // 16)
 N_ROUTES = T * TOPK
 
 # recv_x/recv_aux laid out [expert, source, slot], flattened to
@@ -167,9 +180,13 @@ def dispatch(
     # Meta and payload arrivals ride two independent windows: `arrived` and
     # `data_arrived`.
 
-    # Count routes, publish counts, barrier on meta, cumsum -> recv_count_out.
-    # Needs every source's counts but none of the bulk payload.
-    with pl.at(level=pl.Level.CORE_GROUP, name_hint="dispatch_meta", allow_early_resolve=True) as _meta_tid:
+    # Count routes and publish counts. The peer waits are registered separately
+    # so they do not occupy a core while waiting for a remote rank.
+    with pl.at(
+        level=pl.Level.CORE_GROUP,
+        name_hint="dispatch_meta_publish",
+        allow_early_resolve=True,
+    ) as _meta_push_tid:
         active_tokens = pl.cast(num_tokens, pl.INDEX)
         if active_tokens < 0:
             active_tokens = pl.cast(0, pl.INDEX)
@@ -201,11 +218,21 @@ def dispatch(
             if dst != my_rank:
                 pld.system.notify(target=arrived, peer=dst, offsets=[my_rank, 0], value=1, op=pld.NotifyOp.AtomicAdd)
 
-        # Wait for every source's meta flag.
+    # A deferred waiter must be a registration-only task. It cannot follow the
+    # route counting and publication work in the producer task above.
+    with pl.at(level=pl.Level.CORE_GROUP, name_hint="dispatch_meta_wait") as _meta_wait_tid:
         for src in pl.range(N_RANKS):
             if src != my_rank:
-                pld.system.wait(signal=arrived, offsets=[src, 0], expected=moe_epoch, cmp=pld.WaitCmp.Ge)
+                pld.system.defer_wait(signal=arrived, offsets=[src, 0], expected=moe_epoch, cmp=pld.WaitCmp.Ge)
 
+    # Consume metadata only after both the local publish and every peer arrival
+    # have completed. Keep _meta_tid as the downstream completion anchor.
+    with pl.at(
+        level=pl.Level.CORE_GROUP,
+        name_hint="dispatch_meta_finalize",
+        deps=[_meta_push_tid, _meta_wait_tid],
+        allow_early_resolve=True,
+    ) as _meta_tid:
         # Cumsum recv_meta over sources -> per-expert receive count, which sizes
         # the routed-expert tile loop.
         for e in pl.range(N_LOCAL):
@@ -393,17 +420,17 @@ def _moe_tile(
     gate_bias: pl.Tensor[[N_EXPERTS_GLOBAL], pl.FP32],
     tid2eid: pl.Tensor[[VOCAB, TOPK], pl.INT32],
     input_ids: pl.Tensor[[T], pl.INT64],
-    routed_w1: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8],
+    routed_w1: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8, pl.NZ],
     routed_w1_scale: pl.Tensor[[N_LOCAL, MOE_INTER], pl.FP32],
-    routed_w3: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8],
+    routed_w3: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8, pl.NZ],
     routed_w3_scale: pl.Tensor[[N_LOCAL, MOE_INTER], pl.FP32],
-    routed_w2: pl.Tensor[[N_LOCAL, D, MOE_INTER], pl.INT8],
+    routed_w2: pl.Tensor[[N_LOCAL, D, MOE_INTER], pl.INT8, pl.NZ],
     routed_w2_scale: pl.Tensor[[N_LOCAL, D], pl.FP32],
-    shared_w1: pl.Tensor[[MOE_INTER, D], pl.INT8],
+    shared_w1: pl.Tensor[[MOE_INTER, D], pl.INT8, pl.NZ],
     shared_w1_scale: pl.Tensor[[MOE_INTER], pl.FP32],
-    shared_w3: pl.Tensor[[MOE_INTER, D], pl.INT8],
+    shared_w3: pl.Tensor[[MOE_INTER, D], pl.INT8, pl.NZ],
     shared_w3_scale: pl.Tensor[[MOE_INTER], pl.FP32],
-    shared_w2: pl.Tensor[[D, MOE_INTER], pl.INT8],
+    shared_w2: pl.Tensor[[D, MOE_INTER], pl.INT8, pl.NZ],
     shared_w2_scale: pl.Tensor[[D], pl.FP32],
     ffn_out: pl.Tensor[[T, D], pl.BF16],
     recv_meta: pld.DistributedTensor[[N_RANKS, N_LOCAL], pl.INT32],
@@ -518,17 +545,17 @@ def moe(
     gate_bias: pl.Tensor[[N_EXPERTS_GLOBAL], pl.FP32],
     tid2eid: pl.Tensor[[VOCAB, TOPK], pl.INT32],
     input_ids: pl.Tensor[[T], pl.INT64],
-    routed_w1: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8],
+    routed_w1: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8, pl.NZ],
     routed_w1_scale: pl.Tensor[[N_LOCAL, MOE_INTER], pl.FP32],
-    routed_w3: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8],
+    routed_w3: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8, pl.NZ],
     routed_w3_scale: pl.Tensor[[N_LOCAL, MOE_INTER], pl.FP32],
-    routed_w2: pl.Tensor[[N_LOCAL, D, MOE_INTER], pl.INT8],
+    routed_w2: pl.Tensor[[N_LOCAL, D, MOE_INTER], pl.INT8, pl.NZ],
     routed_w2_scale: pl.Tensor[[N_LOCAL, D], pl.FP32],
-    shared_w1: pl.Tensor[[MOE_INTER, D], pl.INT8],
+    shared_w1: pl.Tensor[[MOE_INTER, D], pl.INT8, pl.NZ],
     shared_w1_scale: pl.Tensor[[MOE_INTER], pl.FP32],
-    shared_w3: pl.Tensor[[MOE_INTER, D], pl.INT8],
+    shared_w3: pl.Tensor[[MOE_INTER, D], pl.INT8, pl.NZ],
     shared_w3_scale: pl.Tensor[[MOE_INTER], pl.FP32],
-    shared_w2: pl.Tensor[[D, MOE_INTER], pl.INT8],
+    shared_w2: pl.Tensor[[D, MOE_INTER], pl.INT8, pl.NZ],
     shared_w2_scale: pl.Tensor[[D], pl.FP32],
     # final output
     x_next: pl.Tensor[[T, HC_MULT, D], pl.FP32],
@@ -583,17 +610,17 @@ def prefill_moe(
     gate_bias: pl.Tensor[[N_EXPERTS_GLOBAL], pl.FP32],
     tid2eid: pl.Tensor[[VOCAB, TOPK], pl.INT32],
     input_ids: pl.Tensor[[PREFILL_LOCAL_T_DYN], pl.INT64],
-    routed_w1: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8],
+    routed_w1: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8, pl.NZ],
     routed_w1_scale: pl.Tensor[[N_LOCAL, MOE_INTER], pl.FP32],
-    routed_w3: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8],
+    routed_w3: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8, pl.NZ],
     routed_w3_scale: pl.Tensor[[N_LOCAL, MOE_INTER], pl.FP32],
-    routed_w2: pl.Tensor[[N_LOCAL, D, MOE_INTER], pl.INT8],
+    routed_w2: pl.Tensor[[N_LOCAL, D, MOE_INTER], pl.INT8, pl.NZ],
     routed_w2_scale: pl.Tensor[[N_LOCAL, D], pl.FP32],
-    shared_w1: pl.Tensor[[MOE_INTER, D], pl.INT8],
+    shared_w1: pl.Tensor[[MOE_INTER, D], pl.INT8, pl.NZ],
     shared_w1_scale: pl.Tensor[[MOE_INTER], pl.FP32],
-    shared_w3: pl.Tensor[[MOE_INTER, D], pl.INT8],
+    shared_w3: pl.Tensor[[MOE_INTER, D], pl.INT8, pl.NZ],
     shared_w3_scale: pl.Tensor[[MOE_INTER], pl.FP32],
-    shared_w2: pl.Tensor[[D, MOE_INTER], pl.INT8],
+    shared_w2: pl.Tensor[[D, MOE_INTER], pl.INT8, pl.NZ],
     shared_w2_scale: pl.Tensor[[D], pl.FP32],
     x_hc: pl.Tensor[[PREFILL_GROUP_T_DYN, HC_MULT, D], pl.FP32],
     x_mixed: pl.Tensor[[PREFILL_GROUP_T_DYN, D], pl.BF16],
@@ -752,17 +779,17 @@ def moe_test(
     gate_bias: pl.Tensor[[N_EXPERTS_GLOBAL], pl.FP32],
     tid2eid: pl.Tensor[[VOCAB, TOPK], pl.INT32],
     input_ids: pl.Tensor[[T], pl.INT64],
-    routed_w1: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8],
+    routed_w1: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8, pl.NZ],
     routed_w1_scale: pl.Tensor[[N_LOCAL, MOE_INTER], pl.FP32],
-    routed_w3: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8],
+    routed_w3: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8, pl.NZ],
     routed_w3_scale: pl.Tensor[[N_LOCAL, MOE_INTER], pl.FP32],
-    routed_w2: pl.Tensor[[N_LOCAL, D, MOE_INTER], pl.INT8],
+    routed_w2: pl.Tensor[[N_LOCAL, D, MOE_INTER], pl.INT8, pl.NZ],
     routed_w2_scale: pl.Tensor[[N_LOCAL, D], pl.FP32],
-    shared_w1: pl.Tensor[[MOE_INTER, D], pl.INT8],
+    shared_w1: pl.Tensor[[MOE_INTER, D], pl.INT8, pl.NZ],
     shared_w1_scale: pl.Tensor[[MOE_INTER], pl.FP32],
-    shared_w3: pl.Tensor[[MOE_INTER, D], pl.INT8],
+    shared_w3: pl.Tensor[[MOE_INTER, D], pl.INT8, pl.NZ],
     shared_w3_scale: pl.Tensor[[MOE_INTER], pl.FP32],
-    shared_w2: pl.Tensor[[D, MOE_INTER], pl.INT8],
+    shared_w2: pl.Tensor[[D, MOE_INTER], pl.INT8, pl.NZ],
     shared_w2_scale: pl.Tensor[[D], pl.FP32],
     # final output
     x_next: pl.Out[pl.Tensor[[T, HC_MULT, D], pl.FP32]],
@@ -1134,11 +1161,55 @@ def _profile_routes(active_tokens):
     return routes
 
 
+# Routed = MXFP4 (gen_routed_weight), shared = MXFP8 (gen_shared_weight). This
+# is an integration test whose x_next-equivalent output is dominated by near-zero
+# residual+FFN cancellations, so it keeps the smaller *behaviorally-calibrated* magnitude
+# (random fixtures blow up the relative metric at the real ~2.5e-2 magnitude); only the
+# grid SHAPE (FP4/FP8 discreteness, scale CV) matches the real distribution.
+ROUTED_DEQUANT_STD = {"w1": 1.08e-2, "w2": 2.54e-2, "w3": 1.10e-2}
+SHARED_DEQUANT_STD = {"w1": 7.65e-3, "w2": 2.39e-2, "w3": 7.39e-3}
+
+
+@functools.cache
+def _routed_weights():
+    """Per-rank routed expert weights (different shards), generated once per process."""
+    import torch
+    from expert_routed import gen_routed_weight
+
+    shapes = {
+        "w1": (N_LOCAL, MOE_INTER, D),
+        "w3": (N_LOCAL, MOE_INTER, D),
+        "w2": (N_LOCAL, D, MOE_INTER),
+    }
+    weights = {}
+    for key, shape in shapes.items():
+        per_rank = [gen_routed_weight(shape, ROUTED_DEQUANT_STD[key]) for _ in range(N_RANKS)]
+        weights[f"routed_{key}"] = torch.stack([w_i8 for w_i8, _ in per_rank])
+        weights[f"routed_{key}_scale"] = torch.stack([w_s for _, w_s in per_rank])
+    return weights
+
+
+@functools.cache
+def _shared_weights():
+    """Shared expert weights replicated across ranks, generated once per process."""
+    from expert_shared import gen_shared_weight
+
+    shapes = {
+        "w1": ((MOE_INTER, D), 0.50),
+        "w3": ((MOE_INTER, D), 0.50),
+        "w2": ((D, MOE_INTER), 0.33),
+    }
+    weights = {}
+    for key, (shape, chan_cv) in shapes.items():
+        w_i8, w_s = gen_shared_weight(shape, SHARED_DEQUANT_STD[key], chan_cv=chan_cv)
+        weights[f"shared_{key}"] = w_i8.unsqueeze(0).expand(N_RANKS, -1, -1).contiguous()
+        weights[f"shared_{key}_scale"] = w_s.unsqueeze(0).expand(N_RANKS, -1).contiguous()
+    return weights
+
+
 def _build_tensor_specs(layer_id, num_tokens, routing, fixture_rounds):
     import torch
     from golden import ScalarSpec, TensorSpec
-    from expert_routed import gen_routed_weight
-    from expert_shared import gen_shared_weight
 
     retain_round_axis = fixture_rounds is not None
     rounds = fixture_rounds if retain_round_axis else 1
@@ -1149,14 +1220,6 @@ def _build_tensor_specs(layer_id, num_tokens, routing, fixture_rounds):
     if routing == "real":
         assert layer_id < M.num_hash_layers, "the routing profile requires a hash-routing layer"
         real_routes = _profile_routes(max(0, min(T, num_tokens)))
-
-    # Routed = MXFP4 (gen_routed_weight), shared = MXFP8 (gen_shared_weight). This
-    # is an integration test whose x_next-equivalent output is dominated by near-zero
-    # residual+FFN cancellations, so it keeps the smaller *behaviorally-calibrated* magnitude
-    # (random fixtures blow up the relative metric at the real ~2.5e-2 magnitude); only the
-    # grid SHAPE (FP4/FP8 discreteness, scale CV) matches the real distribution.
-    ROUTED_DEQUANT_STD = {"w1": 1.08e-2, "w2": 2.54e-2, "w3": 1.10e-2}
-    SHARED_DEQUANT_STD = {"w1": 7.65e-3, "w2": 2.39e-2, "w3": 7.39e-3}
 
     # Shared (replicated) weights are broadcast across ranks; the routed
     # weights are per-rank shards.
@@ -1238,42 +1301,6 @@ def _build_tensor_specs(layer_id, num_tokens, routing, fixture_rounds):
         assert active_routes % N_EXPERTS_GLOBAL == 0, \
             "balanced routing requires the active route count to divide evenly across experts"
 
-    # Per-rank routed expert weights (different shards).
-    routed_w1_i8_list = []
-    routed_w1_s_list = []
-    routed_w3_i8_list = []
-    routed_w3_s_list = []
-    routed_w2_i8_list = []
-    routed_w2_s_list = []
-    for _ in range(N_RANKS):
-        w1_i8, w1_s = gen_routed_weight((N_LOCAL, MOE_INTER, D), ROUTED_DEQUANT_STD["w1"])
-        w3_i8, w3_s = gen_routed_weight((N_LOCAL, MOE_INTER, D), ROUTED_DEQUANT_STD["w3"])
-        w2_i8, w2_s = gen_routed_weight((N_LOCAL, D, MOE_INTER), ROUTED_DEQUANT_STD["w2"])
-        routed_w1_i8_list.append(w1_i8)
-        routed_w1_s_list.append(w1_s)
-        routed_w3_i8_list.append(w3_i8)
-        routed_w3_s_list.append(w3_s)
-        routed_w2_i8_list.append(w2_i8)
-        routed_w2_s_list.append(w2_s)
-
-    rw1_i8 = torch.stack(routed_w1_i8_list)
-    rw1_s = torch.stack(routed_w1_s_list)
-    rw3_i8 = torch.stack(routed_w3_i8_list)
-    rw3_s = torch.stack(routed_w3_s_list)
-    rw2_i8 = torch.stack(routed_w2_i8_list)
-    rw2_s = torch.stack(routed_w2_s_list)
-
-    # Shared expert weights — replicated across ranks.
-    sw1_i8, sw1_s = gen_shared_weight((MOE_INTER, D), SHARED_DEQUANT_STD["w1"], chan_cv=0.50)
-    sw3_i8, sw3_s = gen_shared_weight((MOE_INTER, D), SHARED_DEQUANT_STD["w3"], chan_cv=0.50)
-    sw2_i8, sw2_s = gen_shared_weight((D, MOE_INTER), SHARED_DEQUANT_STD["w2"], chan_cv=0.33)
-    sw1_i8 = sw1_i8.unsqueeze(0).expand(N_RANKS, -1, -1).contiguous()
-    sw1_s = sw1_s.unsqueeze(0).expand(N_RANKS, -1).contiguous()
-    sw3_i8 = sw3_i8.unsqueeze(0).expand(N_RANKS, -1, -1).contiguous()
-    sw3_s = sw3_s.unsqueeze(0).expand(N_RANKS, -1).contiguous()
-    sw2_i8 = sw2_i8.unsqueeze(0).expand(N_RANKS, -1, -1).contiguous()
-    sw2_s = sw2_s.unsqueeze(0).expand(N_RANKS, -1).contiguous()
-
     x_hc_shape = [N_RANKS, T, HC_MULT, D]
     input_ids_shape = [N_RANKS, T]
     if retain_round_axis:
@@ -1290,18 +1317,18 @@ def _build_tensor_specs(layer_id, num_tokens, routing, fixture_rounds):
         TensorSpec("gate_bias",     [N_RANKS, N_EXPERTS_GLOBAL],     torch.float32,  init_value=init_gate_bias),
         TensorSpec("tid2eid",       [N_RANKS, VOCAB, TOPK],          torch.int32,    init_value=init_tid2eid),
         TensorSpec("input_ids", input_ids_shape, torch.int64, init_value=init_input_ids),
-        TensorSpec("routed_w1",        [N_RANKS, N_LOCAL, MOE_INTER, D], torch.int8,    init_value=lambda: rw1_i8),
-        TensorSpec("routed_w1_scale",  [N_RANKS, N_LOCAL, MOE_INTER],    torch.float32, init_value=lambda: rw1_s),
-        TensorSpec("routed_w3",        [N_RANKS, N_LOCAL, MOE_INTER, D], torch.int8,    init_value=lambda: rw3_i8),
-        TensorSpec("routed_w3_scale",  [N_RANKS, N_LOCAL, MOE_INTER],    torch.float32, init_value=lambda: rw3_s),
-        TensorSpec("routed_w2",        [N_RANKS, N_LOCAL, D, MOE_INTER], torch.int8,    init_value=lambda: rw2_i8),
-        TensorSpec("routed_w2_scale",  [N_RANKS, N_LOCAL, D],            torch.float32, init_value=lambda: rw2_s),
-        TensorSpec("shared_w1",        [N_RANKS, MOE_INTER, D],          torch.int8,    init_value=lambda: sw1_i8),
-        TensorSpec("shared_w1_scale",  [N_RANKS, MOE_INTER],             torch.float32, init_value=lambda: sw1_s),
-        TensorSpec("shared_w3",        [N_RANKS, MOE_INTER, D],          torch.int8,    init_value=lambda: sw3_i8),
-        TensorSpec("shared_w3_scale",  [N_RANKS, MOE_INTER],             torch.float32, init_value=lambda: sw3_s),
-        TensorSpec("shared_w2",        [N_RANKS, D, MOE_INTER],          torch.int8,    init_value=lambda: sw2_i8),
-        TensorSpec("shared_w2_scale",  [N_RANKS, D],                     torch.float32, init_value=lambda: sw2_s),
+        TensorSpec("routed_w1",        [N_RANKS, N_LOCAL, MOE_INTER, D], torch.int8,    init_value=lambda: _routed_weights()["routed_w1"]),
+        TensorSpec("routed_w1_scale",  [N_RANKS, N_LOCAL, MOE_INTER],    torch.float32, init_value=lambda: _routed_weights()["routed_w1_scale"]),
+        TensorSpec("routed_w3",        [N_RANKS, N_LOCAL, MOE_INTER, D], torch.int8,    init_value=lambda: _routed_weights()["routed_w3"]),
+        TensorSpec("routed_w3_scale",  [N_RANKS, N_LOCAL, MOE_INTER],    torch.float32, init_value=lambda: _routed_weights()["routed_w3_scale"]),
+        TensorSpec("routed_w2",        [N_RANKS, N_LOCAL, D, MOE_INTER], torch.int8,    init_value=lambda: _routed_weights()["routed_w2"]),
+        TensorSpec("routed_w2_scale",  [N_RANKS, N_LOCAL, D],            torch.float32, init_value=lambda: _routed_weights()["routed_w2_scale"]),
+        TensorSpec("shared_w1",        [N_RANKS, MOE_INTER, D],          torch.int8,    init_value=lambda: _shared_weights()["shared_w1"]),
+        TensorSpec("shared_w1_scale",  [N_RANKS, MOE_INTER],             torch.float32, init_value=lambda: _shared_weights()["shared_w1_scale"]),
+        TensorSpec("shared_w3",        [N_RANKS, MOE_INTER, D],          torch.int8,    init_value=lambda: _shared_weights()["shared_w3"]),
+        TensorSpec("shared_w3_scale",  [N_RANKS, MOE_INTER],             torch.float32, init_value=lambda: _shared_weights()["shared_w3_scale"]),
+        TensorSpec("shared_w2",        [N_RANKS, D, MOE_INTER],          torch.int8,    init_value=lambda: _shared_weights()["shared_w2"]),
+        TensorSpec("shared_w2_scale",  [N_RANKS, D],                     torch.float32, init_value=lambda: _shared_weights()["shared_w2_scale"]),
         TensorSpec("x_next", x_hc_shape, torch.float32),
         ScalarSpec("layer_id",         torch.int32,                      layer_id),
         ScalarSpec("num_tokens",       torch.int32,                      num_tokens),
@@ -1348,6 +1375,8 @@ if __name__ == "__main__":
                         choices=["a2a3", "a2a3sim", "a5", "a5sim"])
     parser.add_argument("--ep", type=int, default=_EP_DEFAULT, choices=list(_EP_CHOICES),
                         help="EP world size / rank count")
+    parser.add_argument("--experts-per-rank", type=int, default=EXPERTS_PER_RANK,
+                        help=f"routed experts per rank (default {_EXPERTS_PER_RANK_DEFAULT})")
     parser.add_argument("-d", "--device", type=str, default=",".join(str(i) for i in range(N_RANKS)),
                         help=f"comma-separated device ids (need {N_RANKS})")
     parser.add_argument("--layer-id", type=int, default=0)
@@ -1394,6 +1423,7 @@ if __name__ == "__main__":
             platform=args.platform,
             enable_chip_swimlane=args.enable_chip_swimlane,
             log_level=args.log_level,
+            ring_heap=MOE_RING_HEAP,
         ),
         rtol=1e-3,
         atol=1e-3,

@@ -49,7 +49,6 @@ FWD_CSA_WEIGHT_BANK_SIZE = 21 if FWD_WEIGHT_BANK_SIZE == 43 else 1
 FWD_HCA_WEIGHT_BANK_SIZE = 20 if FWD_WEIGHT_BANK_SIZE == 43 else 1
 
 config.TP = TP_SIZE
-config.EP = EP_SIZE
 
 import decode_csa as csa
 import decode_hca as hca
@@ -65,7 +64,6 @@ from decode_cp_allgather import (
 from decode_csa import decode_csa, decode_csa_tp1
 from decode_hca import decode_hca, decode_hca_tp1
 from decode_swa import decode_swa, decode_swa_tp1
-from dspark_proj import MAIN_HIDDEN_DIM, TARGET_LAYER_IDS
 from hc_head import hc_head
 from lm_head import (
     GROUP_LOGIT_ROWS,
@@ -103,6 +101,8 @@ MAX_PUBLIC_TENSOR_DIMS = 5
 N_RANKS = moe_module.N_RANKS
 MOE_TOKENS = moe_module.T
 D = swa.D
+TARGET_LAYER_IDS = (40, 41, 42)  # dspark_target_layer_ids
+MAIN_HIDDEN_DIM = len(TARGET_LAYER_IDS) * D
 HC_MULT = swa.HC_MULT
 HC_DIM = swa.HC_DIM
 LM_HEAD_COMM_EPOCH = 1
@@ -116,8 +116,8 @@ WIN = swa.WIN
 O_LORA = swa.O_LORA
 O_GROUP_IN = swa.O_GROUP_IN
 LOCAL_O_GROUPS = swa.LOCAL_O_GROUPS
-LOCAL_O_WIDTH = swa.LOCAL_O_WIDTH
 BLOCK_SIZE = swa.BLOCK_SIZE
+HCA_CMP_STORAGE_BLOCK_SIZE = hca.CMP_STORAGE_BLOCK_SIZE
 ATTENTION_WINDOW_ROWS = swa.ATTENTION_WINDOW_ROWS
 O_WINDOW_ROWS = swa.O_WINDOW_ROWS
 N_EXPERTS_GLOBAL = moe_module.N_EXPERTS_GLOBAL
@@ -287,15 +287,14 @@ def decode_embedding_preamble(
     return x_hc
 
 
-@pl.jit(auto_scope=False)
-def decode_fwd(
+def _decode_fwd(
     embed_weight: pl.Tensor[[EMBED_VOCAB_DYN, D], pl.BF16],
     hc_attn_fn: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * HC_FN_STORAGE_ROWS, HC_DIM], pl.FP32],
     hc_attn_scale: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * 3], pl.FP32],
     hc_attn_base: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * MIX_HC], pl.FP32],
     attn_norm_w: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * D], pl.BF16],
-    wq_a: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * D, Q_LORA], pl.BF16],
-    wq_b: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * Q_LORA, H * HEAD_DIM], pl.INT8],
+    wq_a: pl.Tensor[[FWD_WEIGHT_BANK_SIZE, D, Q_LORA], pl.BF16, pl.NZ],
+    wq_b: pl.Tensor[[FWD_WEIGHT_BANK_SIZE, Q_LORA, H * HEAD_DIM], pl.INT8, pl.NZ],
     wq_b_scale: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * H * HEAD_DIM], pl.FP32],
     wkv: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * D, HEAD_DIM], pl.BF16],
     gamma_cq: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * Q_LORA], pl.BF16],
@@ -349,7 +348,7 @@ def decode_fwd(
     hca_cmp_norm_w: pl.Tensor[[FWD_HCA_WEIGHT_BANK_SIZE * HEAD_DIM], pl.BF16],
     hca_compress_state: pl.InOut[pl.Tensor[[FWD_HCA_STATE_BLOCKS_DYN, HCA_COMPRESS_STATE_BLOCK_SIZE, HCA_COMPRESS_STATE_DIM], pl.FP32]],
     hca_compress_state_block_table: pl.Tensor[[KV_B_DYN, HCA_COMPRESS_STATE_MAX_BLOCKS], pl.INT32],
-    hca_cmp_kv: pl.InOut[pl.Tensor[[FWD_HCA_CMP_BLOCKS_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
+    hca_cmp_kv: pl.InOut[pl.Tensor[[FWD_HCA_CMP_BLOCKS_DYN, HCA_CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
     hca_cmp_block_table: pl.Tensor[[HCA_B_DYN, HCA_CMP_TABLE_BLOCKS_DYN], pl.INT32],
     hca_ori_slot_mapping: pl.Tensor[[KV_T_DYN], pl.INT64],
     hca_window_swa_indices: pl.Tensor[[T_DYN, WIN], pl.INT32],
@@ -358,8 +357,8 @@ def decode_fwd(
     hca_state_slot_mapping: pl.Tensor[[KV_T_DYN], pl.INT64],
     hca_kv_seq_lens: pl.Tensor[[HCA_B_DYN], pl.INT32],
     attn_sink: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * H], pl.FP32],
-    wo_a: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * LOCAL_O_GROUPS, O_LORA, O_GROUP_IN], pl.BF16],
-    wo_b: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * D, LOCAL_O_WIDTH], pl.INT8],
+    wo_a: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * LOCAL_O_GROUPS, O_LORA, O_GROUP_IN], pl.BF16, pl.NZ],
+    wo_b: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * LOCAL_O_GROUPS, D, O_LORA], pl.INT8, pl.NZ],
     wo_b_scale: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * D], pl.FP32],
     hc_ffn_fn: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * HC_FN_STORAGE_ROWS, HC_DIM], pl.FP32],
     hc_ffn_scale: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * 3], pl.FP32],
@@ -374,19 +373,19 @@ def decode_fwd(
     hc_head_scale: pl.Tensor[[1], pl.FP32],
     hc_head_base: pl.Tensor[[HC_MULT], pl.FP32],
     final_norm_w: pl.Tensor[[D], pl.BF16],
-    lm_head_weight: pl.Tensor[[VOCAB_PER_TP, D], pl.BF16],
+    lm_head_weight: pl.Tensor[[VOCAB_PER_TP, D], pl.BF16, pl.NZ],
     logit_row_indices: pl.Tensor[[MAX_LOGIT_ROWS], pl.INT32],
-    routed_w1: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * N_LOCAL, MOE_INTER, D], pl.INT8],
+    routed_w1: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * N_LOCAL, MOE_INTER, D], pl.INT8, pl.NZ],
     routed_w1_scale: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * N_LOCAL, MOE_INTER], pl.FP32],
-    routed_w3: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * N_LOCAL, MOE_INTER, D], pl.INT8],
+    routed_w3: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * N_LOCAL, MOE_INTER, D], pl.INT8, pl.NZ],
     routed_w3_scale: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * N_LOCAL, MOE_INTER], pl.FP32],
-    routed_w2: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * N_LOCAL, D, MOE_INTER], pl.INT8],
+    routed_w2: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * N_LOCAL, D, MOE_INTER], pl.INT8, pl.NZ],
     routed_w2_scale: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * N_LOCAL, D], pl.FP32],
-    shared_w1: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * MOE_INTER, D], pl.INT8],
+    shared_w1: pl.Tensor[[FWD_WEIGHT_BANK_SIZE, MOE_INTER, D], pl.INT8, pl.NZ],
     shared_w1_scale: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * MOE_INTER], pl.FP32],
-    shared_w3: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * MOE_INTER, D], pl.INT8],
+    shared_w3: pl.Tensor[[FWD_WEIGHT_BANK_SIZE, MOE_INTER, D], pl.INT8, pl.NZ],
     shared_w3_scale: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * MOE_INTER], pl.FP32],
-    shared_w2: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * D, MOE_INTER], pl.INT8],
+    shared_w2: pl.Tensor[[FWD_WEIGHT_BANK_SIZE, D, MOE_INTER], pl.INT8, pl.NZ],
     shared_w2_scale: pl.Tensor[[FWD_WEIGHT_BANK_SIZE * D], pl.FP32],
     hidden_workspace: pl.Out[pl.Tensor[[T_DYN, D], pl.BF16]],
     x_ping: pl.InOut[pl.Tensor[[T_DYN, HC_MULT, D], pl.FP32]],
@@ -502,19 +501,19 @@ def decode_fwd(
         weight_layer_swa0 = pl.const(0, pl.INT32)
         hc_attn_fn_layer_swa0 = pl.slice(hc_attn_fn, [MIX_HC, HC_DIM], [0, 0])
         hc_ffn_fn_layer_swa0 = pl.slice(hc_ffn_fn, [MIX_HC, HC_DIM], [0, 0])
-        wq_a_layer_swa0: pl.Tensor[[D, Q_LORA], pl.BF16] = pl.slice(wq_a, [D, Q_LORA], [0, 0])
-        wq_b_layer_swa0: pl.Tensor[[Q_LORA, H * HEAD_DIM], pl.INT8] = pl.slice(wq_b, [Q_LORA, H * HEAD_DIM], [0, 0])
+        wq_a_layer_swa0: pl.Tensor[[D, Q_LORA], pl.BF16, pl.NZ] = wq_a[0]
+        wq_b_layer_swa0: pl.Tensor[[Q_LORA, H * HEAD_DIM], pl.INT8, pl.NZ] = wq_b[0]
         wq_b_scale_layer_swa0: pl.Tensor[[H * HEAD_DIM], pl.FP32] = pl.slice(wq_b_scale, [H * HEAD_DIM], [0])
         wkv_layer_swa0: pl.Tensor[[D, HEAD_DIM], pl.BF16] = pl.slice(wkv, [D, HEAD_DIM], [0, 0])
         gamma_cq_layer_swa0: pl.Tensor[[Q_LORA], pl.BF16] = pl.slice(gamma_cq, [Q_LORA], [0])
         gamma_ckv_layer_swa0: pl.Tensor[[HEAD_DIM], pl.BF16] = pl.slice(gamma_ckv, [HEAD_DIM], [0])
         wo_a_layer_swa0: pl.Tensor[[LOCAL_O_GROUPS, O_LORA, O_GROUP_IN], pl.BF16] = pl.slice(wo_a, [LOCAL_O_GROUPS, O_LORA, O_GROUP_IN], [weight_layer_swa0 * LOCAL_O_GROUPS, 0, 0])
-        routed_w1_layer_swa0: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8] = pl.slice(routed_w1, [N_LOCAL, MOE_INTER, D], [weight_layer_swa0 * N_LOCAL, 0, 0])
+        routed_w1_layer_swa0: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8, pl.NZ] = pl.slice(routed_w1, [N_LOCAL, MOE_INTER, D], [weight_layer_swa0 * N_LOCAL, 0, 0])
         hc_attn_scale_layer_swa0 = pl.slice(hc_attn_scale, [3], [0])
         hc_attn_base_layer_swa0 = pl.slice(hc_attn_base, [MIX_HC], [0])
         attn_norm_w_layer_swa0 = pl.slice(attn_norm_w, [D], [0])
         attn_sink_layer_swa0 = pl.slice(attn_sink, [H], [0])
-        wo_b_layer_swa0 = pl.slice(wo_b, [D, LOCAL_O_WIDTH], [0, 0])
+        wo_b_layer_swa0 = pl.slice(wo_b, [LOCAL_O_GROUPS, D, O_LORA], [0, 0, 0])
         wo_b_scale_layer_swa0 = pl.slice(wo_b_scale, [D], [0])
         hc_ffn_scale_layer_swa0 = pl.slice(hc_ffn_scale, [3], [0])
         hc_ffn_base_layer_swa0 = pl.slice(hc_ffn_base, [MIX_HC], [0])
@@ -525,14 +524,14 @@ def decode_fwd(
         routed_w1_scale_layer_swa0 = pl.slice(routed_w1_scale, [N_LOCAL, MOE_INTER], [0, 0])
         routed_w3_scale_layer_swa0 = pl.slice(routed_w3_scale, [N_LOCAL, MOE_INTER], [0, 0])
         routed_w2_scale_layer_swa0 = pl.slice(routed_w2_scale, [N_LOCAL, D], [0, 0])
-        shared_w1_layer_swa0 = pl.slice(shared_w1, [MOE_INTER, D], [0, 0])
+        shared_w1_layer_swa0 = shared_w1[0]
         shared_w1_scale_layer_swa0 = pl.slice(shared_w1_scale, [MOE_INTER], [0])
-        shared_w3_layer_swa0 = pl.slice(shared_w3, [MOE_INTER, D], [0, 0])
+        shared_w3_layer_swa0 = shared_w3[0]
         shared_w3_scale_layer_swa0 = pl.slice(shared_w3_scale, [MOE_INTER], [0])
-        shared_w2_layer_swa0 = pl.slice(shared_w2, [D, MOE_INTER], [0, 0])
+        shared_w2_layer_swa0 = shared_w2[0]
         shared_w2_scale_layer_swa0 = pl.slice(shared_w2_scale, [D], [0])
-        routed_w3_layer_swa0: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8] = pl.slice(routed_w3, [N_LOCAL, MOE_INTER, D], [weight_layer_swa0 * N_LOCAL, 0, 0])
-        routed_w2_layer_swa0: pl.Tensor[[N_LOCAL, D, MOE_INTER], pl.INT8] = pl.slice(routed_w2, [N_LOCAL, D, MOE_INTER], [weight_layer_swa0 * N_LOCAL, 0, 0])
+        routed_w3_layer_swa0: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8, pl.NZ] = pl.slice(routed_w3, [N_LOCAL, MOE_INTER, D], [weight_layer_swa0 * N_LOCAL, 0, 0])
+        routed_w2_layer_swa0: pl.Tensor[[N_LOCAL, D, MOE_INTER], pl.INT8, pl.NZ] = pl.slice(routed_w2, [N_LOCAL, D, MOE_INTER], [weight_layer_swa0 * N_LOCAL, 0, 0])
         raw_kv_layer_swa0 = pl.slice(raw_kv_pool, [raw_blocks_per_layer, BLOCK_SIZE, 1, HEAD_DIM], [0, 0, 0, 0])
         with pl.scope():
             if group_tokens > 0:
@@ -604,19 +603,19 @@ def decode_fwd(
         weight_layer_swa1 = pl.const(1, pl.INT32) % FWD_WEIGHT_BANK_SIZE
         hc_attn_fn_layer_swa1 = pl.slice(hc_attn_fn, [MIX_HC, HC_DIM], [weight_layer_swa1 * HC_FN_STORAGE_ROWS, 0])
         hc_ffn_fn_layer_swa1 = pl.slice(hc_ffn_fn, [MIX_HC, HC_DIM], [weight_layer_swa1 * HC_FN_STORAGE_ROWS, 0])
-        wq_a_layer_swa1: pl.Tensor[[D, Q_LORA], pl.BF16] = pl.slice(wq_a, [D, Q_LORA], [weight_layer_swa1 * D, 0])
-        wq_b_layer_swa1: pl.Tensor[[Q_LORA, H * HEAD_DIM], pl.INT8] = pl.slice(wq_b, [Q_LORA, H * HEAD_DIM], [weight_layer_swa1 * Q_LORA, 0])
+        wq_a_layer_swa1: pl.Tensor[[D, Q_LORA], pl.BF16, pl.NZ] = wq_a[weight_layer_swa1]
+        wq_b_layer_swa1: pl.Tensor[[Q_LORA, H * HEAD_DIM], pl.INT8, pl.NZ] = wq_b[weight_layer_swa1]
         wq_b_scale_layer_swa1: pl.Tensor[[H * HEAD_DIM], pl.FP32] = pl.slice(wq_b_scale, [H * HEAD_DIM], [weight_layer_swa1 * H * HEAD_DIM])
         wkv_layer_swa1: pl.Tensor[[D, HEAD_DIM], pl.BF16] = pl.slice(wkv, [D, HEAD_DIM], [weight_layer_swa1 * D, 0])
         gamma_cq_layer_swa1: pl.Tensor[[Q_LORA], pl.BF16] = pl.slice(gamma_cq, [Q_LORA], [weight_layer_swa1 * Q_LORA])
         gamma_ckv_layer_swa1: pl.Tensor[[HEAD_DIM], pl.BF16] = pl.slice(gamma_ckv, [HEAD_DIM], [weight_layer_swa1 * HEAD_DIM])
         wo_a_layer_swa1: pl.Tensor[[LOCAL_O_GROUPS, O_LORA, O_GROUP_IN], pl.BF16] = pl.slice(wo_a, [LOCAL_O_GROUPS, O_LORA, O_GROUP_IN], [weight_layer_swa1 * LOCAL_O_GROUPS, 0, 0])
-        routed_w1_layer_swa1: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8] = pl.slice(routed_w1, [N_LOCAL, MOE_INTER, D], [weight_layer_swa1 * N_LOCAL, 0, 0])
+        routed_w1_layer_swa1: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8, pl.NZ] = pl.slice(routed_w1, [N_LOCAL, MOE_INTER, D], [weight_layer_swa1 * N_LOCAL, 0, 0])
         hc_attn_scale_layer_swa1 = pl.slice(hc_attn_scale, [3], [weight_layer_swa1 * 3])
         hc_attn_base_layer_swa1 = pl.slice(hc_attn_base, [MIX_HC], [weight_layer_swa1 * MIX_HC])
         attn_norm_w_layer_swa1 = pl.slice(attn_norm_w, [D], [weight_layer_swa1 * D])
         attn_sink_layer_swa1 = pl.slice(attn_sink, [H], [weight_layer_swa1 * H])
-        wo_b_layer_swa1 = pl.slice(wo_b, [D, LOCAL_O_WIDTH], [weight_layer_swa1 * D, 0])
+        wo_b_layer_swa1 = pl.slice(wo_b, [LOCAL_O_GROUPS, D, O_LORA], [weight_layer_swa1 * LOCAL_O_GROUPS, 0, 0])
         wo_b_scale_layer_swa1 = pl.slice(wo_b_scale, [D], [weight_layer_swa1 * D])
         hc_ffn_scale_layer_swa1 = pl.slice(hc_ffn_scale, [3], [weight_layer_swa1 * 3])
         hc_ffn_base_layer_swa1 = pl.slice(hc_ffn_base, [MIX_HC], [weight_layer_swa1 * MIX_HC])
@@ -627,14 +626,14 @@ def decode_fwd(
         routed_w1_scale_layer_swa1 = pl.slice(routed_w1_scale, [N_LOCAL, MOE_INTER], [weight_layer_swa1 * N_LOCAL, 0])
         routed_w3_scale_layer_swa1 = pl.slice(routed_w3_scale, [N_LOCAL, MOE_INTER], [weight_layer_swa1 * N_LOCAL, 0])
         routed_w2_scale_layer_swa1 = pl.slice(routed_w2_scale, [N_LOCAL, D], [weight_layer_swa1 * N_LOCAL, 0])
-        shared_w1_layer_swa1 = pl.slice(shared_w1, [MOE_INTER, D], [weight_layer_swa1 * MOE_INTER, 0])
+        shared_w1_layer_swa1 = shared_w1[weight_layer_swa1]
         shared_w1_scale_layer_swa1 = pl.slice(shared_w1_scale, [MOE_INTER], [weight_layer_swa1 * MOE_INTER])
-        shared_w3_layer_swa1 = pl.slice(shared_w3, [MOE_INTER, D], [weight_layer_swa1 * MOE_INTER, 0])
+        shared_w3_layer_swa1 = shared_w3[weight_layer_swa1]
         shared_w3_scale_layer_swa1 = pl.slice(shared_w3_scale, [MOE_INTER], [weight_layer_swa1 * MOE_INTER])
-        shared_w2_layer_swa1 = pl.slice(shared_w2, [D, MOE_INTER], [weight_layer_swa1 * D, 0])
+        shared_w2_layer_swa1 = shared_w2[weight_layer_swa1]
         shared_w2_scale_layer_swa1 = pl.slice(shared_w2_scale, [D], [weight_layer_swa1 * D])
-        routed_w3_layer_swa1: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8] = pl.slice(routed_w3, [N_LOCAL, MOE_INTER, D], [weight_layer_swa1 * N_LOCAL, 0, 0])
-        routed_w2_layer_swa1: pl.Tensor[[N_LOCAL, D, MOE_INTER], pl.INT8] = pl.slice(routed_w2, [N_LOCAL, D, MOE_INTER], [weight_layer_swa1 * N_LOCAL, 0, 0])
+        routed_w3_layer_swa1: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8, pl.NZ] = pl.slice(routed_w3, [N_LOCAL, MOE_INTER, D], [weight_layer_swa1 * N_LOCAL, 0, 0])
+        routed_w2_layer_swa1: pl.Tensor[[N_LOCAL, D, MOE_INTER], pl.INT8, pl.NZ] = pl.slice(routed_w2, [N_LOCAL, D, MOE_INTER], [weight_layer_swa1 * N_LOCAL, 0, 0])
         raw_kv_layer_swa1 = pl.slice(raw_kv_pool, [raw_blocks_per_layer, BLOCK_SIZE, 1, HEAD_DIM], [raw_blocks_per_layer, 0, 0, 0])
         with pl.scope():
             if group_tokens > 0:
@@ -713,16 +712,16 @@ def decode_fwd(
         with pl.scope():
             hc_attn_fn_layer_csa = pl.slice(hc_attn_fn, [MIX_HC, HC_DIM], [csa_weight_layer * HC_FN_STORAGE_ROWS, 0])
             hc_ffn_fn_layer_csa = pl.slice(hc_ffn_fn, [MIX_HC, HC_DIM], [csa_weight_layer * HC_FN_STORAGE_ROWS, 0])
-            wq_a_layer_csa: pl.Tensor[[D, Q_LORA], pl.BF16] = pl.slice(wq_a, [D, Q_LORA], [csa_weight_layer * D, 0])
-            wq_b_layer_csa: pl.Tensor[[Q_LORA, H * HEAD_DIM], pl.INT8] = pl.slice(wq_b, [Q_LORA, H * HEAD_DIM], [csa_weight_layer * Q_LORA, 0])
+            wq_a_layer_csa: pl.Tensor[[D, Q_LORA], pl.BF16, pl.NZ] = wq_a[csa_weight_layer]
+            wq_b_layer_csa: pl.Tensor[[Q_LORA, H * HEAD_DIM], pl.INT8, pl.NZ] = wq_b[csa_weight_layer]
             wq_b_scale_layer_csa: pl.Tensor[[H * HEAD_DIM], pl.FP32] = pl.slice(wq_b_scale, [H * HEAD_DIM], [csa_weight_layer * H * HEAD_DIM])
             wkv_layer_csa: pl.Tensor[[D, HEAD_DIM], pl.BF16] = pl.slice(wkv, [D, HEAD_DIM], [csa_weight_layer * D, 0])
             gamma_cq_layer_csa: pl.Tensor[[Q_LORA], pl.BF16] = pl.slice(gamma_cq, [Q_LORA], [csa_weight_layer * Q_LORA])
             gamma_ckv_layer_csa: pl.Tensor[[HEAD_DIM], pl.BF16] = pl.slice(gamma_ckv, [HEAD_DIM], [csa_weight_layer * HEAD_DIM])
             wo_a_layer_csa: pl.Tensor[[LOCAL_O_GROUPS, O_LORA, O_GROUP_IN], pl.BF16] = pl.slice(wo_a, [LOCAL_O_GROUPS, O_LORA, O_GROUP_IN], [csa_weight_layer * LOCAL_O_GROUPS, 0, 0])
-            routed_w1_layer_csa: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8] = pl.slice(routed_w1, [N_LOCAL, MOE_INTER, D], [csa_weight_layer * N_LOCAL, 0, 0])
-            routed_w3_layer_csa: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8] = pl.slice(routed_w3, [N_LOCAL, MOE_INTER, D], [csa_weight_layer * N_LOCAL, 0, 0])
-            routed_w2_layer_csa: pl.Tensor[[N_LOCAL, D, MOE_INTER], pl.INT8] = pl.slice(routed_w2, [N_LOCAL, D, MOE_INTER], [csa_weight_layer * N_LOCAL, 0, 0])
+            routed_w1_layer_csa: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8, pl.NZ] = pl.slice(routed_w1, [N_LOCAL, MOE_INTER, D], [csa_weight_layer * N_LOCAL, 0, 0])
+            routed_w3_layer_csa: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8, pl.NZ] = pl.slice(routed_w3, [N_LOCAL, MOE_INTER, D], [csa_weight_layer * N_LOCAL, 0, 0])
+            routed_w2_layer_csa: pl.Tensor[[N_LOCAL, D, MOE_INTER], pl.INT8, pl.NZ] = pl.slice(routed_w2, [N_LOCAL, D, MOE_INTER], [csa_weight_layer * N_LOCAL, 0, 0])
             raw_kv_layer_csa = pl.slice(raw_kv_pool, [raw_blocks_per_layer, BLOCK_SIZE, 1, HEAD_DIM], [csa_model_layer * raw_blocks_per_layer, 0, 0, 0])
             csa_state_layer_csa = pl.slice(csa_compress_state, [csa_state_blocks_per_layer, CSA_MAIN_STATE_BLOCK_SIZE, CSA_MAIN_STATE_DIM], [ordinal * csa_state_blocks_per_layer, 0, 0])
             csa_cmp_kv_layer_csa = pl.slice(csa_cmp_kv, [csa_cmp_blocks_per_layer, BLOCK_SIZE, 1, HEAD_DIM], [ordinal * csa_cmp_blocks_per_layer, 0, 0, 0])
@@ -745,7 +744,7 @@ def decode_fwd(
             csa_inner_ape_layer_csa = pl.slice(csa_inner_ape, [CSA_COMPRESS_RATIO, CSA_INNER_OUT_DIM], [csa_extra_layer * CSA_COMPRESS_RATIO, 0])
             csa_inner_norm_w_layer_csa = pl.slice(csa_inner_norm_w, [CSA_IDX_HEAD_DIM], [csa_extra_layer * CSA_IDX_HEAD_DIM])
             attn_sink_layer_csa = pl.slice(attn_sink, [H], [csa_weight_layer * H])
-            wo_b_layer_csa = pl.slice(wo_b, [D, LOCAL_O_WIDTH], [csa_weight_layer * D, 0])
+            wo_b_layer_csa = pl.slice(wo_b, [LOCAL_O_GROUPS, D, O_LORA], [csa_weight_layer * LOCAL_O_GROUPS, 0, 0])
             wo_b_scale_layer_csa = pl.slice(wo_b_scale, [D], [csa_weight_layer * D])
             hc_ffn_scale_layer_csa = pl.slice(hc_ffn_scale, [3], [csa_weight_layer * 3])
             hc_ffn_base_layer_csa = pl.slice(hc_ffn_base, [MIX_HC], [csa_weight_layer * MIX_HC])
@@ -756,11 +755,11 @@ def decode_fwd(
             routed_w1_scale_layer_csa = pl.slice(routed_w1_scale, [N_LOCAL, MOE_INTER], [csa_weight_layer * N_LOCAL, 0])
             routed_w3_scale_layer_csa = pl.slice(routed_w3_scale, [N_LOCAL, MOE_INTER], [csa_weight_layer * N_LOCAL, 0])
             routed_w2_scale_layer_csa = pl.slice(routed_w2_scale, [N_LOCAL, D], [csa_weight_layer * N_LOCAL, 0])
-            shared_w1_layer_csa = pl.slice(shared_w1, [MOE_INTER, D], [csa_weight_layer * MOE_INTER, 0])
+            shared_w1_layer_csa = shared_w1[csa_weight_layer]
             shared_w1_scale_layer_csa = pl.slice(shared_w1_scale, [MOE_INTER], [csa_weight_layer * MOE_INTER])
-            shared_w3_layer_csa = pl.slice(shared_w3, [MOE_INTER, D], [csa_weight_layer * MOE_INTER, 0])
+            shared_w3_layer_csa = shared_w3[csa_weight_layer]
             shared_w3_scale_layer_csa = pl.slice(shared_w3_scale, [MOE_INTER], [csa_weight_layer * MOE_INTER])
-            shared_w2_layer_csa = pl.slice(shared_w2, [D, MOE_INTER], [csa_weight_layer * D, 0])
+            shared_w2_layer_csa = shared_w2[csa_weight_layer]
             shared_w2_scale_layer_csa = pl.slice(shared_w2_scale, [D], [csa_weight_layer * D])
             with pl.scope():
                 if group_tokens > 0:
@@ -859,19 +858,19 @@ def decode_fwd(
         with pl.scope():
             hc_attn_fn_layer_hca = pl.slice(hc_attn_fn, [MIX_HC, HC_DIM], [hca_weight_layer * HC_FN_STORAGE_ROWS, 0])
             hc_ffn_fn_layer_hca = pl.slice(hc_ffn_fn, [MIX_HC, HC_DIM], [hca_weight_layer * HC_FN_STORAGE_ROWS, 0])
-            wq_a_layer_hca: pl.Tensor[[D, Q_LORA], pl.BF16] = pl.slice(wq_a, [D, Q_LORA], [hca_weight_layer * D, 0])
-            wq_b_layer_hca: pl.Tensor[[Q_LORA, H * HEAD_DIM], pl.INT8] = pl.slice(wq_b, [Q_LORA, H * HEAD_DIM], [hca_weight_layer * Q_LORA, 0])
+            wq_a_layer_hca: pl.Tensor[[D, Q_LORA], pl.BF16, pl.NZ] = wq_a[hca_weight_layer]
+            wq_b_layer_hca: pl.Tensor[[Q_LORA, H * HEAD_DIM], pl.INT8, pl.NZ] = wq_b[hca_weight_layer]
             wq_b_scale_layer_hca: pl.Tensor[[H * HEAD_DIM], pl.FP32] = pl.slice(wq_b_scale, [H * HEAD_DIM], [hca_weight_layer * H * HEAD_DIM])
             wkv_layer_hca: pl.Tensor[[D, HEAD_DIM], pl.BF16] = pl.slice(wkv, [D, HEAD_DIM], [hca_weight_layer * D, 0])
             gamma_cq_layer_hca: pl.Tensor[[Q_LORA], pl.BF16] = pl.slice(gamma_cq, [Q_LORA], [hca_weight_layer * Q_LORA])
             gamma_ckv_layer_hca: pl.Tensor[[HEAD_DIM], pl.BF16] = pl.slice(gamma_ckv, [HEAD_DIM], [hca_weight_layer * HEAD_DIM])
             wo_a_layer_hca: pl.Tensor[[LOCAL_O_GROUPS, O_LORA, O_GROUP_IN], pl.BF16] = pl.slice(wo_a, [LOCAL_O_GROUPS, O_LORA, O_GROUP_IN], [hca_weight_layer * LOCAL_O_GROUPS, 0, 0])
-            routed_w1_layer_hca: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8] = pl.slice(routed_w1, [N_LOCAL, MOE_INTER, D], [hca_weight_layer * N_LOCAL, 0, 0])
-            routed_w3_layer_hca: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8] = pl.slice(routed_w3, [N_LOCAL, MOE_INTER, D], [hca_weight_layer * N_LOCAL, 0, 0])
-            routed_w2_layer_hca: pl.Tensor[[N_LOCAL, D, MOE_INTER], pl.INT8] = pl.slice(routed_w2, [N_LOCAL, D, MOE_INTER], [hca_weight_layer * N_LOCAL, 0, 0])
+            routed_w1_layer_hca: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8, pl.NZ] = pl.slice(routed_w1, [N_LOCAL, MOE_INTER, D], [hca_weight_layer * N_LOCAL, 0, 0])
+            routed_w3_layer_hca: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8, pl.NZ] = pl.slice(routed_w3, [N_LOCAL, MOE_INTER, D], [hca_weight_layer * N_LOCAL, 0, 0])
+            routed_w2_layer_hca: pl.Tensor[[N_LOCAL, D, MOE_INTER], pl.INT8, pl.NZ] = pl.slice(routed_w2, [N_LOCAL, D, MOE_INTER], [hca_weight_layer * N_LOCAL, 0, 0])
             raw_kv_layer_hca = pl.slice(raw_kv_pool, [raw_blocks_per_layer, BLOCK_SIZE, 1, HEAD_DIM], [hca_model_layer * raw_blocks_per_layer, 0, 0, 0])
             hca_state_layer_hca = pl.slice(hca_compress_state, [hca_state_blocks_per_layer, HCA_COMPRESS_STATE_BLOCK_SIZE, HCA_COMPRESS_STATE_DIM], [ordinal * hca_state_blocks_per_layer, 0, 0])
-            hca_cmp_kv_layer_hca = pl.slice(hca_cmp_kv, [hca_cmp_blocks_per_layer, BLOCK_SIZE, 1, HEAD_DIM], [ordinal * hca_cmp_blocks_per_layer, 0, 0, 0])
+            hca_cmp_kv_layer_hca = pl.slice(hca_cmp_kv, [hca_cmp_blocks_per_layer, HCA_CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], [ordinal * hca_cmp_blocks_per_layer, 0, 0, 0])
             hc_attn_scale_layer_hca = pl.slice(hc_attn_scale, [3], [hca_weight_layer * 3])
             hc_attn_base_layer_hca = pl.slice(hc_attn_base, [MIX_HC], [hca_weight_layer * MIX_HC])
             attn_norm_w_layer_hca = pl.slice(attn_norm_w, [D], [hca_weight_layer * D])
@@ -880,7 +879,7 @@ def decode_fwd(
             hca_cmp_ape_layer_hca = pl.slice(hca_cmp_ape, [HCA_COMPRESS_RATIO, HCA_MAIN_OUT_DIM], [hca_extra_layer * HCA_COMPRESS_RATIO, 0])
             hca_cmp_norm_w_layer_hca = pl.slice(hca_cmp_norm_w, [HEAD_DIM], [hca_extra_layer * HEAD_DIM])
             attn_sink_layer_hca = pl.slice(attn_sink, [H], [hca_weight_layer * H])
-            wo_b_layer_hca = pl.slice(wo_b, [D, LOCAL_O_WIDTH], [hca_weight_layer * D, 0])
+            wo_b_layer_hca = pl.slice(wo_b, [LOCAL_O_GROUPS, D, O_LORA], [hca_weight_layer * LOCAL_O_GROUPS, 0, 0])
             wo_b_scale_layer_hca = pl.slice(wo_b_scale, [D], [hca_weight_layer * D])
             hc_ffn_scale_layer_hca = pl.slice(hc_ffn_scale, [3], [hca_weight_layer * 3])
             hc_ffn_base_layer_hca = pl.slice(hc_ffn_base, [MIX_HC], [hca_weight_layer * MIX_HC])
@@ -891,11 +890,11 @@ def decode_fwd(
             routed_w1_scale_layer_hca = pl.slice(routed_w1_scale, [N_LOCAL, MOE_INTER], [hca_weight_layer * N_LOCAL, 0])
             routed_w3_scale_layer_hca = pl.slice(routed_w3_scale, [N_LOCAL, MOE_INTER], [hca_weight_layer * N_LOCAL, 0])
             routed_w2_scale_layer_hca = pl.slice(routed_w2_scale, [N_LOCAL, D], [hca_weight_layer * N_LOCAL, 0])
-            shared_w1_layer_hca = pl.slice(shared_w1, [MOE_INTER, D], [hca_weight_layer * MOE_INTER, 0])
+            shared_w1_layer_hca = shared_w1[hca_weight_layer]
             shared_w1_scale_layer_hca = pl.slice(shared_w1_scale, [MOE_INTER], [hca_weight_layer * MOE_INTER])
-            shared_w3_layer_hca = pl.slice(shared_w3, [MOE_INTER, D], [hca_weight_layer * MOE_INTER, 0])
+            shared_w3_layer_hca = shared_w3[hca_weight_layer]
             shared_w3_scale_layer_hca = pl.slice(shared_w3_scale, [MOE_INTER], [hca_weight_layer * MOE_INTER])
-            shared_w2_layer_hca = pl.slice(shared_w2, [D, MOE_INTER], [hca_weight_layer * D, 0])
+            shared_w2_layer_hca = shared_w2[hca_weight_layer]
             shared_w2_scale_layer_hca = pl.slice(shared_w2_scale, [D], [hca_weight_layer * D])
             with pl.scope():
                 if group_tokens > 0:
@@ -984,16 +983,16 @@ def decode_fwd(
         extra_layer_last = csa_ordinal_last % FWD_CSA_WEIGHT_BANK_SIZE
         hc_attn_fn_layer_last = pl.slice(hc_attn_fn, [MIX_HC, HC_DIM], [weight_layer_last * HC_FN_STORAGE_ROWS, 0])
         hc_ffn_fn_layer_last = pl.slice(hc_ffn_fn, [MIX_HC, HC_DIM], [weight_layer_last * HC_FN_STORAGE_ROWS, 0])
-        wq_a_layer_last: pl.Tensor[[D, Q_LORA], pl.BF16] = pl.slice(wq_a, [D, Q_LORA], [weight_layer_last * D, 0])
-        wq_b_layer_last: pl.Tensor[[Q_LORA, H * HEAD_DIM], pl.INT8] = pl.slice(wq_b, [Q_LORA, H * HEAD_DIM], [weight_layer_last * Q_LORA, 0])
+        wq_a_layer_last: pl.Tensor[[D, Q_LORA], pl.BF16, pl.NZ] = wq_a[weight_layer_last]
+        wq_b_layer_last: pl.Tensor[[Q_LORA, H * HEAD_DIM], pl.INT8, pl.NZ] = wq_b[weight_layer_last]
         wq_b_scale_layer_last: pl.Tensor[[H * HEAD_DIM], pl.FP32] = pl.slice(wq_b_scale, [H * HEAD_DIM], [weight_layer_last * H * HEAD_DIM])
         wkv_layer_last: pl.Tensor[[D, HEAD_DIM], pl.BF16] = pl.slice(wkv, [D, HEAD_DIM], [weight_layer_last * D, 0])
         gamma_cq_layer_last: pl.Tensor[[Q_LORA], pl.BF16] = pl.slice(gamma_cq, [Q_LORA], [weight_layer_last * Q_LORA])
         gamma_ckv_layer_last: pl.Tensor[[HEAD_DIM], pl.BF16] = pl.slice(gamma_ckv, [HEAD_DIM], [weight_layer_last * HEAD_DIM])
         wo_a_layer_last: pl.Tensor[[LOCAL_O_GROUPS, O_LORA, O_GROUP_IN], pl.BF16] = pl.slice(wo_a, [LOCAL_O_GROUPS, O_LORA, O_GROUP_IN], [weight_layer_last * LOCAL_O_GROUPS, 0, 0])
-        routed_w1_layer_last: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8] = pl.slice(routed_w1, [N_LOCAL, MOE_INTER, D], [weight_layer_last * N_LOCAL, 0, 0])
-        routed_w3_layer_last: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8] = pl.slice(routed_w3, [N_LOCAL, MOE_INTER, D], [weight_layer_last * N_LOCAL, 0, 0])
-        routed_w2_layer_last: pl.Tensor[[N_LOCAL, D, MOE_INTER], pl.INT8] = pl.slice(routed_w2, [N_LOCAL, D, MOE_INTER], [weight_layer_last * N_LOCAL, 0, 0])
+        routed_w1_layer_last: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8, pl.NZ] = pl.slice(routed_w1, [N_LOCAL, MOE_INTER, D], [weight_layer_last * N_LOCAL, 0, 0])
+        routed_w3_layer_last: pl.Tensor[[N_LOCAL, MOE_INTER, D], pl.INT8, pl.NZ] = pl.slice(routed_w3, [N_LOCAL, MOE_INTER, D], [weight_layer_last * N_LOCAL, 0, 0])
+        routed_w2_layer_last: pl.Tensor[[N_LOCAL, D, MOE_INTER], pl.INT8, pl.NZ] = pl.slice(routed_w2, [N_LOCAL, D, MOE_INTER], [weight_layer_last * N_LOCAL, 0, 0])
         raw_kv_layer_last = pl.slice(raw_kv_pool, [raw_blocks_per_layer, BLOCK_SIZE, 1, HEAD_DIM], [model_layer_last * raw_blocks_per_layer, 0, 0, 0])
         csa_state_layer_last = pl.slice(csa_compress_state, [csa_state_blocks_per_layer, CSA_MAIN_STATE_BLOCK_SIZE, CSA_MAIN_STATE_DIM], [csa_ordinal_last * csa_state_blocks_per_layer, 0, 0])
         csa_cmp_kv_layer_last = pl.slice(csa_cmp_kv, [csa_cmp_blocks_per_layer, BLOCK_SIZE, 1, HEAD_DIM], [csa_ordinal_last * csa_cmp_blocks_per_layer, 0, 0, 0])
@@ -1016,7 +1015,7 @@ def decode_fwd(
         csa_inner_ape_layer_last = pl.slice(csa_inner_ape, [CSA_COMPRESS_RATIO, CSA_INNER_OUT_DIM], [extra_layer_last * CSA_COMPRESS_RATIO, 0])
         csa_inner_norm_w_layer_last = pl.slice(csa_inner_norm_w, [CSA_IDX_HEAD_DIM], [extra_layer_last * CSA_IDX_HEAD_DIM])
         attn_sink_layer_last = pl.slice(attn_sink, [H], [weight_layer_last * H])
-        wo_b_layer_last = pl.slice(wo_b, [D, LOCAL_O_WIDTH], [weight_layer_last * D, 0])
+        wo_b_layer_last = pl.slice(wo_b, [LOCAL_O_GROUPS, D, O_LORA], [weight_layer_last * LOCAL_O_GROUPS, 0, 0])
         wo_b_scale_layer_last = pl.slice(wo_b_scale, [D], [weight_layer_last * D])
         hc_ffn_scale_layer_last = pl.slice(hc_ffn_scale, [3], [weight_layer_last * 3])
         hc_ffn_base_layer_last = pl.slice(hc_ffn_base, [MIX_HC], [weight_layer_last * MIX_HC])
@@ -1027,11 +1026,11 @@ def decode_fwd(
         routed_w1_scale_layer_last = pl.slice(routed_w1_scale, [N_LOCAL, MOE_INTER], [weight_layer_last * N_LOCAL, 0])
         routed_w3_scale_layer_last = pl.slice(routed_w3_scale, [N_LOCAL, MOE_INTER], [weight_layer_last * N_LOCAL, 0])
         routed_w2_scale_layer_last = pl.slice(routed_w2_scale, [N_LOCAL, D], [weight_layer_last * N_LOCAL, 0])
-        shared_w1_layer_last = pl.slice(shared_w1, [MOE_INTER, D], [weight_layer_last * MOE_INTER, 0])
+        shared_w1_layer_last = shared_w1[weight_layer_last]
         shared_w1_scale_layer_last = pl.slice(shared_w1_scale, [MOE_INTER], [weight_layer_last * MOE_INTER])
-        shared_w3_layer_last = pl.slice(shared_w3, [MOE_INTER, D], [weight_layer_last * MOE_INTER, 0])
+        shared_w3_layer_last = shared_w3[weight_layer_last]
         shared_w3_scale_layer_last = pl.slice(shared_w3_scale, [MOE_INTER], [weight_layer_last * MOE_INTER])
-        shared_w2_layer_last = pl.slice(shared_w2, [D, MOE_INTER], [weight_layer_last * D, 0])
+        shared_w2_layer_last = shared_w2[weight_layer_last]
         shared_w2_scale_layer_last = pl.slice(shared_w2_scale, [D], [weight_layer_last * D])
         with pl.scope():
             if group_tokens > 0:
@@ -1128,65 +1127,60 @@ def decode_fwd(
                         pre_hc_hidden_out[token : token + 1, 0 : HC_MULT, 0 : D] = zero_next_row_last
     clear_moe_signals(x_moe_next, arrived, data_arrived, combine_arrived)
 
-    with pl.scope():
-        if group_tokens > 0:
-            target_hc_stack = pl.create_tensor([MOE_TOKENS * 3, HC_MULT, D], dtype=pl.FP32)
-            for token in pl.spmd(MOE_TOKENS, name_hint="decode_fwd_pack_target_hc"):
-                if token < local_t:
-                    target_row = token * 3
-                    pong_row = x_pong[token : token + 1, 0 : HC_MULT, 0 : D]
-                    target_hc_stack[target_row : target_row + 1, 0 : HC_MULT, 0 : D] = pong_row
-                    ping_row = x_ping[token : token + 1, 0 : HC_MULT, 0 : D]
-                    target_hc_stack[target_row + 1 : target_row + 2, 0 : HC_MULT, 0 : D] = ping_row
-                    hidden_out_row = pre_hc_hidden_out[token : token + 1, 0 : HC_MULT, 0 : D]
-                    target_hc_stack[target_row + 2 : target_row + 3, 0 : HC_MULT, 0 : D] = hidden_out_row
-            target_rows = local_t * 3
-            target_hc_active = pl.slice(target_hc_stack, [target_rows, HC_MULT, D], [0, 0, 0])
-            target_hidden_stack = pl.create_tensor([MOE_TOKENS * 3, D], dtype=pl.BF16)
-            target_hidden_active = pl.slice(target_hidden_stack, [target_rows, D], [0, 0])
-            hc_head(target_hc_active, hc_head_fn, hc_head_scale, hc_head_base, target_hidden_active)
-            for token in pl.spmd(MOE_TOKENS, name_hint="decode_fwd_store_target_hidden"):
-                if token < local_t:
-                    target_row = token * 3
-                    target_hidden_l40 = target_hidden_stack[target_row : target_row + 1, 0:D]
-                    target_hidden_l41 = target_hidden_stack[target_row + 1 : target_row + 2, 0:D]
-                    target_hidden_l42 = target_hidden_stack[target_row + 2 : target_row + 3, 0:D]
-                    dspark_target_hidden[token : token + 1, 0:D] = target_hidden_l40
-                    dspark_target_hidden[token : token + 1, D : 2 * D] = target_hidden_l41
-                    dspark_target_hidden[token : token + 1, 2 * D : 3 * D] = target_hidden_l42
-            for token in pl.spmd(MOE_TOKENS, name_hint="decode_fwd_store_final_hidden"):
-                if token < local_t:
-                    target_row = token * 3
-                    target_hidden_l42 = target_hidden_stack[target_row + 2 : target_row + 3, 0:D]
-                    hidden_workspace[token : token + 1, 0:D] = target_hidden_l42
-            final_norm_tid = rms_norm(hidden_workspace, final_norm_w, x_out)
-            lm_head(
-                x_out,
-                lm_head_weight,
-                logit_row_indices,
-                logits,
-                lm_head_hidden_window,
-                lm_head_hidden_done,
-                lm_head_logits_window,
-                lm_head_logits_done,
-                group_base,
-                tp_rank,
-                pl.const(LM_HEAD_COMM_EPOCH, pl.INT32),
-                final_norm_tid,
-            )
-            greedy_sample(logits, logit_row_indices, sampled_ids)
-        else:
-            for row in pl.spmd(MAX_LOGIT_ROWS, name_hint="decode_fwd_inactive_sample_rows"):
-                for col in pl.range(LM_HEAD_VOCAB // LOGITS_ZERO_TILE):
-                    col_begin = col * LOGITS_ZERO_TILE
-                    zero_logits_tile = pl.full([1, LOGITS_ZERO_TILE], dtype=pl.FP32, value=0.0)
-                    logits[row : row + 1, col_begin : col_begin + LOGITS_ZERO_TILE] = zero_logits_tile
-                if LM_HEAD_VOCAB % LOGITS_ZERO_TILE != 0:
-                    zero_logits_tail = pl.full([1, LM_HEAD_VOCAB % LOGITS_ZERO_TILE], dtype=pl.FP32, value=0.0)
-                    logits[row : row + 1, LM_HEAD_VOCAB // LOGITS_ZERO_TILE * LOGITS_ZERO_TILE :] = zero_logits_tail
-                unset_ids_row = pl.full([1, SAMPLED_IDS_PAD], dtype=pl.INT32, value=-1)
-                sampled_ids[row : row + 1, :] = unset_ids_row
+    # No pl.scope() here: the branches write pl.Out params, and a scope would
+    # confine their phi to it, out of reach of a caller that inlines this body.
+    if group_tokens > 0:
+        # Auxiliary taps use the HC mean, not the learned final-output head.
+        for token in pl.spmd(MOE_TOKENS, name_hint="decode_fwd_store_target_hidden"):
+            if token < local_t:
+                pong_row = x_pong[token : token + 1, 0 : HC_MULT, 0 : D]
+                target_hidden_l40 = pl.mul(pl.col_sum(pl.reshape(pong_row, [HC_MULT, D])), 1.0 / HC_MULT)
+                dspark_target_hidden[token : token + 1, 0:D] = pl.cast(target_hidden_l40, pl.BF16, mode="rint")
+                ping_row = x_ping[token : token + 1, 0 : HC_MULT, 0 : D]
+                target_hidden_l41 = pl.mul(pl.col_sum(pl.reshape(ping_row, [HC_MULT, D])), 1.0 / HC_MULT)
+                dspark_target_hidden[token : token + 1, D : 2 * D] = pl.cast(
+                    target_hidden_l41, pl.BF16, mode="rint",
+                )
+                hidden_out_row = pre_hc_hidden_out[token : token + 1, 0 : HC_MULT, 0 : D]
+                target_hidden_l42 = pl.mul(pl.col_sum(pl.reshape(hidden_out_row, [HC_MULT, D])), 1.0 / HC_MULT)
+                dspark_target_hidden[token : token + 1, 2 * D : 3 * D] = pl.cast(
+                    target_hidden_l42, pl.BF16, mode="rint",
+                )
+        hc_head(pre_hc_hidden_out, hc_head_fn, hc_head_scale, hc_head_base, hidden_workspace)
+        final_norm_tid = rms_norm(hidden_workspace, final_norm_w, x_out)
+        lm_head(
+            x_out,
+            lm_head_weight,
+            logit_row_indices,
+            logits,
+            lm_head_hidden_window,
+            lm_head_hidden_done,
+            lm_head_logits_window,
+            lm_head_logits_done,
+            group_base,
+            tp_rank,
+            pl.const(LM_HEAD_COMM_EPOCH, pl.INT32),
+            final_norm_tid,
+        )
+        greedy_sample(logits, logit_row_indices, sampled_ids)
+    else:
+        for row in pl.spmd(MAX_LOGIT_ROWS, name_hint="decode_fwd_inactive_sample_rows"):
+            for col in pl.range(LM_HEAD_VOCAB // LOGITS_ZERO_TILE):
+                col_begin = col * LOGITS_ZERO_TILE
+                zero_logits_tile = pl.full([1, LOGITS_ZERO_TILE], dtype=pl.FP32, value=0.0)
+                logits[row : row + 1, col_begin : col_begin + LOGITS_ZERO_TILE] = zero_logits_tile
+            if LM_HEAD_VOCAB % LOGITS_ZERO_TILE != 0:
+                zero_logits_tail = pl.full([1, LM_HEAD_VOCAB % LOGITS_ZERO_TILE], dtype=pl.FP32, value=0.0)
+                logits[row : row + 1, LM_HEAD_VOCAB // LOGITS_ZERO_TILE * LOGITS_ZERO_TILE :] = zero_logits_tail
+            unset_ids_row = pl.full([1, SAMPLED_IDS_PAD], dtype=pl.INT32, value=-1)
+            sampled_ids[row : row + 1, :] = unset_ids_row
     return x_out
+
+
+# Keep the forward available both as a standalone L2 and as an inline body.
+# The fused DSpark L2 inlines it between its own prepare and accept stages.
+decode_fwd = pl.jit.inline(auto_scope=False)(_decode_fwd)
+l2_decode_fwd = pl.jit(auto_scope=False)(_decode_fwd)
 
 
 @pl.jit.host
@@ -1196,8 +1190,8 @@ def l3_decode_fwd(
     hc_attn_scale: pl.Tensor[[N_RANKS, FWD_WEIGHT_BANK_SIZE * 3], pl.FP32],
     hc_attn_base: pl.Tensor[[N_RANKS, FWD_WEIGHT_BANK_SIZE * MIX_HC], pl.FP32],
     attn_norm_w: pl.Tensor[[N_RANKS, FWD_WEIGHT_BANK_SIZE * D], pl.BF16],
-    wq_a: pl.Tensor[[N_RANKS, FWD_WEIGHT_BANK_SIZE * D, Q_LORA], pl.BF16],
-    wq_b: pl.Tensor[[N_RANKS, FWD_WEIGHT_BANK_SIZE * Q_LORA, H * HEAD_DIM], pl.INT8],
+    wq_a: pl.Tensor[[N_RANKS, FWD_WEIGHT_BANK_SIZE, D, Q_LORA], pl.BF16],
+    wq_b: pl.Tensor[[N_RANKS, FWD_WEIGHT_BANK_SIZE, Q_LORA, H * HEAD_DIM], pl.INT8],
     wq_b_scale: pl.Tensor[[N_RANKS, FWD_WEIGHT_BANK_SIZE * H * HEAD_DIM], pl.FP32],
     wkv: pl.Tensor[[N_RANKS, FWD_WEIGHT_BANK_SIZE * D, HEAD_DIM], pl.BF16],
     gamma_cq: pl.Tensor[[N_RANKS, FWD_WEIGHT_BANK_SIZE * Q_LORA], pl.BF16],
@@ -1251,7 +1245,7 @@ def l3_decode_fwd(
     hca_cmp_norm_w: pl.Tensor[[N_RANKS, FWD_HCA_WEIGHT_BANK_SIZE * HEAD_DIM], pl.BF16],
     hca_compress_state: pl.InOut[pl.Tensor[[N_RANKS, FWD_HCA_STATE_BLOCKS_DYN, HCA_COMPRESS_STATE_BLOCK_SIZE, HCA_COMPRESS_STATE_DIM], pl.FP32]],
     hca_compress_state_block_table: pl.Tensor[[N_RANKS, KV_B_DYN, HCA_COMPRESS_STATE_MAX_BLOCKS], pl.INT32],
-    hca_cmp_kv: pl.InOut[pl.Tensor[[N_RANKS, FWD_HCA_CMP_BLOCKS_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
+    hca_cmp_kv: pl.InOut[pl.Tensor[[N_RANKS, FWD_HCA_CMP_BLOCKS_DYN, HCA_CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
     hca_cmp_block_table: pl.Tensor[[N_RANKS, HCA_B_DYN, HCA_CMP_TABLE_BLOCKS_DYN], pl.INT32],
     hca_ori_slot_mapping: pl.Tensor[[N_RANKS, KV_T_DYN], pl.INT64],
     hca_window_swa_indices: pl.Tensor[[N_RANKS, T_DYN, WIN], pl.INT32],
@@ -1261,7 +1255,7 @@ def l3_decode_fwd(
     hca_kv_seq_lens: pl.Tensor[[N_RANKS, HCA_B_DYN], pl.INT32],
     attn_sink: pl.Tensor[[N_RANKS, FWD_WEIGHT_BANK_SIZE * H], pl.FP32],
     wo_a: pl.Tensor[[N_RANKS, FWD_WEIGHT_BANK_SIZE * LOCAL_O_GROUPS, O_LORA, O_GROUP_IN], pl.BF16],
-    wo_b: pl.Tensor[[N_RANKS, FWD_WEIGHT_BANK_SIZE * D, LOCAL_O_WIDTH], pl.INT8],
+    wo_b: pl.Tensor[[N_RANKS, FWD_WEIGHT_BANK_SIZE * LOCAL_O_GROUPS, D, O_LORA], pl.INT8],
     wo_b_scale: pl.Tensor[[N_RANKS, FWD_WEIGHT_BANK_SIZE * D], pl.FP32],
     hc_ffn_fn: pl.Tensor[[N_RANKS, FWD_WEIGHT_BANK_SIZE * HC_FN_STORAGE_ROWS, HC_DIM], pl.FP32],
     hc_ffn_scale: pl.Tensor[[N_RANKS, FWD_WEIGHT_BANK_SIZE * 3], pl.FP32],
@@ -1284,11 +1278,11 @@ def l3_decode_fwd(
     routed_w3_scale: pl.Tensor[[N_RANKS, FWD_WEIGHT_BANK_SIZE * N_LOCAL, MOE_INTER], pl.FP32],
     routed_w2: pl.Tensor[[N_RANKS, FWD_WEIGHT_BANK_SIZE * N_LOCAL, D, MOE_INTER], pl.INT8],
     routed_w2_scale: pl.Tensor[[N_RANKS, FWD_WEIGHT_BANK_SIZE * N_LOCAL, D], pl.FP32],
-    shared_w1: pl.Tensor[[N_RANKS, FWD_WEIGHT_BANK_SIZE * MOE_INTER, D], pl.INT8],
+    shared_w1: pl.Tensor[[N_RANKS, FWD_WEIGHT_BANK_SIZE, MOE_INTER, D], pl.INT8],
     shared_w1_scale: pl.Tensor[[N_RANKS, FWD_WEIGHT_BANK_SIZE * MOE_INTER], pl.FP32],
-    shared_w3: pl.Tensor[[N_RANKS, FWD_WEIGHT_BANK_SIZE * MOE_INTER, D], pl.INT8],
+    shared_w3: pl.Tensor[[N_RANKS, FWD_WEIGHT_BANK_SIZE, MOE_INTER, D], pl.INT8],
     shared_w3_scale: pl.Tensor[[N_RANKS, FWD_WEIGHT_BANK_SIZE * MOE_INTER], pl.FP32],
-    shared_w2: pl.Tensor[[N_RANKS, FWD_WEIGHT_BANK_SIZE * D, MOE_INTER], pl.INT8],
+    shared_w2: pl.Tensor[[N_RANKS, FWD_WEIGHT_BANK_SIZE, D, MOE_INTER], pl.INT8],
     shared_w2_scale: pl.Tensor[[N_RANKS, FWD_WEIGHT_BANK_SIZE * D], pl.FP32],
     hidden_workspace: pl.Out[pl.Tensor[[N_RANKS, T_DYN, D], pl.BF16]],
     x_ping: pl.InOut[pl.Tensor[[N_RANKS, T_DYN, HC_MULT, D], pl.FP32]],
@@ -1392,7 +1386,7 @@ def l3_decode_fwd(
         lm_head_logits_done = pld.window(lm_head_logits_done_buf, [LM_HEAD_TP_SIZE, 1], dtype=pl.INT32)
         tp_rank = rank % TP_SIZE
         group_base = rank - tp_rank
-        decode_fwd(
+        l2_decode_fwd(
             embed_weight[rank],
             hc_attn_fn[rank], hc_attn_scale[rank], hc_attn_base[rank],
             attn_norm_w[rank], wq_a[rank], wq_b[rank],
@@ -1463,6 +1457,13 @@ _COMMON_ATTN_WEIGHT_NAMES = (
     "attn_norm_w", "wq_a", "wq_b", "wq_b_scale", "wkv", "gamma_cq", "gamma_ckv",
     "attn_sink", "wo_a", "wo_b", "wo_b_scale",
 )
+
+# NZ weights that stack their bank on a new leading axis instead of the row
+# axis: NZ cannot address a row window, so a layer becomes an index (`w[i]`)
+# rather than a `pl.slice` offset. wo_a/wo_b already stack this way (their
+# groups lead); routed_w1/w2/w3 also already have a genuine leading batch
+# axis (N_LOCAL) and need no restructuring.
+NZ_ROW_STACKED_NAMES = frozenset({"wq_a", "wq_b", "shared_w1", "shared_w3", "shared_w2"})
 
 _HCA_EXTRA_WEIGHT_NAMES = ("cmp_wkv", "cmp_wgate", "cmp_ape", "cmp_norm_w")
 
@@ -1556,7 +1557,13 @@ def _make_weight_bank_spec(name, source, bank_size, *, compile_only=False):
         if storage_shape[0] != MIX_HC:
             raise ValueError(f"unexpected HC function shape for {name}")
         storage_shape[0] = HC_FN_STORAGE_ROWS
-    shape = [N_RANKS, int(bank_size) * int(storage_shape[0]), *storage_shape[1:]]
+    # NZ cannot address a row window, so these weights stack their bank on a new
+    # leading axis instead of merging it into the existing row axis.
+    stacks_on_new_axis = name in NZ_ROW_STACKED_NAMES
+    if stacks_on_new_axis:
+        shape = [N_RANKS, int(bank_size), *storage_shape]
+    else:
+        shape = [N_RANKS, int(bank_size) * int(storage_shape[0]), *storage_shape[1:]]
 
     def init_value():
         import torch
@@ -1566,6 +1573,9 @@ def _make_weight_bank_spec(name, source, bank_size, *, compile_only=False):
             padded = torch.zeros(N_RANKS, HC_FN_STORAGE_ROWS, HC_DIM, dtype=value.dtype)
             padded[:, :MIX_HC].copy_(value)
             value = padded
+        if stacks_on_new_axis:
+            repeats = [1, int(bank_size)] + [1] * (value.ndim - 1)
+            return value.unsqueeze(1).repeat(*repeats).contiguous()
         repeats = [1, int(bank_size)] + [1] * (value.ndim - 2)
         return value.repeat(*repeats).contiguous()
 
@@ -1640,14 +1650,40 @@ def build_tensor_specs(
     if use_default_long_context:
         start_pos = [0, 0, 0, config.FLASH.max_position_embeddings - config.DECODE_SEQ]
 
-    if start_pos is None:
-        active_batch = MOE_TOKENS // config.DECODE_SEQ
-    elif isinstance(start_pos, int):
-        active_batch = 1
-    elif isinstance(start_pos, (list, tuple)) and start_pos:
-        active_batch = len(start_pos)
-    else:
-        raise ValueError("start_pos must be None, an int, or a non-empty list/tuple")
+    owner_start_positions = None
+    if isinstance(start_pos, (list, tuple)) and start_pos and num_tokens_per_owner is not None:
+        requested_counts = torch.as_tensor(num_tokens_per_owner, dtype=torch.int32).reshape(-1)
+        if requested_counts.numel() == N_RANKS:
+            if (
+                bool((requested_counts < 0).any())
+                or bool((requested_counts % config.DECODE_SEQ != 0).any())
+            ):
+                raise ValueError(
+                    f"num_tokens_per_owner values must be non-negative multiples of "
+                    f"S={config.DECODE_SEQ}: {requested_counts.tolist()}",
+                )
+            requests_per_owner = requested_counts // config.DECODE_SEQ
+            if len(start_pos) == int(requests_per_owner.sum()):
+                active_batch = int(requests_per_owner.max())
+                if active_batch == 0:
+                    raise ValueError("packed per-owner start positions need at least one active request")
+                owner_start_positions = torch.zeros(N_RANKS, active_batch, dtype=torch.int32)
+                offset = 0
+                for rank, request_count in enumerate(requests_per_owner.tolist()):
+                    owner_start_positions[rank, :request_count] = torch.tensor(
+                        start_pos[offset : offset + request_count], dtype=torch.int32,
+                    )
+                    offset += request_count
+
+    if owner_start_positions is None:
+        if start_pos is None:
+            active_batch = MOE_TOKENS // config.DECODE_SEQ
+        elif isinstance(start_pos, int):
+            active_batch = 1
+        elif isinstance(start_pos, (list, tuple)) and start_pos:
+            active_batch = len(start_pos)
+        else:
+            raise ValueError("start_pos must be None, an int, or a non-empty list/tuple")
     local_t = active_batch * config.DECODE_SEQ
     owner_token_counts = build_num_tokens_per_owner_host(num_tokens_per_owner, local_t)
 
@@ -1658,6 +1694,62 @@ def build_tensor_specs(
         attention_start_pos = list(start_pos) + [0] * ((TP_SIZE - 1) * active_batch)
 
     def attention_specs(module):
+        if owner_start_positions is not None:
+            group_sources = []
+            for group_base in range(0, N_RANKS, TP_SIZE):
+                group_starts = (
+                    owner_start_positions[group_base : group_base + TP_SIZE]
+                    .reshape(-1)
+                    .tolist()
+                )
+                group_sources.append({
+                    source.name: source
+                    for source in module.build_distributed_tensor_specs(local_t, start_pos=group_starts)
+                    if isinstance(source, TensorSpec)
+                })
+            source_names = set(group_sources[0])
+            if any(set(sources) != source_names for sources in group_sources[1:]):
+                raise ValueError(f"{module.__name__} distributed specs differ across DP groups")
+            merged_shapes = {}
+            for name, source in group_sources[0].items():
+                expected = (source.dtype, len(source.shape))
+                if any(
+                    (sources[name].dtype, len(sources[name].shape)) != expected
+                    for sources in group_sources[1:]
+                ):
+                    raise ValueError(f"{module.__name__} spec {name!r} differs across DP groups")
+                shapes = [list(sources[name].shape) for sources in group_sources]
+                if any(shape[0] != TP_SIZE for shape in shapes):
+                    raise ValueError(f"{module.__name__} spec {name!r} lacks its TP rank axis")
+                merged_shapes[name] = [
+                    max(shape[axis] for shape in shapes)
+                    for axis in range(1, len(shapes[0]))
+                ]
+
+            specs = {}
+            for name, source in group_sources[0].items():
+                trailing_shape = merged_shapes[name]
+
+                def init_value(name=name, group_sources=group_sources, trailing_shape=trailing_shape):
+                    result = None
+                    for group, sources in enumerate(group_sources):
+                        value = sources[name].create_tensor()
+                        if result is None:
+                            result = value.new_zeros([N_RANKS, *trailing_shape])
+                        slices = (slice(group * TP_SIZE, (group + 1) * TP_SIZE),) + tuple(
+                            slice(0, extent) for extent in value.shape[1:]
+                        )
+                        result[slices] = value
+                    return result.contiguous()
+
+                spec = TensorSpec(
+                    name, [N_RANKS, *trailing_shape], source.dtype,
+                    init_value=init_value,
+                )
+                spec.resident = source.resident
+                specs[name] = spec
+            return specs
+
         specs = {}
         for source in module.build_distributed_tensor_specs(local_t, start_pos=attention_start_pos):
             if not isinstance(source, TensorSpec):
@@ -1914,80 +2006,6 @@ def _parse_num_tokens_per_owner(raw):
     return values[0] if len(values) == 1 else values
 
 
-def golden_decode_fwd(_tensors):
-    """Leave full-forward outputs to output-specific behavioral comparators."""
-
-
-def finite_tensor_compare(actual, _expected, **_kwargs):
-    """Require a completed finite device result for full-forward state outputs."""
-    import torch
-
-    if actual.numel() == 0:
-        return False, "    decode forward output is empty"
-    if actual.is_floating_point() and not bool(torch.isfinite(actual).all()):
-        return False, "    decode forward output contains NaN or Inf"
-    return True, ""
-
-
-def dspark_target_hidden_compare(actual, _expected, **kwargs):
-    """Recompute all three target-layer projections from their HC outputs."""
-    import torch
-    from hc_head import golden_hc_head
-
-    inputs = kwargs.get("inputs", {})
-    outputs = kwargs.get("actual_outputs", {})
-    sources = (outputs.get("x_pong"), outputs.get("x_ping"), outputs.get("pre_hc_hidden_out"))
-    if any(source is None for source in sources):
-        return False, "    missing layer-40/41/42 HC source output"
-    owner_counts = inputs.get("num_tokens_per_owner")
-    if owner_counts is None:
-        return False, "    missing per-owner active token counts"
-
-    for rank in range(actual.shape[0]):
-        active_tokens = int(owner_counts[rank].item())
-        if active_tokens < 0 or active_tokens > actual.shape[1]:
-            return False, f"    rank {rank} active token count is out of range: {active_tokens}"
-        if active_tokens == 0:
-            continue
-        if not bool(torch.isfinite(actual[rank, :active_tokens]).all()):
-            return False, f"    rank {rank} active DSpark target hidden contains NaN or Inf"
-        for slot, (layer_id, source) in enumerate(zip(TARGET_LAYER_IDS, sources, strict=True)):
-            expected_part = torch.empty(active_tokens, D, dtype=torch.bfloat16)
-            golden_hc_head({
-                "x_hc": source[rank, :active_tokens].cpu(),
-                "hc_head_fn": inputs["hc_head_fn"][rank],
-                "hc_head_scale": inputs["hc_head_scale"][rank],
-                "hc_head_base": inputs["hc_head_base"][rank],
-                "y": expected_part,
-            })
-            expected_part = expected_part.float()
-            actual_part = actual[rank, :active_tokens, slot * D : (slot + 1) * D].float()
-            error = (actual_part - expected_part).abs()
-            tolerance = 1e-4 + (1.0 / 128) * expected_part.abs()
-            ratio = float((error > tolerance).float().mean())
-            if ratio > 0.005:
-                worst = float(error.max())
-                return False, (
-                    f"    rank {rank} layer {layer_id} target hidden mismatch: "
-                    f"ratio={ratio:.2%}, max |err|={worst:.3e}"
-                )
-    return True, ""
-
-
-def compare_functions():
-    """Validate every output for completion and the DSpark tap mathematically."""
-    finite_names = {
-        "raw_kv_pool",
-        "csa_compress_state", "csa_inner_compress_state", "csa_cmp_kv", "csa_idx_kv_cache", "csa_idx_kv_scale",
-        "hca_compress_state", "hca_cmp_kv",
-        "hidden_workspace", "x_ping", "x_pong", "x_attn_active", "x_moe_next",
-        "pre_hc_hidden_out", "x_out", "logits", "sampled_ids",
-    }
-    compare = {name: finite_tensor_compare for name in finite_names}
-    compare["dspark_target_hidden"] = dspark_target_hidden_compare
-    return compare
-
-
 def main():
     import argparse
 
@@ -1999,12 +2017,19 @@ def main():
     parser.add_argument("--tp", type=int, default=TP_SIZE, choices=_TP_CHOICES)
     parser.add_argument("--ep", type=int, default=EP_SIZE, choices=_EP_CHOICES)
     parser.add_argument(
+        "--experts-per-rank", type=int, default=moe_module.EXPERTS_PER_RANK,
+        help="routed experts per rank (parsed at import by moe)",
+    )
+    parser.add_argument(
         "-d", "--device", type=str, default=None,
         help=f"comma-separated device ids; EP={EP_SIZE} needs {EP_SIZE}",
     )
     parser.add_argument(
         "--start-pos", type=str, default=None,
-        help="a scalar selects batch=1; a comma-separated list sets the batch",
+        help=(
+            "a scalar selects batch=1; a comma-separated list sets the batch; "
+            "with per-owner token counts, a compact list maps active requests in rank order"
+        ),
     )
     parser.add_argument(
         "--num-tokens-per-owner", type=str, default=None,
@@ -2056,7 +2081,6 @@ def main():
     result = run(
         fn=l3_decode_fwd,
         specs=specs,
-        golden_fn=golden_decode_fwd,
         save_data=args.save_data,
         compile_only=args.compile_only,
         runtime_dir=args.runtime_dir,
@@ -2071,9 +2095,6 @@ def main():
             log_level=args.log_level,
             ring_heap=DECODE_RING_HEAP,
         ),
-        rtol=1e-2,
-        atol=1e-2,
-        compare_fn=compare_functions(),
     )
     if not result.passed:
         if result.error:

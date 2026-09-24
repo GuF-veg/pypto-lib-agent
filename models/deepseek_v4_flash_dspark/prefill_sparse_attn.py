@@ -13,6 +13,7 @@ import pypto.language as pl
 
 from config import (
     BLOCK_SIZE,
+    HCA_CMP_STORAGE_BLOCK_SIZE,
     FLASH as M,
     FP32_NEG_INF,
     INT8_AMAX_EPS,
@@ -79,7 +80,7 @@ QK_PV_READY_EVENT = 2
 GATHER_TOKEN_TILE = 2
 BIAS_TOKEN_TILE = 16
 QUANT_TOKEN_TILE = 8
-O_PROJ_PAD_ROWS = 512  # internal physical-tail alignment across Cube, quant and epilogue
+O_PROJ_PAD_ROWS = 256  # internal physical-tail alignment across Cube, quant and epilogue
 ROPE_TILE = 16
 ROPE_INTERLEAVE_TILE = 2 * ROPE_TILE
 A_K_TILE = 256  # proj_a cube K frag
@@ -96,7 +97,7 @@ ROPE_CS_T_TILE = 8  # rope cos/sin row block
 # proj_a / proj_b cube M. Bounded by the 128 KiB L0C Acc (ROW_TILE*N_TILE*4) and by
 # T_PAD: a taller row tile reads into the next group's slab and writes past the end
 # of the row-indexed scratch.
-PROJ_A_ROW_TILE = min(256, T_PAD)
+PROJ_A_ROW_TILE = min(128, T_PAD)
 PROJ_B_ROW_TILE = min(128, T_PAD)
 # Task-array fan-outs; named because a deps= list comprehension cannot be hoisted
 # out of the call (the tracer rejects a bare ListComp statement).
@@ -115,12 +116,12 @@ SPARSE_CMP_BIAS_COLS = max(0, SPARSE_BIAS_COLS - WIN)
 
 # HCA streaming tiling.
 HCA_ATTN_TILE = 128
-HCA_CMP_PAGES_PER_WORK = HCA_ATTN_TILE // BLOCK_SIZE
-HCA_CMP_MAX_BLOCKS = (MAX_SEQ_LEN // HCA_COMPRESS_RATIO + BLOCK_SIZE - 1) // BLOCK_SIZE
+HCA_CMP_PAGES_PER_WORK = HCA_ATTN_TILE // HCA_CMP_STORAGE_BLOCK_SIZE
+HCA_CMP_MAX_BLOCKS = (MAX_SEQ_LEN // HCA_COMPRESS_RATIO + HCA_CMP_STORAGE_BLOCK_SIZE - 1) // HCA_CMP_STORAGE_BLOCK_SIZE
 HCA_CMP_WORK_COUNT = (HCA_CMP_MAX_BLOCKS + HCA_CMP_PAGES_PER_WORK - 1) // HCA_CMP_PAGES_PER_WORK
 HCA_CMP_PAD_ROWS = HCA_CMP_WORK_COUNT * HCA_ATTN_TILE
 HCA_WORK_VALID_STRIDE = 16  # one 64-byte cache line per INT32 writer
-HCA_QUERY_TILE = 8
+HCA_QUERY_TILE = 64
 HCA_GATHER_TOKEN_TILE = 2
 HCA_QUERY_STATS_ROWS = HCA_QUERY_TILE * H
 HCA_QK_CORES = HCA_QUERY_TILE * (H // QK_M_TILE)
@@ -142,10 +143,11 @@ def _prepare_sparse_attn_rope(
     rope_swap_idx: pl.Tensor[[HEAD_TILE, ROPE_DIM], pl.INT32],
     tile_base: pl.Scalar[pl.INDEX],
     tile_rows: pl.Scalar[pl.INDEX],
+    input_ready_dep: pl.Scalar[pl.TASK_ID],
 ) -> pl.Scalar[pl.TASK_ID]:
     """Build one dense tile of inverse-RoPE tables."""
     rope_cs_blocks = (tile_rows + ROPE_CS_T_TILE - 1) // ROPE_CS_T_TILE
-    with pl.spmd(ROPE_HALF // ROPE_TILE, name_hint="rope_cs") as rope_cs_tid:
+    with pl.spmd(ROPE_HALF // ROPE_TILE, name_hint="rope_cs", deps=[input_ready_dep]) as rope_cs_tid:
         cp = pl.tile.get_block_idx()
         cp_r0 = cp * ROPE_TILE
         cp_c0 = 2 * cp_r0
@@ -337,7 +339,7 @@ def _hca_streaming_wave(
         qk_t = query_base + qk_local_t
         if qk_t < request_end:
             qk_position = pl.max(pl.read(position_ids, [qk_t]), -1)
-            qk_rows = pl.min(HCA_CMP_MAX_BLOCKS * BLOCK_SIZE, (qk_position + 1) // HCA_COMPRESS_RATIO)
+            qk_rows = pl.min(HCA_CMP_MAX_BLOCKS * HCA_CMP_STORAGE_BLOCK_SIZE, (qk_position + 1) // HCA_COMPRESS_RATIO)
             qk_blocks = (qk_rows + HCA_ATTN_TILE - 1) // HCA_ATTN_TILE
             qk_q = pl.load(
                 q_flat, [qk_t * H + qk_head_base, 0], [QK_M_TILE, HEAD_DIM], target_memory=pl.MemorySpace.Mat,
@@ -520,7 +522,7 @@ def _hca_streaming_attn_tile(
     q: pl.Tensor[[T_DYN, H, HEAD_DIM], pl.BF16],
     ori_kv: pl.Tensor[[ORI_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
     swa_indices: pl.Tensor[[T_DYN, WIN], pl.INT32],
-    cmp_kv: pl.Tensor[[CMP_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
+    cmp_kv: pl.Tensor[[CMP_BLOCK_NUM_DYN, HCA_CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
     cmp_block_table: pl.Tensor[[HCA_CMP_MAX_BLOCKS], pl.INT32],
     position_ids: pl.Tensor[[T_DYN], pl.INT32],
     attn_sink: pl.Tensor[[H], pl.FP32],
@@ -529,7 +531,7 @@ def _hca_streaming_attn_tile(
     freqs_cos: pl.Tensor[[T_DYN, ROPE_DIM], pl.BF16],
     freqs_sin: pl.Tensor[[T_DYN, ROPE_DIM], pl.BF16],
     wo_a: pl.Tensor[[O_GROUPS, O_LORA, O_GROUP_IN], pl.BF16],
-    wo_b: pl.Tensor[[D, O_GROUPS * O_LORA], pl.INT8],
+    wo_b: pl.Tensor[[O_GROUPS, D, O_LORA], pl.INT8],
     wo_b_scale: pl.Tensor[[D], pl.FP32],
     attn_out: pl.Tensor[[T_DYN, D], pl.BF16],
     o_packed_heads: pl.Tensor[[O_GROUPS * T_PAD * HEADS_PER_GROUP, HEAD_DIM], pl.BF16],
@@ -541,7 +543,7 @@ def _hca_streaming_attn_tile(
 ):
     """Stream one dense HCA tile through o-proj."""
     cmp_block_num = pl.tensor.dim(cmp_kv, 0)
-    cmp_cache_rows = cmp_block_num * BLOCK_SIZE
+    cmp_cache_rows = cmp_block_num * HCA_CMP_STORAGE_BLOCK_SIZE
     cmp_kv_flat = pl.reshape(cmp_kv, [cmp_cache_rows, HEAD_DIM])
 
     with pl.manual_scope():
@@ -571,12 +573,12 @@ def _hca_streaming_attn_tile(
             gather_active_count_i32 = pl.read(tile_cmp_work_count, [0])
             if pl.cast(gather_work, pl.INT32) < gather_active_count_i32:
                 gather_dst0 = gather_work * HCA_ATTN_TILE
-                for gather_page in pl.unroll(HCA_CMP_PAGES_PER_WORK):
+                for gather_page in pl.range(HCA_CMP_PAGES_PER_WORK):
                     gather_table_col = gather_work * HCA_CMP_PAGES_PER_WORK + gather_page
-                    gather_local = gather_page * BLOCK_SIZE
+                    gather_local = gather_page * HCA_CMP_STORAGE_BLOCK_SIZE
                     gather_dst = gather_dst0 + gather_local
                     # Preserve the manually managed workspace identity across gather writes.
-                    gather_zero = pl.tile.full([BLOCK_SIZE, HEAD_DIM], dtype=pl.BF16, value=0.0)
+                    gather_zero = pl.tile.full([HCA_CMP_STORAGE_BLOCK_SIZE, HEAD_DIM], dtype=pl.BF16, value=0.0)
                     pl.store(gather_zero, [gather_dst, 0], cmp_work_kv)
                     gather_block_i32 = pl.read(cmp_block_table, [gather_table_col])
                     if gather_block_i32 >= 0:
@@ -584,8 +586,8 @@ def _hca_streaming_attn_tile(
                             if gather_page == 0:
                                 pl.write(cmp_work_valid, [gather_work, 0], pl.cast(1, pl.INT32))
                             gather_block = pl.cast(gather_block_i32, pl.INDEX)
-                            gather_src = gather_block * BLOCK_SIZE
-                            gather_page_kv = pl.load(cmp_kv_flat, [gather_src, 0], [BLOCK_SIZE, HEAD_DIM])
+                            gather_src = gather_block * HCA_CMP_STORAGE_BLOCK_SIZE
+                            gather_page_kv = pl.load(cmp_kv_flat, [gather_src, 0], [HCA_CMP_STORAGE_BLOCK_SIZE, HEAD_DIM])
                             pl.store(gather_page_kv, [gather_dst, 0], cmp_work_kv)
 
         rope_cos_il = pl.create_tensor([T_PAD, ROPE_DIM], dtype=pl.FP32, manual_dep=True)
@@ -595,6 +597,7 @@ def _hca_streaming_attn_tile(
             freqs_cos, freqs_sin,
             rope_cos_il, rope_sin_signed, rope_swap_idx,
             request_offset + tile_base, tile_rows,
+            packed_init_tid,
         )
 
         # Serial query-wave completion.
@@ -1038,6 +1041,7 @@ def _sparse_attn_heads(
             rope_swap_idx,
             tile_base,
             tile_rows,
+            packed_init_tid,
         )
         merge_tids[0] = pl.system.task_dummy(deps=[packed_init_tid, rope_cs_tid])
         for query_block in pl.unroll(PREFILL_QUERY_BLOCKS):
@@ -1079,7 +1083,7 @@ def _sparse_attn_heads(
 def _sparse_attn_o_proj(
     o_packed_heads: pl.Tensor[[O_GROUPS * T_PAD * HEADS_PER_GROUP, HEAD_DIM], pl.BF16],
     wo_a: pl.Tensor[[O_GROUPS, O_LORA, O_GROUP_IN], pl.BF16],
-    wo_b: pl.Tensor[[D, O_GROUPS * O_LORA], pl.INT8],
+    wo_b: pl.Tensor[[O_GROUPS, D, O_LORA], pl.INT8],
     wo_b_scale: pl.Tensor[[D], pl.FP32],
     attn_out: pl.Tensor[[T_DYN, D], pl.BF16],
     tile_base: pl.Scalar[pl.INDEX],
@@ -1098,10 +1102,9 @@ def _sparse_attn_o_proj(
     proj_a_tids = pl.array.create(O_GROUPS * PA_NFRAGS, pl.TASK_ID)
     quant_tids = pl.array.create(O_GROUPS, pl.TASK_ID)
     proj_b_tids = pl.array.create(PB_DSLABS * O_GROUPS, pl.TASK_ID)
-    # Keep arbitrary physical tails out of the Cube/quantization chain.  The packed-head
-    # buffer is zero-initialized, so rounding the internal O extent to a complete 512-row
-    # quant tile is mathematically neutral; only the final store is cropped to tile_rows.
-    o_compute_rows = ((tile_rows + O_PROJ_PAD_ROWS - 1) // O_PROJ_PAD_ROWS) * O_PROJ_PAD_ROWS
+    # Round physical tails up to a complete proj_a tile; only the final store
+    # writes active rows.
+    o_compute_rows = ((tile_rows + PROJ_A_ROW_TILE - 1) // PROJ_A_ROW_TILE) * PROJ_A_ROW_TILE
     proj_a_rows = o_compute_rows // PROJ_A_ROW_TILE
     quant_rows = o_compute_rows // QUANT_TOKEN_TILE
     proj_b_rows = o_compute_rows // PROJ_B_ROW_TILE
@@ -1181,18 +1184,20 @@ def _sparse_attn_o_proj(
                         n0 = d0 + nf * PROJ_B_MM_N_TILE
                         for pb_rb in pl.range(proj_b_rows):
                             pb_r0 = pb_rb * PROJ_B_ROW_TILE
-                            acc_b = pl.create_tensor([PROJ_B_ROW_TILE, PROJ_B_MM_N_TILE], dtype=pl.INT32)
+                            acc_b = pl.create_tensor([1, PROJ_B_ROW_TILE, PROJ_B_MM_N_TILE], dtype=pl.INT32)
                             for kb in pl.pipeline(0, O_LORA // B_K_TILE, stage=2):
                                 k0 = col_g + kb * B_K_TILE
+                                wb_k0 = kb * B_K_TILE
                                 b_act = o_r_i8[
                                     pb_r0 : pb_r0 + PROJ_B_ROW_TILE,
                                     k0 : k0 + B_K_TILE,
                                 ]
-                                b_weight = wo_b[n0 : n0 + PROJ_B_MM_N_TILE, k0 : k0 + B_K_TILE]
+                                b_weight = wo_b[g : g + 1, n0 : n0 + PROJ_B_MM_N_TILE, wb_k0 : wb_k0 + B_K_TILE]
                                 acc_b = pl.matmul_acc(acc_b, b_act, b_weight, b_trans=True, init_cond=(kb == 0))
+                            acc_b_2d = pl.reshape(acc_b, [PROJ_B_ROW_TILE, PROJ_B_MM_N_TILE])
                             partials[
                                 pb_r0 : pb_r0 + PROJ_B_ROW_TILE, g * D + n0 : g * D + n0 + PROJ_B_MM_N_TILE
-                            ] = acc_b
+                            ] = acc_b_2d
                 proj_b_tids[dc * O_GROUPS + g] = pb_tid
 
     # Dequantize and sum per-group INT32 partials into the BF16 output.
@@ -1237,14 +1242,14 @@ def hca_streaming_attn_physical(
     q: pl.Tensor[[T_DYN, H, HEAD_DIM], pl.BF16],
     ori_kv: pl.Tensor[[ORI_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
     swa_indices: pl.Tensor[[T_DYN, WIN], pl.INT32],
-    cmp_kv: pl.Tensor[[CMP_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
+    cmp_kv: pl.Tensor[[CMP_BLOCK_NUM_DYN, HCA_CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
     cmp_block_table: pl.Tensor[[HCA_CMP_MAX_BLOCKS], pl.INT32],
     position_ids: pl.Tensor[[T_DYN], pl.INT32],
     attn_sink: pl.Tensor[[H], pl.FP32],
     freqs_cos: pl.Tensor[[T_DYN, ROPE_DIM], pl.BF16],
     freqs_sin: pl.Tensor[[T_DYN, ROPE_DIM], pl.BF16],
     wo_a: pl.Tensor[[O_GROUPS, O_LORA, O_GROUP_IN], pl.BF16],
-    wo_b: pl.Tensor[[D, O_GROUPS * O_LORA], pl.INT8],
+    wo_b: pl.Tensor[[O_GROUPS, D, O_LORA], pl.INT8],
     wo_b_scale: pl.Tensor[[D], pl.FP32],
     attn_out: pl.Tensor[[T_DYN, D], pl.BF16],
     cache_ready_dep: pl.Scalar[pl.TASK_ID],
@@ -1303,7 +1308,7 @@ def sparse_attn_compute(
     freqs_cos: pl.Tensor[[T_DYN, ROPE_DIM], pl.BF16],
     freqs_sin: pl.Tensor[[T_DYN, ROPE_DIM], pl.BF16],
     wo_a: pl.Tensor[[O_GROUPS, O_LORA, O_GROUP_IN], pl.BF16],
-    wo_b: pl.Tensor[[D, O_GROUPS * O_LORA], pl.INT8],
+    wo_b: pl.Tensor[[O_GROUPS, D, O_LORA], pl.INT8],
     wo_b_scale: pl.Tensor[[D], pl.FP32],
     attn_out: pl.Tensor[[T_DYN, D], pl.BF16],
     o_proj_weight_dep: pl.Scalar[pl.TASK_ID],
@@ -1318,8 +1323,13 @@ def sparse_attn_compute(
                 dtype=pl.BF16,
                 manual_dep=True,
             )
-            with pl.spmd(T_PAD * H // PREFILL_QUERY_TILE, name_hint="prefill_sparse_packed_init") as packed_init_tid:
-                packed_row = pl.tile.get_block_idx() * PREFILL_QUERY_TILE
+            packed_rows = ((tile_rows + PROJ_A_ROW_TILE - 1) // PROJ_A_ROW_TILE) * PROJ_A_ROW_TILE
+            packed_group_blocks = packed_rows * HEADS_PER_GROUP // PREFILL_QUERY_TILE
+            with pl.spmd(O_GROUPS * packed_group_blocks, name_hint="prefill_sparse_packed_init") as packed_init_tid:
+                packed_block = pl.tile.get_block_idx()
+                packed_group = packed_block // packed_group_blocks
+                packed_row = packed_group * T_PAD * HEADS_PER_GROUP
+                packed_row = packed_row + (packed_block % packed_group_blocks) * PREFILL_QUERY_TILE
                 packed_zero = pl.full([PREFILL_QUERY_TILE, HEAD_DIM], dtype=pl.BF16, value=0.0)
                 o_packed_heads[packed_row : packed_row + PREFILL_QUERY_TILE, 0:HEAD_DIM] = packed_zero
             o_packed_heads, heads_dep = _sparse_attn_heads(
@@ -1368,7 +1378,7 @@ def sparse_attn_physical(
     freqs_cos: pl.Tensor[[T_DYN, ROPE_DIM], pl.BF16],
     freqs_sin: pl.Tensor[[T_DYN, ROPE_DIM], pl.BF16],
     wo_a: pl.Tensor[[O_GROUPS, O_LORA, O_GROUP_IN], pl.BF16],
-    wo_b: pl.Tensor[[D, O_GROUPS * O_LORA], pl.INT8],
+    wo_b: pl.Tensor[[O_GROUPS, D, O_LORA], pl.INT8],
     wo_b_scale: pl.Tensor[[D], pl.FP32],
     attn_out: pl.Tensor[[T_DYN, D], pl.BF16],
     o_proj_weight_dep: pl.Scalar[pl.TASK_ID],
@@ -1410,7 +1420,7 @@ def prefill_sparse_attn_test(
     freqs_cos: pl.Tensor[[T_DYN, ROPE_DIM], pl.BF16],
     freqs_sin: pl.Tensor[[T_DYN, ROPE_DIM], pl.BF16],
     wo_a: pl.Tensor[[O_GROUPS, O_LORA, O_GROUP_IN], pl.BF16],
-    wo_b: pl.Tensor[[D, O_GROUPS * O_LORA], pl.INT8],
+    wo_b: pl.Tensor[[O_GROUPS, D, O_LORA], pl.INT8],
     wo_b_scale: pl.Tensor[[D], pl.FP32],
     attn_out: pl.Out[pl.Tensor[[T_DYN, D], pl.BF16]],
 ):
@@ -1454,6 +1464,7 @@ def golden_prefill_sparse_attn(tensors):
     token_count = q.shape[0]
     ori_kv = tensors["ori_kv"].float()
     cmp_kv = tensors["cmp_kv"].float()
+    cmp_storage_block_size = cmp_kv.shape[1]
     cmp_block_table = tensors["cmp_block_table"]
     local_request_ids = tensors["local_request_ids"]
     swa_indices = tensors["swa_indices"]
@@ -1478,10 +1489,10 @@ def golden_prefill_sparse_attn(tensors):
             gathered.append(ori_kv.reshape(-1, HEAD_DIM)[row])
         for raw_i in cmp_indices[t].tolist():
             cmp_slot = int(raw_i)
-            if cmp_slot < 0 or cmp_slot >= CMP_MAX_BLOCKS * BLOCK_SIZE:
+            if cmp_slot < 0 or cmp_slot >= cmp_block_table.shape[1] * cmp_storage_block_size:
                 continue
-            block_id = int(cmp_block_table[request_id, cmp_slot // BLOCK_SIZE].item())
-            intra = cmp_slot % BLOCK_SIZE
+            block_id = int(cmp_block_table[request_id, cmp_slot // cmp_storage_block_size].item())
+            intra = cmp_slot % cmp_storage_block_size
             if block_id >= 0:
                 gathered.append(cmp_kv[block_id, intra, 0])
 
@@ -1536,10 +1547,10 @@ def golden_prefill_sparse_attn(tensors):
     scale_q_g = INT8_SCALE_MAX / amax_g
     o_r_i8_g = torch.round(o_r_g * scale_q_g).to(torch.int32).to(torch.float16).to(torch.int8)
     scale_dq_g = 1.0 / scale_q_g  # [T, G, 1]
-    wo_b_g = wo_b_i8.reshape(D, O_GROUPS, O_LORA)
+    wo_b_g = wo_b_i8  # already [GROUPS, D, O_LORA]
     out = torch.zeros(token_count, D, dtype=torch.float32)
     for g in range(O_GROUPS):
-        p_g = o_r_i8_g[:, g].to(torch.int32) @ wo_b_g[:, g].to(torch.int32).T  # [T, D]
+        p_g = o_r_i8_g[:, g].to(torch.int32) @ wo_b_g[g].to(torch.int32).T  # [T, D]
         out = out + p_g.float() * scale_dq_g[:, g]  # per-row group scale
     out = out * wo_b_scale.unsqueeze(0)  # per-channel weight scale
     tensors["attn_out"][:] = out.to(torch.bfloat16)
@@ -1650,6 +1661,9 @@ def build_tensor_specs(
         return ((torch.rand(D, O_GROUPS * O_LORA) - 0.5) * (O_GROUPS * O_LORA) ** -0.5).to(torch.bfloat16)
 
     wo_b_i8, wo_b_scale = quant_w_per_channel(init_wo_b())
+    # wo_b's group axis matches wo_a's own [GROUPS, ...] convention: fold the
+    # flat [D, GROUPS*O_LORA] quant result into [GROUPS, D, O_LORA].
+    wo_b_i8_groups = wo_b_i8.reshape(D, O_GROUPS, O_LORA).permute(1, 0, 2).contiguous()
 
     return [
         TensorSpec("q", [token_count, H, HEAD_DIM], torch.bfloat16, init_value=init_q),
@@ -1673,7 +1687,7 @@ def build_tensor_specs(
         TensorSpec("freqs_cos", [token_count, ROPE_DIM], torch.bfloat16, init_value=init_freqs_cos),
         TensorSpec("freqs_sin", [token_count, ROPE_DIM], torch.bfloat16, init_value=init_freqs_sin),
         TensorSpec("wo_a", [O_GROUPS, O_LORA, O_GROUP_IN], torch.bfloat16, init_value=init_wo_a),
-        TensorSpec("wo_b", [D, O_GROUPS * O_LORA], torch.int8, init_value=lambda: wo_b_i8),
+        TensorSpec("wo_b", [O_GROUPS, D, O_LORA], torch.int8, init_value=lambda: wo_b_i8_groups),
         TensorSpec("wo_b_scale", [D], torch.float32, init_value=lambda: wo_b_scale),
         TensorSpec("attn_out", [token_count, D], torch.bfloat16),
     ]

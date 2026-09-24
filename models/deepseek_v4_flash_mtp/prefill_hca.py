@@ -74,7 +74,6 @@ import pypto.language as pl
 from config import (
     BLOCK_SIZE,
     FLASH as M,
-    HCA_STATE_PHYSICAL_BLOCKS,
     PREFILL_CMP_MAX_BLOCKS,
     PREFILL_ORI_MAX_BLOCKS,
     PREFILL_SEQ,
@@ -328,10 +327,12 @@ def _cmp_block_tables(cp_size: int, request_end: int):
 def _state_block_tables(cp_size: int):
     import torch
 
+    # Recycle physical state pages within the five-leaf compressor sequence.
+    physical_blocks = 3 * COMPRESS_RATIO // HCA_STATE_BLOCK_SIZE
     tables = torch.empty(cp_size, HCA_STATE_MAX_BLOCKS, dtype=torch.int32)
     for rank in range(cp_size):
         for logical_block in range(HCA_STATE_MAX_BLOCKS):
-            tables[rank, logical_block] = (logical_block * 17 + 3) % HCA_STATE_PHYSICAL_BLOCKS
+            tables[rank, logical_block] = (logical_block * 17 + 3) % physical_blocks
     return tables
 
 
@@ -441,10 +442,10 @@ def prefill_attention_hca(
     hc_attn_scale: pl.Tensor[[3], pl.FP32],
     hc_attn_base: pl.Tensor[[MIX_HC], pl.FP32],
     attn_norm_w: pl.Tensor[[D], pl.BF16],
-    wq_a: pl.Tensor[[D, Q_LORA], pl.BF16],
-    wq_b: pl.Tensor[[Q_LORA, H * HEAD_DIM], pl.INT8],
+    wq_a: pl.Tensor[[D, Q_LORA], pl.BF16, pl.NZ],
+    wq_b: pl.Tensor[[Q_LORA, H * HEAD_DIM], pl.INT8, pl.NZ],
     wq_b_scale: pl.Tensor[[H * HEAD_DIM], pl.FP32],
-    wkv: pl.Tensor[[D, HEAD_DIM], pl.BF16],
+    wkv: pl.Tensor[[D, HEAD_DIM], pl.BF16, pl.NZ],
     gamma_cq: pl.Tensor[[Q_LORA], pl.BF16],
     gamma_ckv: pl.Tensor[[HEAD_DIM], pl.BF16],
     freqs_cos: pl.Tensor[[MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16],
@@ -487,8 +488,8 @@ def prefill_attention_hca(
     compact_ready: pld.DistributedTensor[[CP_SIZE, 1], pl.INT32],
     compact_consumed: pld.DistributedTensor[[CP_SIZE, 1], pl.INT32],
     attn_sink: pl.Tensor[[H], pl.FP32],
-    wo_a: pl.Tensor[[O_GROUPS, O_LORA, O_GROUP_IN], pl.BF16],
-    wo_b: pl.Tensor[[D, O_GROUPS * O_LORA], pl.INT8],
+    wo_a: pl.Tensor[[O_GROUPS, O_LORA, O_GROUP_IN], pl.BF16, pl.NZ],
+    wo_b: pl.Tensor[[O_GROUPS, D, O_LORA], pl.INT8, pl.NZ],
     wo_b_scale: pl.Tensor[[D], pl.FP32],
     x_out: pl.Out[pl.Tensor[[LOCAL_PARTS, MAX_SEGMENT_TILES, TAIL_ROWS, HC_MULT, D], pl.FP32]],
     cache_owner_rank: pl.Scalar[pl.INT32],
@@ -571,7 +572,7 @@ def prefill_attention_hca(
     )
 
     local_hidden_tail = pl.create_tensor([EPOCHS * LOCAL_PARTS * TAIL_ROWS, D], dtype=pl.BF16)
-    with pl.at(level=pl.Level.CORE_GROUP, name_hint="cp_hca_tail_assemble"):
+    with pl.at(level=pl.Level.CORE_GROUP, name_hint="cp_hca_tail_assemble") as tail_assembled_tid:
         for part in pl.range(LOCAL_PARTS):
             total = pl.read(segment_active_lengths, [part])
             tail_offset0 = pl.max(total - TAIL_ROWS, 0)
@@ -584,14 +585,14 @@ def prefill_attention_hca(
                     local_hidden_tail[destination : destination + 1, :] = normed[source : source + 1, :]
 
     logical_hidden = pl.create_tensor([EPOCHS * CP_TAIL_WINDOW_ROWS, D], dtype=pl.BF16)
-    with pl.at(level=pl.Level.CORE_GROUP, name_hint="cp_hca_hidden_tail_exchange") as tail_exchange_tid:
-        _prefill_cp_hidden_tail_exchange_wave(
-            local_hidden_tail,
-            reverse_index, owner_rank_table,
-            hidden_tail_window, tail_ready, tail_consumed,
-            logical_hidden,
-            my_rank, pl.cast(0, pl.INT32), tail_comm_epoch,
-        )
+    tail_exchange_tid = _prefill_cp_hidden_tail_exchange_wave(
+        local_hidden_tail,
+        reverse_index, owner_rank_table,
+        hidden_tail_window, tail_ready, tail_consumed,
+        logical_hidden,
+        my_rank, pl.cast(0, pl.INT32), tail_comm_epoch,
+        tail_assembled_tid,
+    )
 
     effective_x = pl.create_tensor([LOCAL_AUGMENTED_ROWS, D], dtype=pl.BF16)
     leaf_positions = pl.create_tensor([LOCAL_AUGMENTED_ROWS], dtype=pl.INT32)
@@ -802,23 +803,25 @@ def prefill_attention_hca(
         dtype=pl.FP32,
     )
     scratch_state_flat = pl.reshape(scratch_state, [LOCAL_PARTS * state_rows, COMPRESS_STATE_DIM])
-    with pl.at(level=pl.Level.CORE_GROUP, name_hint="cp_hca_seed_state"):
+    with pl.spmd(48, name_hint="cp_hca_init_state") as state_init_done:
+        init_worker_id = pl.tile.get_block_idx()
         for part in pl.range(LOCAL_PARTS):
             segment = pl.read(owner_segments_t, [part])
-            for state_row in pl.range(state_rows):
+            for state_row in pl.range(init_worker_id, state_rows, 48):
                 destination = part * state_rows + state_row
                 scratch_state_flat[
                     destination : destination + 1, :
                 ] = pl.full([1, COMPRESS_STATE_DIM], dtype=pl.FP32, value=0.0)
             if segment == 0 and pl.read(segment_starts_t, [0]) > 0:
                 for row in pl.range(TAIL_ROWS):
-                    seed_position = pl.read(segment_starts_t, [0]) - TAIL_ROWS + row
-                    if seed_position >= 0:
-                        seed_page = pl.read(compress_state_block_table, [seed_position // HCA_STATE_BLOCK_SIZE])
-                        seed_row = seed_page * HCA_STATE_BLOCK_SIZE + seed_position % HCA_STATE_BLOCK_SIZE
-                        if seed_page >= 0 and seed_row < state_rows:
-                            seed_destination = part * state_rows + seed_row
-                            scratch_state_flat[seed_destination:seed_destination + 1, :] = history_state[row:row + 1, :]
+                    history_position = pl.read(segment_starts_t, [0]) - TAIL_ROWS + row
+                    if history_position >= 0:
+                        history_state_block = pl.read(compress_state_block_table, [history_position // HCA_STATE_BLOCK_SIZE])
+                        history_state_row = history_state_block * HCA_STATE_BLOCK_SIZE + history_position % HCA_STATE_BLOCK_SIZE
+                        # Each worker restores only the state rows it cleared.
+                        if history_state_block >= 0 and history_state_row < state_rows and history_state_row % 48 == init_worker_id:
+                            history_destination_row = part * state_rows + history_state_row
+                            scratch_state_flat[history_destination_row:history_destination_row + 1, :] = history_state[row:row + 1, :]
 
     leaf_cmp = pl.create_tensor(
         [
@@ -840,6 +843,8 @@ def prefill_attention_hca(
             ],
             [state_base, 0, 0],
         )
+        # Finish pooling before the next leaf overwrites recycled state pages.
+        state_read_done = state_init_done
         for leaf in pl.range(MAX_COMPRESS_LEAVES):
             leaf_index = part * MAX_COMPRESS_LEAVES + leaf
             token0 = leaf_index * TAIL_ROWS
@@ -850,21 +855,16 @@ def prefill_attention_hca(
             state_slots_leaf = pl.slice(leaf_state_slots, [TAIL_ROWS], [token0])
             cmp_leaf = pl.slice(leaf_cmp, [LEAF_CMP_BLOCKS, CMP_STORAGE_BLOCK_SIZE, 1, HEAD_DIM], [cmp_block0, 0, 0, 0])
             active = pl.read(leaf_num_tokens, [part, leaf])
-            cmp_leaf, state_part = prefill_compressor_ratio128(
+            cmp_leaf, state_part, state_read_done = prefill_compressor_ratio128(
                 x_leaf, state_part, compress_state_block_table,
                 cmp_wkv, cmp_wgate, cmp_ape, cmp_norm_w,
                 freqs_cos, freqs_sin,
                 cmp_leaf, position_leaf, active,
-                cmp_slots_leaf, state_slots_leaf,
+                cmp_slots_leaf, state_slots_leaf, state_read_done,
             )
             leaf_cmp = pl.assemble(leaf_cmp, cmp_leaf, [cmp_block0, 0, 0, 0])
-        # Publish the updated view in fixed-size rows; the physical pool
-        # extent is runtime-sized and cannot form one on-chip tile.
-        state_part_flat = pl.reshape(state_part, [state_rows, COMPRESS_STATE_DIM])
-        with pl.at(level=pl.Level.CORE_GROUP, name_hint="cp_hca_state_part_publish"):
-            for row in pl.range(state_rows):
-                destination = part * state_rows + row
-                scratch_state_flat[destination:destination + 1, :] = state_part_flat[row:row + 1, :]
+        # Publish the compressor's updated scratch-state view.
+        scratch_state = pl.assemble(scratch_state, state_part, [state_base, 0, 0])
 
     local_cmp_payload = pl.create_tensor([EPOCHS * CMP_ROWS_PER_RANK, HEAD_DIM], dtype=pl.BF16)
     local_cmp_meta = pl.create_tensor([EPOCHS * CMP_ROWS_PER_RANK, CMP_META_DIM], dtype=pl.INT32)
@@ -1067,10 +1067,10 @@ def prefill_cp_hca_rank(
     hc_attn_scale: pl.Tensor[[3], pl.FP32],
     hc_attn_base: pl.Tensor[[MIX_HC], pl.FP32],
     attn_norm_w: pl.Tensor[[D], pl.BF16],
-    wq_a: pl.Tensor[[D, Q_LORA], pl.BF16],
-    wq_b: pl.Tensor[[Q_LORA, H * HEAD_DIM], pl.INT8],
+    wq_a: pl.Tensor[[D, Q_LORA], pl.BF16, pl.NZ],
+    wq_b: pl.Tensor[[Q_LORA, H * HEAD_DIM], pl.INT8, pl.NZ],
     wq_b_scale: pl.Tensor[[H * HEAD_DIM], pl.FP32],
-    wkv: pl.Tensor[[D, HEAD_DIM], pl.BF16],
+    wkv: pl.Tensor[[D, HEAD_DIM], pl.BF16, pl.NZ],
     gamma_cq: pl.Tensor[[Q_LORA], pl.BF16],
     gamma_ckv: pl.Tensor[[HEAD_DIM], pl.BF16],
     freqs_cos: pl.Tensor[[MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16],
@@ -1113,8 +1113,8 @@ def prefill_cp_hca_rank(
     compact_ready: pld.DistributedTensor[[CP_SIZE, 1], pl.INT32],
     compact_consumed: pld.DistributedTensor[[CP_SIZE, 1], pl.INT32],
     attn_sink: pl.Tensor[[H], pl.FP32],
-    wo_a: pl.Tensor[[O_GROUPS, O_LORA, O_GROUP_IN], pl.BF16],
-    wo_b: pl.Tensor[[D, O_GROUPS * O_LORA], pl.INT8],
+    wo_a: pl.Tensor[[O_GROUPS, O_LORA, O_GROUP_IN], pl.BF16, pl.NZ],
+    wo_b: pl.Tensor[[O_GROUPS, D, O_LORA], pl.INT8, pl.NZ],
     wo_b_scale: pl.Tensor[[D], pl.FP32],
     x_out: pl.Out[pl.Tensor[[LOCAL_PARTS, MAX_SEGMENT_TILES, TAIL_ROWS, HC_MULT, D], pl.FP32]],
     cache_owner_rank_t: pl.Tensor[[1], pl.INT32],
@@ -1200,7 +1200,7 @@ def prefill_cp_hca_test(
     cache_owner_rank_t: pl.Tensor[[CP_SIZE, 1], pl.INT32],
     attn_sink: pl.Tensor[[H], pl.FP32],
     wo_a: pl.Tensor[[O_GROUPS, O_LORA, O_GROUP_IN], pl.BF16],
-    wo_b: pl.Tensor[[D, O_GROUPS * O_LORA], pl.INT8],
+    wo_b: pl.Tensor[[O_GROUPS, D, O_LORA], pl.INT8],
     wo_b_scale: pl.Tensor[[D], pl.FP32],
     x_out: pl.Out[pl.Tensor[[CP_SIZE, LOCAL_PARTS, MAX_SEGMENT_TILES, TAIL_ROWS, HC_MULT, D], pl.FP32]],
 ):
@@ -1363,7 +1363,7 @@ def build_cp_tensor_specs(cp_size: int = CP_SIZE, *, num_tokens: int | None = No
     state_tables = metadata["compress_state_block_table"]
     state = torch.zeros(
         cp_size,
-        HCA_STATE_PHYSICAL_BLOCKS,
+        int(state_tables.max()) + 1,
         HCA_STATE_BLOCK_SIZE,
         COMPRESS_STATE_DIM,
         dtype=torch.float32,
