@@ -139,7 +139,8 @@ and `pl.xors` additionally require a `tmp` scratch tile.
 Bitwise: `pl.and_` / `pl.ands`, `pl.or_` / `pl.ors`, `pl.xor` / `pl.xors`,
 `pl.shl` / `pl.shls`, `pl.shr` / `pl.shrs`.
 
-Selection and comparison: `pl.cmp`, `pl.cmps`, `pl.sel`, `pl.sels`, `pl.tri`.
+Selection and comparison: `pl.cmp`, `pl.cmps`, `pl.sel`, `pl.sels`, `pl.tri`,
+and the scratch-free composite `pl.tile.select`.
 
 Partial/segmented arithmetic (used in split-K and reduction epilogues):
 `pl.part_add`, `pl.part_mul`, `pl.part_max`, `pl.part_min`.
@@ -348,10 +349,14 @@ Ascend 910B4 with `-p a2a3`, so the list is now much shorter:
 `pl.cos`, `pl.relu`, `pl.lrelu`, `pl.prelu` (tmp must be `UINT8` with one more
 physical row than the source), `pl.sel` (tmp `UINT32 [1, 16]` on A2/A3),
 `pl.sels` (tmp must match the source dtype), `pl.cmps`/`pl.cmp`,
-`pl.not_` (**INT16/UINT16 only** — INT32 is rejected), `pl.tri`,
-`pl.gemv*`, `pl.matmul_bias`, `pl.batch_matmul`, `pl.tile.batch_matmul_acc`,
-`pl.gather_mask` / `pl.tile.scatter_mask`, `pl.transpose_view`,
-`pl.set_validshape` + `pl.tile.fillpad_inplace`, tile `pl.read`/`pl.write`.
+`pl.tile.select` (no scratch at all — see
+[Elementwise operations](14-elementwise.md)), `pl.not_` (**INT16/UINT16 only** —
+INT32 is rejected), `pl.tri`, `pl.gemv*`, `pl.matmul_bias`,
+`pl.batch_matmul`, `pl.tile.batch_matmul_acc`, `pl.gather_mask` /
+`pl.tile.scatter_mask`, `pl.transpose_view`,
+`pl.set_validshape` + `pl.tile.fillpad_inplace`, tile `pl.read`/`pl.write`,
+the FIXPIPE-epilogue forms of `pl.tile.store` / `pl.tile.assemble`
+(`pre_quant` / `pre_relu` — see [Matrix multiply](17-matmul.md)).
 
 **Measured failing** (keep avoiding): `pl.expands` — no backend codegen
 (`No codegen registered for operation: tile.expands`). `pl.mscatter` still

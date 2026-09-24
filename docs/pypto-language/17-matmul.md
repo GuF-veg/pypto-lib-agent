@@ -4,7 +4,8 @@
 L0A/L0B, the product accumulates in L0C, and the result comes back as a tile or
 tensor. Every contract here was verified by running
 `examples/language/matmul_family.py` on a real Ascend 910B4 with `-p a2a3`
-(7 entries, 23 compared outputs, three consecutive clean runs).
+(7 entries, 24 compared outputs — 23 at the `2f892f9` baseline plus the
+GM-slice transpose output added at `ee49fcea`).
 
 ## Quick reference
 
@@ -63,6 +64,88 @@ Both flags are **tensor-only**. On Tile operands they raise, and the message
 points you at `pl.tile.transpose_view(...)`, which works on device. `a_trans`
 is functional but unused in this repository's kernels; production only needs
 `b_trans`.
+
+**A transposed operand may not be a sub-window of an on-chip Mat tile.** The
+flag is realised by a zero-copy `tile.transpose_view`, which relabels a *whole
+buffer's* layout; a strided window has no transposed form on A2/A3, so codegen
+raises instead of aliasing the wrong bytes:
+
+```text
+a transposed matmul operand (a_trans / b_trans) cannot be taken from a slice of
+an on-chip Mat tile: the transpose is a zero-copy relabel of a whole buffer,
+and a slice is a strided window, so the parent's row stride and the slice
+offset have nowhere to go. Slice the GM tensor instead and load each window on
+its own -- pl.matmul(..., b_trans=True) on a tile loaded directly from GM is
+still lowered zero-copy -- or pre-transpose the data in GM and drop the flag
+```
+
+In practice this means a resident parent cannot be sliced per iteration and fed
+to `b_trans`:
+
+```python
+parent = pl.slice(query, [512, 128], [0, 0])      # loaded to Mat once
+for q in pl.range(8):
+    window = pl.slice(parent, [64, 128], [q * 64, 0])
+    dot = pl.matmul(key, window, b_trans=True)    # raises at codegen
+```
+
+Slice the **GM tensor** and load each window on its own instead — the
+transpose is still zero-copy there — or pre-transpose the data in GM and drop
+the flag. A slice covering its parent's full extent at offset `[0, 0]` is
+exempt: it names the same bytes, so it folds back to the parent. The GM-slice
+form is the `c_gm_slice_t` output of the `mm_transpose` entry in
+`examples/language/matmul_family.py`; the rejection text above is the measured
+`PartialCodegenError` from the resident-parent form.
+
+## The FIXPIPE epilogue: `pre_quant` / `pre_relu`
+
+The cube's fix-pipe can multiply an accumulator by an FP32 scale and apply
+ReLU **while it drains L0C** — one instruction, no vector work. The epilogue
+rides the Acc-resident writebacks and is verified on device by
+`examples/language/fixpipe_epilogue.py` (three entries, all pass):
+
+| Form | Call | What it computes |
+|---|---|---|
+| Acc → GM | `pl.tile.store(acc, [0, 0], out, pre_quant=s, pre_relu=True)` | `clamp(relu(acc) * s)` written straight to GM |
+| Acc → Mat | `pl.tile.assemble(mat, acc, [0, 0], pre_quant=s, pre_relu=True)` | the same, into an on-chip FP16/BF16 scratch the next matmul reads |
+
+```python
+k_mat = pl.tile.load(k, [0, 0], [M, K], target_memory=pl.Mem.Mat)
+q_mat = pl.tile.load(q, [0, 0], [N, K], target_memory=pl.Mem.Mat)
+acc = pl.tile.matmul(
+    pl.tile.move(k_mat, target_memory=pl.Mem.Left),
+    pl.tile.move(pl.tile.transpose_view(q_mat), target_memory=pl.Mem.Right),
+)
+pl.tile.store(acc, [0, 0], out_f16, pre_quant=1.0 / 1024, pre_relu=True)
+```
+
+The contracts that matter:
+
+- **The order is ReLU, then the scale, then the destination clamp** (pto-isa
+  spells it `ReluPreMode`): the pair computes `maximum(acc, 0) * s`, **not**
+  `maximum(acc * s, 0)`. They agree for every positive scale and differ at
+  every element for a negative one.
+- **A scale-bearing conversion is what makes INT32-accumulator output
+  reachable**: into FP16 (dequantization) or INT8 (requantization), neither of
+  which the unscaled writeback can do. `pre_quant=None` (default) emits no
+  scale; `1.0` is a real identity scale and still selects the quantizing form.
+- **The quantizing writeback clamps to the destination range** where an
+  ordinary `pl.cast` to FP16 would overflow to infinity.
+- **`pre_relu` alone** attaches to the ordinary FP32 → BF16 writeback — a
+  different instruction form from the quantizing one — and is the way to keep
+  a `relu(a @ b)` intermediate on-chip for a second matmul.
+- The Acc → Mat form requires **PTOAS >= v0.65**: ptoas 0.64 dropped the scale
+  from the scaled `pto.tinsert` (PTOAS#1570), and the validated
+  `INT32 Acc → FP16 Mat` pair is the one both A2/A3 and A5 allow. Other scaled
+  Acc-to-Mat dtype pairs are still rejected by `FixpipeEpilogueValid`.
+- **The Tensor-level ops do not take the pair.** `pl.store` / `pl.assemble`
+  with Tensor operands reject it — they name neither the Acc source nor the
+  Mat target — with the remedy spelled out:
+  `pl.assemble: 'pre_quant' is not supported for Tensor operands. The FIXPIPE
+  pre-ops describe how one cube accumulator is drained, so they need an
+  Acc-resident tile source and an on-chip Mat target — a Tensor-level assemble
+  names neither. Write the tile-level form instead: pl.tile.assemble(mat_scratch,
+  acc_tile, offset, pre_quant=..., pre_relu=...).`
 
 ## dtype rules
 
@@ -147,11 +230,20 @@ all matmul-family entries passed          (exit code 0)
 
 Entries cover the plain product, the pipelined K loop with `init_cond`, the
 transpose flags (with distinct M/N/K so a dropped flag fails on both numbers and
-shape), `matmul_bias`, the `gemv` family, `batch_matmul`, and `out_dtype`.
-`pl.tile.batch_matmul_acc` was verified separately (September 2026 probe):
-starting from a `pl.matmul` accumulator, `init_cond=True` selects the
-overwriting step and a following flag-less call accumulates — the two-step
-result matched `2 * a @ b` at `rtol=atol=1e-4`.
+shape, plus the GM-slice `b_trans` form), `matmul_bias`, the `gemv` family,
+`batch_matmul`, and `out_dtype`. `pl.tile.batch_matmul_acc` was verified
+separately (September 2026 probe): starting from a `pl.matmul` accumulator,
+`init_cond=True` selects the overwriting step and a following flag-less call
+accumulates — the two-step result matched `2 * a @ b` at `rtol=atol=1e-4`.
+The FIXPIPE epilogue forms live in their own file:
+
+```bash
+PYTHONPATH="$PWD" conda run -n pypto python examples/language/fixpipe_epilogue.py -p a2a3 -d 4
+```
+
+```text
+all fixpipe epilogue entries passed          (exit code 0)
+```
 
 ## See also
 

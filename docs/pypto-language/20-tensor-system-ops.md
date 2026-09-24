@@ -120,12 +120,26 @@ so `pl.add(tile, 3)` needs no cast.
 |---|---|---|
 | `pl.no_dep(t)` | excludes one tensor from automatic dependency tracking | **not usable as a call argument** - all three spellings are rejected, including `UnsupportedFeatureError: Unsupported function call` on a direct jit-to-jit call. Use the scope-level form instead: `pl.at(level=pl.Level.CORE_GROUP, no_dep_args=[x])` *(device)* |
 | `pl.dump_tag(t)` | marks a tensor for selective dump | only takes effect when partial dump is enabled - a no-op otherwise |
-| `pl.set_cache_policy(p)` | sets the cache policy | `pl.CachePolicy` has `DEFAULT` and `BYPASS`; this is a **coherency contract**, not an optimisation hint. `DEFAULT` is a verified no-op; **`BYPASS` kills the run** (see below) |
+| `pl.set_cache_policy(p)` | sets the cache policy | `pl.CachePolicy` has `DEFAULT` and `BYPASS`; this is a **coherency contract**, not an optimisation hint. `DEFAULT` is a verified no-op; **`BYPASS` now really bypasses L2 on A2/A3** (see below) |
 
-Measured on device: `pl.set_cache_policy(x, pl.CachePolicy.DEFAULT)` is a
-verified no-op, but **`BYPASS` is not usable here** - after about 27 s the run
-fails with `RuntimeError: chip run lane is poisoned: finalize_native_run failed
-with code -100`.
+**Measured history of `BYPASS`.** At the `2f892f9` baseline it killed the run —
+about 27 s in, `RuntimeError: chip run lane is poisoned: finalize_native_run
+failed with code -100` — because nothing lowered the declaration to a real
+bypass. The `ee49fcea` revision wires it through a runtime offset: on A2/A3,
+which maps every GM page twice (cached and uncached), the driver reports the
+distance between the two mappings, the generated kernel reads it once at entry
+through a synthetic parameter, and each bypassing load is issued against the
+**uncached alias** so it does not allocate in L2. A device that exposes no
+alias reports offset zero, which leaves the read ordinary and correct — the
+simulator is that case by construction. A5 does not map GM twice, so a
+declaration there is accepted and currently does nothing. Requires
+PTOAS >= v0.64. The probe kernel
+(`pl.set_cache_policy(x, pl.CachePolicy.BYPASS)` then `pl.load`/`add`/`store`)
+now **passes on device**, and `pl.load(..., cache=pl.CachePolicy.BYPASS)` is
+the per-read spelling of the same thing — an explicit value always wins over
+the scope-level declaration, in both directions. The contract has not changed:
+data read this way is not cached, and code that assumes otherwise will read
+stale values.
 
 `pl.create_tensor(..., manual_dep=True)` is the coarser version of `pl.no_dep`:
 one tensor, its whole lifetime. The full ladder from finest to coarsest is
@@ -499,6 +513,14 @@ The rules that make it work:
 - No `split=` argument on either op — the mode is inherited from the region.
 - The full Cube → Vector → Cube ring (`shard_mat`) and the shard-only half
   (`shard_vec`) both validate against torch goldens at `rtol=atol=1e-3`.
+- **A manual region owns its per-lane correctness.** Since the `ee49fcea`
+  revision the compiler no longer half-width-scans an explicit-boundary region
+  you wrote yourself, so a full-width vector op beside the boundary ops (e.g. a
+  lane-invariant `[1, N]` broadcast operand both lanes must read) compiles
+  instead of being rejected. The producer-side rule is the surviving guard:
+  `pl.aiv_shard` pushes from the cube lane so its operand must be
+  cube-produced, and `pl.aic_gather` conversely — a parameter operand, held by
+  both lanes, is exempt. See [Control flow](04-control-flow.md#plsplit_aiv--explicit-aiv-split).
 
 Hand-written `tpush`/`tpop` remains unusable: an attempt on this revision died
 in the same place as the six earlier ones (`Internal error: no MLIR mapping for

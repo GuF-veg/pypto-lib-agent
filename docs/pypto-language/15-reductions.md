@@ -193,11 +193,18 @@ match the rank-reduced tensor window, got 2D
   given`. Note that `col_sum` takes the scratch but `col_max` does not - there is
   no rule to infer here, so read the table rather than guessing.
 
+  On the Tensor path the tree has a second spelling: `pl.col_sum(t,
+  is_binary=True)` (see [Column reductions](#column-reductions)). The two
+  keywords are mutually exclusive by input type — `tmp_tile` for Tiles,
+  `is_binary` for Tensors.
+
   The whole `col_*` half is verified numerically by
   `examples/language/reductions_col.py`: `pl.col_sum`, `pl.col_max`, `pl.col_min`
   and `pl.col_prod` each turn `[32, 64]` into `[1, 64]` and match
-  `sum`/`amax`/`amin`/`prod` with `dim=0, keepdim=True`. The input is deliberately
-  non-square so an axis mix-up fails on shape as well as on values.
+  `sum`/`amax`/`amin`/`prod` with `dim=0, keepdim=True`, and the
+  `col_sum_binary` entry holds the sequential and tree forms to one golden. The
+  input is deliberately non-square so an axis mix-up fails on shape as well as
+  on values.
 - **No memory space is required.** A plain
   `with pl.at(level=pl.Level.CORE_GROUP, name_hint=...)` region over tensor
   slices is enough; no `pl.alloc` and no explicit Tile buffer were needed.
@@ -353,11 +360,15 @@ variants, is listed in [Tile Operations](06-tile-operations.md).
 
 `examples/language/reductions_row.py` holds all three entries behind the
 contracts above: `reductions_row` (`rtol=atol=1e-5`), `scalar_max_min`
-(`rtol=atol=1e-5`) and `row_sum_fp16` (`rtol=atol=1e-2`). From the repository
+(`rtol=atol=1e-5`) and `row_sum_fp16` (`rtol=atol=1e-2`). The column half —
+including the `col_sum_binary` entry that holds the sequential and
+`is_binary=True` tree forms to one golden — lives in
+`examples/language/reductions_col.py`. From the repository
 root:
 
 ```bash
 PYTHONPATH="$PWD" conda run -n pypto python examples/language/reductions_row.py -p a2a3 -d 2
+PYTHONPATH="$PWD" conda run -n pypto python examples/language/reductions_col.py -p a2a3 -d 2
 ```
 
 Exit code 0, on a real Ascend device, with every output line PASS:
@@ -435,6 +446,27 @@ def col_reduce(x: pl.Tensor[[R, C], pl.FP32],
 The practical consequence is the same as for rows: your output spec must be the
 reduced-but-kept shape. A `[C]` output is rejected on rank grounds, and
 `[R, C]` fails because the element count no longer matches.
+
+**Tensor-path `col_sum` also has a binary-tree form.** `is_binary=True`
+requests the binary-tree reduction with compiler-managed scratch; the default
+remains sequential. Both produce the same `[1, C]` result and share one torch
+golden — the tree changes only the **floating-point summation order**, which
+is why the two outputs sit side by side in the verified example:
+
+```python
+with pl.at(level=pl.Level.CORE_GROUP, name_hint="col_sum_binary"):
+    t = x[:, :]
+    s[:, :] = pl.col_sum(t)                  # sequential (default)
+    q[:, :] = pl.col_sum(t, is_binary=True)  # binary tree
+```
+
+`is_binary` is **Tensor-only**: on a Tile input the tree is selected by passing
+`tmp_tile` instead, and mixing the two is rejected with
+`pl.col_sum is_binary is Tensor-only; pass tmp_tile for Tile inputs`. This
+asymmetry mirrors the existing `tmp_tile` split — the Tensor path allocates its
+own scratch during Tensor-to-Tile lowering, so a caller-supplied tile there
+could not select the strategy. Verified by the `col_sum_binary` entry of
+`examples/language/reductions_col.py`.
 
 To broadcast a column reduction back over the rows, use the column-side
 expansion ops (`pl.col_expand_mul` and friends) rather than relying on

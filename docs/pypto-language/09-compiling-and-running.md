@@ -142,15 +142,27 @@ field.
 - The generated code lands in a build directory that is **relative to the
   current working directory**: `build_output/` unless `PYPTO_PROG_BUILD_DIR`
   overrides it. Run kernels from a consistent directory or you will rebuild.
+  A default directory is named `<name>_<YYYYmmdd_HHMMSS>_<random>` — the
+  timestamp prefix keeps the listing readable and time-ordered, and the random
+  suffix guarantees uniqueness (two same-named compiles within one second no
+  longer share a directory).
 - There is a persistent artifact cache (`~/.cache/pypto/jit` by default, keyed by
-  an artifact manifest). It is **disabled by default**.
-- **Leave it disabled in this workspace.** Enabling it
-  (`PYPTO_CACHE=1` or `CacheConfig(enabled=True)`) was measured to *recompile on
-  every call* here, because the local `ptoas` launcher's
-  `#!/usr/bin/env python3` shebang is rejected by the toolchain probe, which
-  silently marks the toolchain unusable and bypasses the cache. The only signal
-  is a logger line at `info` level. If you do enable it, watch the cache stats
-  for bypasses.
+  an artifact manifest). It is **disabled by default**; enable it with
+  `PYPTO_CACHE=1` or `CacheConfig(enabled=True)`.
+- The cache works in this workspace now. An earlier revision measured it
+  *recompiling on every call* because the local `ptoas` launcher's
+  `#!/usr/bin/env python3` shebang was rejected by the toolchain probe, which
+  silently disabled it — that class of discovery failure (and three others) was
+  fixed, and with ptoas v0.65 installed a warm second call completes in ~0.06 s
+  versus ~6.5 s cold. If a cache seems dead, watch for bypass lines in the
+  cache stats rather than assuming it compiled.
+- **The toolchain version gate is hard.** Before the first `.pto` is assembled,
+  codegen runs `ptoas --version` and rejects any assembler older than the
+  pinned `PTOAS_VERSION` (`v0.65` at this revision), with an error naming both
+  versions: `ptoas at '.../bin/ptoas' is version 0.61, but PyPTO requires
+  PTOAS >= v0.65. Install PTOAS v0.65 or newer ... and point PTOAS_ROOT at it.`
+  A stale `PTOAS_ROOT` therefore fails fast instead of producing an assembler
+  error inside a generated kernel.
 - Clearing the cache means deleting its root directory.
 
 Environment variables you may need: `PYPTO_PROG_BUILD_DIR`, `PYPTO_CACHE`,

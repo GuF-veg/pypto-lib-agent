@@ -8,8 +8,9 @@
 # -----------------------------------------------------------------------------------------------------------
 """Column reductions - the `col_*` half of the reduction family.
 
-    col_reduce     col_sum / col_max / col_min over the row axis
-    col_prod       col_prod, which takes no scratch tile
+    col_reduce      col_sum / col_max / col_min over the row axis
+    col_prod        col_prod, which takes no scratch tile
+    col_sum_binary  Tensor-path col_sum with is_binary=True (binary tree)
 
 Every one of these reduces the **row** axis and keeps it, so `[R, C]` becomes
 `[1, C]`. `R != C` is deliberate: an axis mix-up then fails on shape as well as
@@ -19,6 +20,10 @@ Note the family is not uniform about the scratch tile: `col_sum` accepts a
 `tmp_tile` while `col_max` and `col_min` take `input` alone, and `pl.col_max(t,
 tmp)` is rejected with `col_max() takes 1 positional argument but 2 were given`.
 See the reductions page for the full split.
+
+`is_binary=True` is the Tensor-path way to request the binary-tree reduction
+(the Tile path passes `tmp_tile` instead); it changes only the floating-point
+sum order, which is why both outputs share one golden.
 """
 import pypto.language as pl
 
@@ -52,6 +57,26 @@ def col_prod(
     return p
 
 
+@pl.jit
+def col_sum_binary(
+    x: pl.Tensor[[R, C], pl.FP32],
+    s: pl.Out[pl.Tensor[[1, C], pl.FP32]],
+    q: pl.Out[pl.Tensor[[1, C], pl.FP32]],
+):
+    """Tensor-path col_sum: sequential default vs is_binary=True tree.
+
+    Both reduce the row axis into [1, C]; the tree only changes the
+    floating-point summation order (a [1, C] INT32 accumulation would be
+    bitwise identical). is_binary is Tensor-only — on a Tile input pass
+    tmp_tile instead.
+    """
+    with pl.at(level=pl.Level.CORE_GROUP, name_hint="col_sum_binary"):
+        t = x[:, :]
+        s[:, :] = pl.col_sum(t)
+        q[:, :] = pl.col_sum(t, is_binary=True)
+    return s, q
+
+
 def _specs(with_prod=False):
     import torch
 
@@ -64,6 +89,9 @@ def _specs(with_prod=False):
     specs = [TensorSpec("x", [R, C], torch.float32, init_value=small)]
     if with_prod:
         specs.append(TensorSpec("p", [1, C], torch.float32, init_value=torch.zeros))
+    elif with_prod is None:
+        for nm in ("s", "q"):
+            specs.append(TensorSpec(nm, [1, C], torch.float32, init_value=torch.zeros))
     else:
         for nm in ("s", "mx", "mn"):
             specs.append(TensorSpec(nm, [1, C], torch.float32, init_value=torch.zeros))
@@ -80,9 +108,16 @@ def golden_col_prod(t):
     t["p"][:] = t["x"].prod(dim=0, keepdim=True)
 
 
+def golden_col_sum_binary(t):
+    s = t["x"].sum(dim=0, keepdim=True)
+    t["s"][:] = s
+    t["q"][:] = s
+
+
 ENTRIES = [
     ("col_reduce", col_reduce, False, golden_col_reduce, 1e-5),
     ("col_prod", col_prod, True, golden_col_prod, 1e-4),
+    ("col_sum_binary", col_sum_binary, None, golden_col_sum_binary, 1e-5),
 ]
 
 

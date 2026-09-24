@@ -186,6 +186,30 @@ by `examples/language/distributed_transfer.py`. The contracts that matter:
   parameter directly on the InCore rail (a window there raises "input must be
   TensorType"); `input[dest, :]` is the chunk destined for rank `dest`, and
   `target[src, :]` comes back holding the chunk from rank `src`.
+- **`all_to_all_v(input, target, sig, send_counts, recv_counts)`** is the
+  variable-count form (source-verified, not yet exercised by
+  `examples/language/`). `send_counts` is this rank's INT32 `[NR]` (or `[NR, 1]`)
+  rows-per-destination vector; `recv_counts` is an INT32 `[NR, 1]` window the
+  collective writes — `recv_counts[src, 0]` holds how many rows `src` actually
+  sent here (clamped to the per-peer capacity `MAX_RECV = target.shape[0] //
+  NR`), which is exactly how many were transferred, so bound the read-back loop
+  by it. Two semantics changed in the `2f892f9..ee49fcea` window:
+  - **`send_counts` must be window-bound on the builtin rails.** Each rank
+    stages its own vector into its window and every peer reads the ONE word it
+    needs with a single non-cacheable scalar read; the `[NR]` INT32 vector is
+    the whole buffer requirement. Stage it from a plain tensor first (a
+    `pl.read`/`pl.write` loop), like every other window operand of a
+    collective.
+  - **The barrier `signal` is credit-based, not self-clearing.** Each call adds
+    +1 per round to every peer's slot (wait thresholds 1, then 2) and subtracts
+    2 per local slot at the end — never a reset — so back-to-back calls on the
+    same windows stay ordered, but a second call must still be ordered after
+    the first call's local consumer (the receive window is overwritten in
+    place), and calls nested in `for`/`while` loops are rejected by the
+    compiler. Zero-initialise the signal once and do not reset it.
+  Trim to `recv_counts` **before** arithmetic over the capacity block: the
+  untouched tail is uninitialised and may decode as NaN or Inf, which would
+  propagate into otherwise-valid rows. Mask first, then compute.
 - **Host-launch discipline.** Kernel parameters annotated `pl.Out` follow the
   InOut rule: inside a launch loop pass a fresh slice per rank (`outputs[r]`);
   re-passing the same variable is rejected by `InOutUseDiscipline`.

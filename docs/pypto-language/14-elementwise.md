@@ -16,7 +16,7 @@ Every contract here was verified on a real Ascend 910B4 with `-p a2a3`, from
 | Unary math | `pl.exp`, `pl.log`, `pl.sqrt`, `pl.rsqrt`, `pl.recip`, `pl.abs`, `pl.neg`, `pl.sin`, `pl.cos` | elementwise; result shape equals operand shape |
 | Binary | `pl.add`, `pl.sub`, `pl.mul`, `pl.div`, `pl.maximum`, `pl.minimum`, `pl.rem`, `pl.fmod` | tile with tile, or tile with scalar |
 | Activation | `pl.relu`, `pl.lrelu(t, slope)`, `pl.prelu(t, slope, tmp)` | `prelu`'s `tmp` must be **UINT8 with one more physical row** than the source; `slope` must match the source shape |
-| Compare / select | `pl.cmp(a, b, cmp_type)`, `pl.cmps(t, s, cmp_type)`, `pl.sel(mask, a, b, tmp)`, `pl.sels(mask, t, tmp, s)` | `cmp_type`: EQ=0 NE=1 LT=2 LE=3 GT=4 GE=5; `cmp*` return a packed predicate mask — `sel` materialises values (`tmp` `UINT32 [1, 16]` on A2/A3), `sels`' `tmp` must match the source dtype |
+| Compare / select | `pl.cmp(a, b, cmp_type)`, `pl.cmps(t, s, cmp_type)`, `pl.sel(mask, a, b, tmp)`, `pl.sels(mask, t, tmp, s)`, `pl.tile.select(cond, a, b)` | `cmp_type`: EQ=0 NE=1 LT=2 LE=3 GT=4 GE=5; `cmp*` return a packed predicate mask — `sel` materialises values (`tmp` `UINT32 [1, 16]` on A2/A3), `sels`' `tmp` must match the source dtype; `pl.tile.select` is the **scratch-free** composite — no `tmp`, no mask geometry (see below) |
 | Bitwise / shift | `pl.and_`, `pl.or_`, `pl.xor`, `pl.not_`, `pl.shl`, `pl.shr` | integer dtypes; **`not_` is INT16/UINT16 only** (INT32 rejected) |
 | Carry | `pl.addc`, `pl.subc`, `pl.addsc`, `pl.subsc` | carry is an ordinary addend |
 | Partial | `pl.part_add`, `pl.part_mul`, `pl.part_max`, `pl.part_min` | same-shape only; respects the valid region |
@@ -148,6 +148,48 @@ rows for `rem`, and not aliasing the sources).
   the stale buffer (0/2048). Calling `pl.fillpad` on the narrowed tile first
   destroys the partiality - both then return `a + pad`.
 
+## `pl.tile.select` — the scratch-free select
+
+`pl.tile.select(cond, on_true, on_false)` computes
+`out[i] = cond[i] ? on_true[i] : on_false[i]`. It is the composite counterpart
+of `pl.sel` / `pl.sels`: the packed-mask geometry and the architecture's
+scratch tile are derived during lowering, so neither appears in the call.
+Verified on device by `examples/language/select_ops.py` (three entries, all
+pass):
+
+```python
+t = pl.load(x, [0, 0], [R, C])
+mask_hi = pl.cmp(t, hi_t, cmp_type=3)          # t <= hi  (two tiles)
+hi_v = pl.tile.select(mask_hi, t, hi_t)         # tile branches
+
+mask_pos = pl.cmps(t, 0.0, cmp_type=4)         # t > 0     (tile vs constant)
+zeroed = pl.tile.select(mask_pos, t, 0.0)       # scalar branch
+```
+
+The rules, measured:
+
+- **The first argument must be the packed predicate mask** for this result's
+  geometry — the return of `pl.cmp` / `pl.cmps`. A 0/1 *value* tile is not a
+  mask; compare it first: `pl.cmps(v, 0, cmp_type=1)`.
+- **Two Tile branches must agree on shape, valid extents and dtype.** The
+  lowered TSEL reads both sources element-wise, does not broadcast, and has one
+  element type for both sources and the result.
+- **A scalar branch must be a compile-time constant** and requires a statically
+  shaped result (the lowering materializes it with `tile.full`). A runtime
+  `pl.Scalar` in a branch is rejected with
+  `The operator tile.select requires the scalar on_false branch to be a
+  compile-time constant, but got Var; materialize a runtime scalar into a tile
+  before selecting on it`. When the bound is runtime data, load it as a tile
+  and use tile branches — that is what the composed-clamp entry does.
+- **Both branches are evaluated.** This selects values — it is not a branch,
+  and it applies no memory-access or tail masking of its own.
+- `1.0`-style Python numbers and `int` literals both work as the constant
+  branch; the lowering picks `pto.tsels` for `mask ? tile : scalar`, and
+  materializes the scalar with `tile.full` for `mask ? scalar : tile`.
+
+The composed two-select clamp (`torch.clamp(x, lo, hi)`) is the canonical use
+and is one of the verified entries.
+
 ## A2/A3 dtype limits
 
 | Operator | Limit |
@@ -163,11 +205,13 @@ rows for `rem`, and not aliasing the sources).
 cd <path/to/pypto-lib-agent>   # the repository root
 PYTHONPATH="$PWD" conda run -n pypto python examples/language/elementwise_binary.py -p a2a3 -d 1
 PYTHONPATH="$PWD" conda run -n pypto python examples/language/unary_math.py -p a2a3 -d 7
+PYTHONPATH="$PWD" conda run -n pypto python examples/language/select_ops.py -p a2a3 -d 7
 ```
 
 ```text
 all binary-elementwise entries passed       (exit code 0)
 [RUN] PASS - every operator within its documented tolerance
+all select entries passed
 ```
 
 ## See also

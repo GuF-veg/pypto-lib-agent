@@ -96,10 +96,11 @@ def mm_transpose(
     c_t: pl.Out[pl.Tensor[[T_M, T_N], pl.FP32]],
     c_at: pl.Out[pl.Tensor[[T_M, T_N], pl.FP32]],
     c_tile_t: pl.Out[pl.Tensor[[T_M, T_N], pl.FP32]],
+    c_gm_slice_t: pl.Out[pl.Tensor[[T_M, T_N], pl.FP32]],
 ):
     """A transpose flag swaps its own operand's two trailing axes.
 
-    All four outputs are the same [M, N] = [64, 64] product, so the operand
+    All five outputs are the same [M, N] = [64, 64] product, so the operand
     shapes are the whole contract:
 
     c_nt     : b stored [K, N] = [128, 64], no flag       -> A @ B
@@ -108,6 +109,12 @@ def mm_transpose(
     c_tile_t : the same product with Tile operands, where the flags are rejected:
                b is loaded as [N, K] and wrapped in pl.tile.transpose_view, the
                zero-copy NZ/ZN reinterpretation that is the tile-level transpose.
+    c_gm_slice_t : b_trans over a window SLICED FROM GM - the accepted form of
+               the "resident parent + per-iteration window" pattern. Slicing the
+               on-chip Mat parent instead is rejected at codegen (the transpose
+               is a zero-copy relabel of a whole buffer; a strided window has
+               no transposed form), so slice the GM tensor and load each window
+               on its own - still lowered zero-copy.
 
     b_nk and a_km hold independent random values -- neither is a transpose of
     a_mk / b_kn -- so a flag that is dropped or applied to the wrong operand
@@ -120,7 +127,11 @@ def mm_transpose(
         ta = pl.load(a_mk, offsets=[0, 0], shapes=[T_M, T_K], target_memory=pl.Mem.Mat)
         tb = pl.load(b_nk, offsets=[0, 0], shapes=[T_N, T_K], target_memory=pl.Mem.Mat)
         pl.store(pl.matmul(ta, pl.tile.transpose_view(tb)), offsets=[0, 0], output_tensor=c_tile_t)
-    return c_nt, c_t, c_at, c_tile_t
+        # b_trans on a GM-sliced window: the tile is loaded straight from the
+        # sliced tensor, so the flag's zero-copy transpose still applies.
+        b_win = b_nk[0:T_N, 0:T_K]
+        c_gm_slice_t[:, :] = pl.matmul(a_mk, b_win, b_trans=True)
+    return c_nt, c_t, c_at, c_tile_t, c_gm_slice_t
 
 
 @pl.jit
@@ -355,6 +366,7 @@ def _specs(name: str):
             TensorSpec("c_t", [T_M, T_N], f32),
             TensorSpec("c_at", [T_M, T_N], f32),
             TensorSpec("c_tile_t", [T_M, T_N], f32),
+            TensorSpec("c_gm_slice_t", [T_M, T_N], f32),
         ]
     if name == "mm_k_tile":
         return [
@@ -420,6 +432,7 @@ def golden_mm_transpose(t):
     t["c_t"][:] = t["a_mk"] @ t["b_nk"].T
     t["c_at"][:] = t["a_km"].T @ t["b_kn"]
     t["c_tile_t"][:] = t["a_mk"] @ t["b_nk"].T
+    t["c_gm_slice_t"][:] = t["a_mk"] @ t["b_nk"].T
 
 
 def golden_mm_k_tile(t):

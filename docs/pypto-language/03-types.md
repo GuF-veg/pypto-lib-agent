@@ -106,6 +106,25 @@ Two traps:
 - A Scalar parameter is already a runtime value. `pl.RUNTIME` exists as a
   marker but is a no-op; you do not need it.
 
+A third, subtler rule concerns **annotated assignments of `INDEX`-typed
+expressions**. A loop variable or `pl.tensor.dim()` result is `INDEX`-typed,
+and `INDEX` is rejected by tile/tensor scalar arithmetic. Binding such an
+expression to an annotated `pl.Scalar[<int dtype>]` variable used to produce an
+IR whose variable dtype disagreed with its value's dtype — it survived every
+pass and died inside PTOAS with an MLIR error that named neither the variable
+nor your line (`use of value '%2' expects different type than prior uses: 'i32'
+vs 'index'`). The parser now wraps the value in the cast the annotation asks
+for, so this is accepted and correct:
+
+```python
+for i in pl.range(R):
+    v: pl.Scalar[pl.INT32] = i * 2 + 1          # INDEX expr, INT32 annotation
+    total = pl.add(total, pl.cast(v, pl.FP32))  # scalar arithmetic sees INT32
+```
+
+A *constant* INDEX right-hand side was always re-stamped; the fix extends that
+to computed expressions.
+
 Note that device functions may not *return* a Scalar or a task id (a verifier
 rejects it), though scalar parameters are fine.
 
@@ -216,6 +235,38 @@ and you may not rebind the parameter. Use it for values that shape the generated
 code — tile counts, unroll factors — where a runtime scalar would prevent
 constant folding.
 
+**One dependency is compiled once per constexpr value it is called with.** A
+generated function is identified by `(function, binding)` rather than by the
+function alone, so calling one `@pl.jit.incore` helper at two tile sizes emits
+two generated functions (`copy_block` and `copy_block__2`) and each call site is
+rewritten to its own:
+
+```python
+@pl.jit.incore
+def copy_block(a: pl.Tensor[[16, 16], pl.FP32],
+               out: pl.Out[pl.Tensor[[16, 16], pl.FP32]],
+               n: pl.constexpr):
+    pl.store(pl.load(a, [0, 0], [n, n]), [0, 0], out)
+    return out
+
+
+@pl.jit
+def entry(x: pl.Tensor[[16, 16], pl.FP32],
+          y8: pl.Out[pl.Tensor[[8, 8], pl.FP32]],
+          y16: pl.Out[pl.Tensor[[16, 16], pl.FP32]]):
+    y8 = copy_block(x, y8, 8)      # -> copy_block (n=8)
+    y16 = copy_block(x, y16, 16)   # -> copy_block__2 (n=16)
+    return y8, y16
+```
+
+Call sites that agree on the constants still collapse onto one function, so a
+single-binding program emits exactly what it emitted before. A dep reached with
+two different constants used to be refused with an error naming both values;
+splitting the dep (and everything it forwards the value to) is now the only
+behaviour. Device-verified by the `constexpr_two_sizes` probe kernel (both
+sizes correct in one program); the splitting itself is asserted in the `pypto`
+unit tests.
+
 `pl.const(value, dtype)` is the *value-level* counterpart: it produces a typed
 constant and is the only way to get a non-default scalar dtype. A bare integer
 literal is `INDEX`-typed, and `INDEX` scalars are rejected by tile/tensor scalar
@@ -223,12 +274,12 @@ arithmetic, so write `pl.const(3, pl.INT32)` when you need an `INT32`.
 
 ## Data types
 
-All 22 exported dtypes:
+All 23 exported dtypes:
 
 | Category | Names |
 |---|---|
 | Float | `pl.FP32`, `pl.FP16`, `pl.BF16` |
-| Low precision float | `pl.FP8E4M3FN`, `pl.FP8E5M2`, `pl.FP8E8M0`, `pl.HF8`, `pl.FP4`, `pl.HF4` |
+| Low precision float | `pl.FP8E4M3FN`, `pl.FP8E5M2`, `pl.FP8E8M0`, `pl.HF8`, `pl.FP4`, `pl.HF4`, `pl.FP4E2M1X2` |
 | Signed int | `pl.INT8`, `pl.INT16`, `pl.INT32`, `pl.INT64`, `pl.INT4` |
 | Unsigned int | `pl.UINT8`, `pl.UINT16`, `pl.UINT32`, `pl.UINT64`, `pl.UINT4` |
 | Other | `pl.BOOL`, `pl.INDEX`, `pl.TASK_ID` |
@@ -240,6 +291,11 @@ Notes:
   it is deliberately int-compatible in mixed arithmetic.
 - `pl.TASK_ID` is opaque and non-numeric — it identifies a task, nothing more.
 - `pl.FP8E8M0` is used for MX scale factors only.
+- **`pl.FP4` is incomplete in the current release** — annotating with it emits
+  `UserWarning: PyPTO's FP4 support is incomplete in the current release; use
+  with caution. Prefer FP4E2M1X2 instead.` at parse time. `pl.FP4E2M1X2` is the
+  packed FP4 carrier (two FP4E2M1 elements per byte) that PTOAS and Torch both
+  speak; the torch side is `torch.float4_e2m1fn_x2`.
 - `pl.matmul` requires both operands to have the same dtype.
 
 ## Tensor layouts
@@ -249,7 +305,29 @@ pl.ND   pl.DN   pl.NZ   pl.MX_A_ZZ   pl.MX_B_NN
 ```
 
 `pl.ND` (row-major) is the default and the only one you normally write. `pl.NZ`
-is the fractal layout used for cube operands in some paths.
+is the fractal layout used for cube operands in some paths — it asserts the
+bytes in GM are already NZ-packed (it does not convert ND storage), and since
+the `ee49fcea` revision a stacked `[L, N, K]` NZ weight can be sliced on its
+leading axis; see [Shape and layout](18-shape-layout.md#stacked-nz-weights-slicing-strided-loops-ragged-tiles).
+
+A layout annotation is **a claim about byte order in memory, so the two ends of
+a call must make the same claim** — the `TypeChecked` verifier now checks each
+call argument's layout against the callee's declared parameter (previously
+nothing did, and an `@pl.jit.inline` callee's `pl.NZ` annotation was silently
+discarded while NZ-packed bytes were addressed row-major — wrong numbers, no
+diagnostic). Measured:
+
+```text
+Verification failed ... properties {TypeChecked, ...}:
+[1] ERROR - TypeCheck
+  Message: Layout mismatch at argument 1 of call to 'nz_helper': parameter 'b'
+           is declared NZ but the argument is ND. A layout annotation is a claim
+           about byte order in memory, so the two ends must agree -- annotate the
+           argument NZ as well, or drop NZ from the parameter.
+```
+
+`tensor.slice` also now **propagates the source layout** instead of hard-coding
+ND, so an NZ slice keeps its NZ claim through the call boundary.
 
 `pl.DN` is special: passing it as a bare layout marker on a tensor is rejected.
 Express a DN view through a view object instead:

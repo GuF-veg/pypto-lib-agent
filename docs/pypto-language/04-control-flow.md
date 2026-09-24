@@ -246,6 +246,21 @@ already InCore** (a `@pl.jit.incore` body) — author it in a plain `@pl.jit` /
 `@pl.function` (Opaque) body and the outliner wraps the region in its own
 InCore scope.
 
+**A manual region owns its per-lane correctness.** An explicit-boundary
+`pl.split_aiv` region is spliced through unchanged — you wrote the
+`aiv_shard`/`aic_gather` boundary ops, the per-lane extents and the lane offsets
+— so the compiler no longer runs its half-width admission scan over that body.
+A region that mixes the boundary op with a full-width vector op (the motivating
+case: a lane-invariant `[1, N]` broadcast operand that both lanes must read in
+full) now compiles, and both lanes compute the full tile. That is deliberate:
+writing the boundary op by hand is the statement "I sharded this myself". The
+compiler-halved paths — whole-function AUTO and a boundary-free region — keep
+the scan. Two guards still apply to manual regions: a transpose that swaps the
+split axis is untypeable at any lane and still rejected, and a boundary
+operand's *producer* must sit on the lane that pushes it (`pl.aiv_shard` pushes
+from the cube lane, so its operand must be cube-produced, and vice versa for
+`pl.aic_gather`) — a parameter operand, held by both lanes, is fine.
+
 ## Conditionals
 
 `if` / `elif` / `else` are supported and become an IR `IfStmt`.

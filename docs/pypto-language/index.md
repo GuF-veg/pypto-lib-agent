@@ -25,15 +25,26 @@ these revisions:
 
 | Repository | Revision |
 |---|---|
-| `pypto` (compiler + DSL implementation) | `2f892f9` |
-| `pypto-lib-agent` (kernels) | `62b1d0d` |
+| `pypto` (compiler + DSL implementation) | `ee49fcea` (`main`, 58 commits past `2f892f9`) |
+| `pypto-lib-agent` (kernels) | `43d62af` |
 
 The whole guide was **re-verified against the same revisions in September
 2026**: all `examples/language/` kernels re-run on Ascend 910B4 with `-p a2a3`
 (all pass), every chapter's claims re-checked against the `pypto` source, the
 distributed chapter re-proven on two devices, and the operator claims that were
 previously marked "unproven" either measured or replaced with the measured
-failure text.
+failure text. The `pypto` revision was then moved from `2f892f9` to `ee49fcea`
+and re-verified the same way: the language-surface changes in those 58 commits
+(`tile.select`, the FIXPIPE epilogue, binary-tree Tensor `col_sum`, the L2
+bypass offset, `FP4E2M1X2`, the transposed-window rejection, the annotated
+scalar dtype fix, per-constexpr-value dep compilation, stacked-NZ-weight
+slicing, the call-boundary layout check, the relaxed manual `split_aiv`
+region) are covered by device-run probe kernels and by new/extended
+`examples/language/` files (`select_ops.py`, `fixpipe_epilogue.py`, the
+`col_sum_binary` entry of `reductions_col.py`, the GM-slice output of
+`matmul_family.py`'s `mm_transpose`), and every previously-measured claim the
+new commits invalidate was re-measured — most notably the `BYPASS` cache
+policy, which used to kill the run and now bypasses L2 for real.
 
 Two rules were applied throughout:
 
@@ -117,13 +128,13 @@ family, each backed by a runnable kernel under `examples/language/`:
 
 | Page | Covers |
 |---|---|
-| [API Index](12-api-index.md) | Every exported `pl.*` name, grouped, with its signature - all 251 of them. |
-| [Elementwise Operations](14-elementwise.md) | Unary math, binary arithmetic, carry, `part_*`, bitwise/shift, scalar forms - and the silent-broadcast trap. |
-| [Reductions](15-reductions.md) | `row_*` / `col_*`, the `tmp_tile` split, and `row_argmax`'s raw-bit index convention. |
+| [API Index](12-api-index.md) | Every exported `pl.*` name, grouped, with its signature - all 252 of them. |
+| [Elementwise Operations](14-elementwise.md) | Unary math, binary arithmetic, carry, `part_*`, bitwise/shift, scalar forms, `tile.select` - and the silent-broadcast trap. |
+| [Reductions](15-reductions.md) | `row_*` / `col_*`, the `tmp_tile` / `is_binary` split, and `row_argmax`'s raw-bit index convention. |
 | [Broadcast and Expand](16-broadcast-expand.md) | The 16 `row_expand_*` / `col_expand_*` ops, their carrier shapes, and two traps that compile and lie. |
-| [Matrix Multiply](17-matmul.md) | `pl.matmul` and family, the mandatory `init_cond`, transpose flags, dtype rules. |
-| [Shape and Layout](18-shape-layout.md) | `pl.cast` rounding modes, `pl.reshape` as a row-major re-view, transpose, concat. |
-| [Data Movement](19-data-movement.md) | `pl.load`/`pl.store`, slices, `pl.assemble`, the Tensor-versus-Tile rule, atomic dtypes. |
+| [Matrix Multiply](17-matmul.md) | `pl.matmul` and family, the mandatory `init_cond`, transpose flags and the Mat-window trap, the FIXPIPE epilogue, dtype rules. |
+| [Shape and Layout](18-shape-layout.md) | `pl.cast` rounding modes, `pl.reshape` as a row-major re-view, transpose, concat, stacked NZ weights. |
+| [Data Movement](19-data-movement.md) | `pl.load`/`pl.store` (with the FIXPIPE `pre_quant`/`pre_relu` writeback), slices, `pl.assemble`, the Tensor-versus-Tile rule, atomic dtypes. |
 | [Tensor and System Operations](20-tensor-system-ops.md) | Tensor ops, `pl.system` sync and pipes, cross-core events, hand-written `aiv_shard`/`aic_gather`, `pl.prefetch`, `pl.adir`. |
 | [Gather, Scatter and Sort](21-gather-sort.md) | `pl.gather`, `pl.scatter`, `pl.sort32`/`pl.mrgsort`, and the ops that are unusable on A2/A3. |
 
@@ -150,4 +161,4 @@ pass `-p`/`-d` to choose a device or simulator. The full story, including the
 
 ## The git commit hash of PyPTO
 
-This documents based on the `2f892f96` commit of `main` branch of PyPTO.
+This documents based on the `ee49fcea` commit of `main` branch of PyPTO.

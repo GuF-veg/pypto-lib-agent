@@ -180,7 +180,11 @@ for r in pl.parallel(0, ROWS, TILE):
 **Call form.** The argument order is unusual — tile first, offsets second,
 destination third — and it **returns the destination**, destination-passing
 style. The store happens whether or not you keep the return value:
-`pl.store(tile, offsets, output_tensor, shapes=None, *, atomic=pl.AtomicType.None_, st_phase=pl.STPhase.Unspecified) -> <the destination Tensor>`
+`pl.store(tile, offsets, output_tensor, shapes=None, *, atomic=pl.AtomicType.None_, st_phase=pl.STPhase.Unspecified, pre_quant=None, pre_relu=False) -> <the destination Tensor>`
+
+`pre_quant` / `pre_relu` are the FIXPIPE epilogue — valid only when the tile is
+an `Acc`-resident cube accumulator, which is why they are documented with the
+matmul family in [Matrix multiply](17-matmul.md) rather than here.
 
 ```python
 pl.store(tile, [r, 0], y)             # idiomatic: return ignored
@@ -222,16 +226,21 @@ return y
 ## `pl.assemble`
 
 **Call form.**
-`pl.assemble(target, source, offset, *, atomic=pl.AtomicType.None_) -> <the type of target>`
+`pl.assemble(target, source, offset, *, atomic=pl.AtomicType.None_, pre_quant=None, pre_relu=False) -> <the type of target>`
 
 ```python
 pl.assemble(y, src, [r, 0])     # destination FIRST
 ```
 
 It dispatches on the operand pair: `(Tensor, Tensor)` → `tensor.assemble`,
-`(Tile, Tile)` → `tile.assemble`. `atomic=` is Tensor-only: the combine lowers
-to an atomic write into global memory, and a tile-to-tile assemble has no
-destination for it.
+`(Tile, Tile)` → `tile.assemble`. The keyword-only arguments split by level,
+and each side rejects the other's: `atomic=` is Tensor-only (the combine
+lowers to an atomic write into global memory, and a tile-to-tile assemble has
+no destination for it), while `pre_quant=` / `pre_relu=` are Tile-only — they
+configure the cube's FIXPIPE writeback and need an `Acc` source and a `Mat`
+target to name (see [Matrix multiply](17-matmul.md)). Passing either one with
+the documented default (`atomic=None_`, `pre_quant=None`, `pre_relu=False`)
+stays legal on both paths.
 
 **Shape contract.**
 

@@ -374,6 +374,71 @@ def concat_swap_order(
     return y
 ```
 
+## Stacked NZ weights: slicing, strided loops, ragged tiles
+
+`pl.NZ` on a `pl.Tensor` annotation is an **assertion about the bytes already
+in GM** — that they are in pto-isa's NZ fractal order — not a conversion
+request. The host packs them (for a logical `[R, C]` FP16 matrix: 16 elements
+per 32-byte C0 line, 16-row fractals, column blocks outside), and the DSL keeps
+the logical shape and logical slicing throughout; `BlockNzTensorViews` supplies
+the physical description the backend needs. NZ tensors are **read-only matmul
+operands** in this release — `NZ layout currently supports only 'tile.load' and
+'tensor.slice' reading the tensor as their source, plus a whole-tensor
+'tensor.reshape' flatten, but it is used by 'tensor.matmul' at argument 1.`
+
+Since the `ee49fcea` revision, a **stacked** NZ weight — layer- or
+rank-stacked, e.g. `[LAYERS, N, K]` — is usable across slicing and dispatch.
+What is now supported, with the layer-slice form verified on device at
+`rtol=atol=0` (reading layer 2, so a dropped batch offset cannot match by
+accident):
+
+- **Leading-axis slices fold into the one batch slot.** pto-isa's NZ
+  `GlobalTensor` has exactly one batch slot, so a logical `[G, E, N, K]` weight
+  folds its two leading axes into a blocked batch of `G*E`, and an offset
+  `[g, e, 0, 0]` addresses batch `g*E + e`. A `pl.slice(w, [1, N, K],
+  [LAYER, 0, 0])` keeps whole `[N, K]` matrices and its bytes stay contiguous —
+  this is how a multi-layer model reaches one layer's weight:
+
+  ```python
+  @pl.jit(auto_scope=False)
+  def nz_layer_slice(x: pl.Tensor[[M, K], pl.FP16],
+                     w: pl.Tensor[[LAYERS, N, K], pl.FP16, pl.NZ],
+                     out: pl.Out[pl.Tensor[[M, N], pl.FP32]]):
+      w_layer: pl.Tensor[[1, N, K], pl.FP16, pl.NZ] = pl.slice(w, [1, N, K], [LAYER, 0, 0])
+      with pl.scope():
+          for nb in pl.spmd(N // N_TILE, name_hint="nz_layer_mm"):
+              n0 = nb * N_TILE
+              acc = pl.create_tensor([1, M, N_TILE], dtype=pl.FP32)
+              for k0 in pl.pipeline(0, K, K, stage=2):
+                  acc = pl.matmul_acc(acc, x[0:M, k0 : k0 + K],
+                                      w_layer[0:1, n0 : n0 + N_TILE, k0 : k0 + K],
+                                      b_trans=True, init_cond=(k0 == 0))
+              out[:, n0 : n0 + N_TILE] = pl.reshape(acc, [M, N_TILE])
+      return out
+  ```
+
+  Note the shape of that body: a **rank-3 window reaches the cube through
+  tensor-level `matmul_acc`**, not `pl.load` + `pl.matmul` — a tile-level load
+  of it would be a rank-3 tile, which the matmul rejects at parse time. The
+  hand-placed `with pl.scope()` needs `@pl.jit(auto_scope=False)`.
+- **Contiguous leading-axis slices and whole-tensor flattening** are the two
+  supported slice shapes; the NZ annotation still requires physically
+  NZ-packed data and does not convert ND storage.
+- **NZ loads accept symbolic starts in strided loops** — `for ob in
+  pl.range(core, TILES, CORES)` — where the offset walk proves both the
+  fractal divisibility and the non-negativity of the computed coordinate.
+  Anything the walk cannot prove is rejected with a diagnostic naming the
+  provable forms; an NZ tensor addressed from a guessed coordinate reads the
+  wrong fractal and nothing downstream would notice, so the refusal is the
+  design.
+- **Dynamic `valid_shape[-2]` that is provably a multiple of 16** (a ragged
+  last tile) is accepted: the row-fractal count becomes `FloorDiv(rows, 16)`.
+  The rows must cover whole 16-row fractals.
+- **One caution from the dispatch side**: keep the window's logical shape
+  consistent with the caller's — a rank-1 NZ annotation is an authoring
+  mistake, and error messages in this area tell you to reshape to `[B, R, C]`
+  *before* the NZ annotation or to annotate the tensor as `pl.ND`.
+
 ## Run the examples
 
 `examples/language/shape_and_cast.py` holds all eight entries behind the

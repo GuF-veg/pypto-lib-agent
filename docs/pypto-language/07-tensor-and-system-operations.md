@@ -131,6 +131,16 @@ pl.assemble(y, partial, [row0, col0], atomic=pl.AtomicType.Add)
 **coherency contract**, not an optimisation hint — bypass means the data is not
 cached, and code that assumes otherwise will read stale values.
 
+`BYPASS` now really bypasses L2 on A2/A3: the read is issued against the page's
+**uncached alias**, using a per-device offset the driver reports through the
+dispatch payload (`Requires PTOAS >= v0.64` — a device that exposes no alias
+reports offset zero, which leaves the read ordinary and correct). A declaration
+on A5 is accepted and currently does nothing: A5 does not map GM twice. Both
+forms — `pl.set_cache_policy(x, pl.CachePolicy.BYPASS)` at scope level and
+`pl.load(..., cache=pl.CachePolicy.BYPASS)` per read — are verified passing on
+device; `DEFAULT` remains a verified no-op. See
+[Tensor and system operations](20-tensor-system-ops.md) for the measured history.
+
 ## Arrays
 
 ```python
