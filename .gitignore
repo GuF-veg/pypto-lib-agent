@@ -72,3 +72,4 @@ KNOWN_ISSUES.md
 # Profile feedback database runtime data (disposable working set, per-repo)
 .pfdb/
 .zcode/
+docs/plan/

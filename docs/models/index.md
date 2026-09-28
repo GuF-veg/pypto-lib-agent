@@ -20,6 +20,11 @@ history of their tuned path —
 [V4-Flash decode optimization](deepseek_v4_flash_mtp/decode_optimization.md) —
 which record which levers moved the number and what each one cost.
 
+For how the operators inside each model call each other — including which ones
+are basic (leaf) operators, which ones compose other operators, and whether
+each one is checked against a torch golden reference — see the
+[operator call dependency map](operator-dependencies.md).
+
 Entry points take script-specific platform and device arguments; inspect
 `--help`, the [platform table](../get-started/first-kernel.md#platforms-and-devices), and the
 [Golden Harness guide](../run-and-validate/golden-harness.md).
