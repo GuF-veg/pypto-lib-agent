@@ -42,7 +42,6 @@ H = 64                      # num_attention_heads
 TP_SIZE = 16                # deployment tensor-parallel width of one A3 node
 LOCAL_H = H // TP_SIZE      # attention heads per rank
 QK_DIM = 256                # qk_head_dim: qk_nope_head_dim 256 + qk_rope_head_dim 0
-V_DIM = 256                 # v_head_dim
 KV_LORA = 512               # kv_lora_rank
 
 
@@ -101,20 +100,6 @@ def golden_mla_absorb_case(tensors):
     tensors["absorbed"][:] = golden_absorb_query(tensors["query"], tensors["w_k"])
 
 
-def golden_split_kv_b(w_kv_b: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """Split ``kv_b_proj`` into its key and value halves.
-
-    Args:
-        w_kv_b: ``[H * (QK_DIM + V_DIM), KV_LORA]`` as stored in the checkpoint.
-
-    Returns:
-        ``w_k`` of ``[H, QK_DIM, KV_LORA]`` and ``w_v`` of ``[H, V_DIM, KV_LORA]``.
-    """
-    heads = w_kv_b.shape[0] // (QK_DIM + V_DIM)
-    reshaped = w_kv_b.reshape(heads, QK_DIM + V_DIM, KV_LORA)
-    return reshaped[:, :QK_DIM], reshaped[:, QK_DIM:]
-
-
 def golden_absorb_query(query: torch.Tensor, w_k: torch.Tensor) -> torch.Tensor:
     """Fold the key half into the query so it attends against the raw latent.
 
@@ -125,38 +110,13 @@ def golden_absorb_query(query: torch.Tensor, w_k: torch.Tensor) -> torch.Tensor:
 
     Args:
         query: ``[T, H, QK_DIM]`` from :func:`golden_mla_prolog`.
-        w_k: ``[H, QK_DIM, KV_LORA]`` key half from :func:`golden_split_kv_b`.
+        w_k: ``[H, QK_DIM, KV_LORA]`` key half of ``kv_b_proj``.
 
     Returns:
         ``[T, H, KV_LORA]`` query in latent space, in ``query``'s dtype.
     """
     absorbed = torch.einsum("thd,hdk->thk", query.float(), w_k.float())
     return absorbed.to(query.dtype)
-
-
-def golden_absorb_output(w_v: torch.Tensor, w_o: torch.Tensor) -> torch.Tensor:
-    """Fold the value half into ``o_proj``; returns ``[D, H * KV_LORA]``.
-
-    Decode attends in latent space, so its context rows are ``[H, KV_LORA]`` and the
-    value expansion never has to happen per token: ``o_proj @ (ctx @ w_v^T)`` equals
-    ``(o_proj folded with w_v) @ ctx``. This is a weight-time transform, and both
-    operands are BF16 in the deployment checkpoint, so nothing is requantized.
-
-    Args:
-        w_v: ``[H, V_DIM, KV_LORA]`` value half from :func:`golden_split_kv_b`.
-        w_o: ``[D, H * V_DIM]`` head-space output projection.
-
-    There is no kernel for this: it runs once per layer when the weights are staged,
-    so it belongs to the weight loader rather than to any per-token scope. Only the
-    query half (:func:`absorb_query`) is per-token.
-
-    Returns:
-        ``[D, H * KV_LORA]`` absorbed output projection, in ``w_o``'s dtype.
-    """
-    heads, v_dim, kv_lora = w_v.shape
-    per_head = w_o.float().unflatten(-1, (heads, v_dim))
-    absorbed = torch.einsum("dhv,hvk->dhk", per_head, w_v.float())
-    return absorbed.reshape(w_o.shape[0], heads * kv_lora).to(w_o.dtype)
 
 
 if __name__ == "__main__":

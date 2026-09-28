@@ -124,7 +124,6 @@ def expert_shared_test(
     x_local_i8.bind_dynamic(0, SHARED_T_DYN)
     x_local_scale_dq.bind_dynamic(0, SHARED_T_DYN)
     sh.bind_dynamic(0, SHARED_T_DYN)
-    token_rows = pl.tensor.dim(x_local_i8, 0)
     expert_shared(
         x_local_i8,
         x_local_scale_dq,

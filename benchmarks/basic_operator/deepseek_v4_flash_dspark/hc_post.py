@@ -78,7 +78,6 @@ def hc_post_test(
     post.bind_dynamic(0, T_DYN)
     comb.bind_dynamic(0, T_DYN)
     y.bind_dynamic(0, T_DYN)
-    t_dim = pl.tensor.dim(x, 0)
     hc_post(x, residual, post, comb, y)
     return y
 

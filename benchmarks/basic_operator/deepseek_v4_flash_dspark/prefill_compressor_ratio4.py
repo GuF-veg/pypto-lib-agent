@@ -224,7 +224,6 @@ def _compressor_ratio4(
     return cmp_kv, compress_state
 
 
-compressor_ratio4 = _compressor_ratio4
 prefill_compressor_ratio4_test = _compressor_ratio4
 
 

@@ -98,7 +98,6 @@ def mtp_projection_test(
     hidden_states.bind_dynamic(0, T_DYN)
     prev_hidden_states.bind_dynamic(0, T_DYN)
     hidden_states_out.bind_dynamic(0, T_DYN)
-    t_dim = pl.tensor.dim(hidden_states, 0)
     mtp_projection(
         hidden_states,
         prev_hidden_states,

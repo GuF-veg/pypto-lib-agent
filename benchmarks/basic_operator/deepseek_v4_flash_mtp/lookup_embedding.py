@@ -72,7 +72,6 @@ def lookup_embedding_test(
     input_ids.bind_dynamic(0, T_DYN)
     embed_weight.bind_dynamic(0, VOCAB_DYN)
     hidden_states.bind_dynamic(0, T_DYN)
-    token_count = pl.tensor.dim(input_ids, 0)
     lookup_embedding(input_ids, embed_weight, hidden_states)
     return hidden_states
 

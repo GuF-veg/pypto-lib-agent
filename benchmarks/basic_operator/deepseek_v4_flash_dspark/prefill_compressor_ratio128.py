@@ -12,7 +12,7 @@ Copied from models/deepseek_v4_flash_dspark/prefill_compressor_ratio128.py
 
 EXAM: `_prefill_compressor_ratio128_tile` is the exercise -- its body is left
 unimplemented. `golden_prefill_compressor_ratio128` below is the torch reference for
-the required numerics and `prefill_compressor_ratio128` is the harness entry that
+the required numerics and `prefill_compressor_ratio128_test` is the harness entry that
 validates against it.
 """
 
@@ -127,7 +127,7 @@ def _prefill_compressor_ratio128_tile(
     physical rows of one packed request this tile owns, and everything but
     `cmp_kv` and `compress_state` is an input. `golden_prefill_compressor_ratio128`
     below is the torch reference for the required numerics, and
-    `prefill_compressor_ratio128` is the harness entry that runs this tile per
+    `prefill_compressor_ratio128_test` is the harness entry that runs this tile per
     request tile and compares against it. This stub returns the untouched caches, so
     the case compiles and reports a validation failure until the kernel is
     implemented.
@@ -230,7 +230,6 @@ def _prefill_compressor_ratio128(
     return cmp_kv, compress_state
 
 
-prefill_compressor_ratio128 = _prefill_compressor_ratio128
 prefill_compressor_ratio128_test = _prefill_compressor_ratio128
 
 

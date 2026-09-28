@@ -79,7 +79,6 @@ def hc_head_test(
     hc_head_base: pl.Tensor[[HC_MULT], pl.FP32],
     y: pl.Out[pl.Tensor[[T_DYN, D], pl.BF16]],
 ):
-    t_dim = pl.tensor.dim(x_hc, 0)
     hc_head(x_hc, hc_head_fn, hc_head_scale, hc_head_base, y)
     return y
 

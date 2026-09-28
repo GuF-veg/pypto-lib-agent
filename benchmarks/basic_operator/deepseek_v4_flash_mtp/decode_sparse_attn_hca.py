@@ -164,9 +164,6 @@ def sparse_attn_test(
     attn_out: pl.Out[pl.Tensor[[T, D], pl.BF16]],
 ):
     cmp_block_table.bind_dynamic(1, CMP_TABLE_BLOCKS_DYN)
-    ori_block_num = pl.tensor.dim(ori_kv, 0)
-    cmp_block_num = pl.tensor.dim(cmp_kv, 0)
-    cmp_table_blocks = pl.tensor.dim(cmp_block_table, 1)
     sparse_attn_hca(
         q,
         ori_kv,
