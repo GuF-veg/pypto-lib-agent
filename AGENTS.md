@@ -61,25 +61,53 @@ conda activate pypto
 Every `python`, `pytest`, `ruff`, or other tool invocation in this repository
 must be executed inside this environment.
 
+## NPU Usage (Shared Device Pool)
+
+The 8 Ascend NPUs on this machine are shared by multiple concurrent agents and
+scheduled by `npu-run` (installed at `~/.local/bin/npu-run`, already in
+`PATH`). Two processes using the same NPU at the same time fail, so:
+
+- Wrap **every command that touches a real NPU** with `npu-run`: model and
+  example runs on real hardware (`-p a2a3`/`-p a5`), `pytest` on the golden
+  harness, benchmarks, and profiling tools alike. Never run them bare, and
+  never bind devices yourself with `ASCEND_RT_VISIBLE_DEVICES`.
+  - Correct: `npu-run python -m pytest tests/golden -v`
+  - Wrong: `python -m pytest tests/golden -v`
+  - Wrong: `ASCEND_RT_VISIBLE_DEVICES=3 python ...`
+- Always use the default device: pass `-d 0` for real-device runs. The pool
+  maps the assigned physical card to logical device 0, so code never needs to
+  know (or choose) a physical device id.
+- Simulator runs (`-p a2a3sim`, `-p a5sim`) do not touch the NPU and do not
+  need `npu-run`.
+- When all cards are busy, `npu-run` waits in place (polls every 1 s) and then
+  proceeds as soon as a card is released. Waiting is normal — do not work
+  around it. `npu-run --status` shows who holds each card; `npu-run --report`
+  shows pool utilization.
+- Use `npu-run --timeout <seconds> <command>` to bound the wait for
+  long-running batches (exits with code 124 on timeout), and
+  `npu-run --need N <command>` for multi-card tests.
+
 ## Preferred Commands
 
 ```bash
-# Run an example on the simulator
+# Run an example on the simulator (no NPU involved, no npu-run needed)
 python examples/beginner/hello_world.py -p a2a3sim
 
-# Run a model on real NPU device 0
-python models/qwen3_14b/decode_fwd.py -p a2a3 -d 0
+# Run a model on a real NPU (card assigned by the npu-run pool)
+npu-run python models/qwen3_14b/decode_fwd.py -p a2a3 -d 0
 
-# Run golden harness unit tests
-python -m pytest tests/golden -v
+# Run golden harness unit tests on a real NPU
+npu-run python -m pytest tests/golden -v
 
-# Run repository lint checks
+# Run repository lint checks (CPU only)
 python tests/lint/check_headers.py
 ruff check .
 ```
 
 Every executable kernel or model script generally accepts
-`-p {a2a3,a2a3sim,a5,a5sim}` and `-d <device_id>`.
+`-p {a2a3,a2a3sim,a5,a5sim}` and `-d <device_id>`. For real-device runs under
+`npu-run`, always pass `-d 0`: the process sees exactly one card (the one the
+pool assigned), exposed as logical device 0.
 
 ## Repository Map
 

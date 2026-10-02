@@ -19,16 +19,20 @@
   和测试入口（`__main__`）；
 - `manifest.csv` 列出了全部题目及各自的模型、算子名与 golden 函数名。
 
-运行方式与仓库其它脚本一致（在 `pypto` conda 环境中，每道题均为单卡）：
+运行方式与仓库其它脚本一致（在 `pypto` conda 环境中，每道题均为单卡）。
+本机 8 个 NPU 由 `npu-run` 统一池化调度（已安装在 PATH），所有真机运行
+都必须用它包裹：
 
 ```bash
-python benchmarks/basic_operator/<model>/<op>.py -p a2a3 -d <device_id>
+npu-run python benchmarks/basic_operator/<model>/<op>.py -p a2a3 -d 0
 ```
 
-`-p` **固定为 `a2a3`**，不要选用其它平台。`-d` 指定所用 NPU 的设备号，
-必须写实际分配到的设备号：例如调用 1 号 NPU 就写 `-d 1`，不要一律写
-`-d 0`。脚本退出码为 0 即该题通过 golden 验证。编译产物与运行数据默认
-落在 `build_output/`。
+`-p` **固定为 `a2a3`**，不要选用其它平台。`-d` **固定写 `0`**：`npu-run`
+会自动抢占一张空闲的物理卡并把它映射为进程内的逻辑 0 号卡，物理卡的
+选择由池子完成——不要手动指定设备号，也不要自行设置
+`ASCEND_RT_VISIBLE_DEVICES`。全忙时 `npu-run` 会自动排队等待，属正常
+现象，不要为避开等待绕过它。脚本退出码为 0 即该题通过 golden 验证。
+编译产物与运行数据默认落在 `build_output/`。
 
 ## 硬性约束（参评 agent 必须遵守）
 
@@ -47,7 +51,9 @@ python benchmarks/basic_operator/<model>/<op>.py -p a2a3 -d <device_id>
    说明：白名单限制的是 agent 主动读取的范畴。直接运行题目脚本时，
    Python 会按脚本自身的 bootstrap 自动导入仓库根部的 `golden` 评测
    基础设施，这属于正常执行流程，不视为违规；但不得阅读或修改其源码，
-   也不得在自己的实现中 import 白名单之外的任何模块。
+   也不得在自己的实现中 import 白名单之外的任何模块。同理，包裹真机
+   命令的 `npu-run`（位于 `~/.local/bin/`）是全机共用的 NPU 调度基础
+   设施，属于允许执行的工具，不视为越权访问。
 
    **实现代码的存放位置由评测组织者为每个参评 agent 单独指定**（见下文
    "任务提交要求"）。该输出文件夹随任务一并授权，授权后视作该 agent
@@ -94,7 +100,9 @@ python benchmarks/basic_operator/<model>/<op>.py -p a2a3 -d <device_id>
    不对"，显著缩小排查范围。
 
 2. **灵活运用 subagent 并行开发**。各 stage 的开发是相对独立的工作，
-   可以分别交给不同 subagent 同时进行以提高效率。本机有 8 个 NPU，
-   通过 `-d <device_id>` 即可分配给不同 subagent 独立使用。注意
-   `npu-smi info` 显示的设备占用率并不准确，不必考虑占用率问题，
-   直接分配调用即可。
+   可以分别交给不同 subagent 同时进行以提高效率。本机 8 个 NPU 由
+   `npu-run` 统一池化调度：每个 subagent 的真机命令都用 `npu-run`
+   包裹、`-d` 统一写 `0`，物理卡由池子自动分配，天然互不冲突，
+   subagent 数量也不受 8 张卡的限制；全忙时命令会自动排队等待。
+   如需查看各卡占用情况，用 `npu-run --status`（不要依赖
+   `npu-smi info` 判断卡是否空闲，其占用显示不准确）。
