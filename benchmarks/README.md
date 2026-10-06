@@ -44,7 +44,7 @@ npu-run python benchmarks/basic_operator/<model>/<op>.py -p a2a3 -d 0
    - `build_output/`（编译与运行产物）
 
    仓库其余所有目录与文件——包括 `models/`、`golden/`、`tests/`、
-   `docs/` 的其它子目录、`.claude/` 等——一律不得读取、浏览或搜索。
+   `docs/` 的其它子目录、`.claude/`、`benchmarks/implementation/` 等——一律不得读取、浏览或搜索。
    其中 `models/` 保存了这些算子的原始实现，属于答案，绝对禁止访问；
    `build_output/` 中出现的代码均为生成产物，不得当作参考实现。
 
