@@ -41,9 +41,6 @@ pl.cast(scaled, target_type=pl.INT32, mode="rint")    # round-half-to-even
 call - both spellings compile. Existing kernels use the positional form, which
 is why it is worth recognising.
 
-```python
-```
-
 Overloads exist for `Tensor`, `Tile` and `Scalar`, so tensors, tiles and scalars
 all cast.
 
@@ -53,14 +50,48 @@ all cast.
 |---|---|---|
 | tensor, tile or scalar | any shape | **identical** to the input; one output element per input element |
 
-**Dtype rules.** Source and target are independent — float-to-float,
-float-to-integer and integer-to-float all compile. Verified on device: FP32 to
-BF16, FP32 to FP16, FP32 to INT32 with `mode="rint"`, and both widening
-directions through the round trips. The result dtype is **exactly
-`target_type`; there is no promotion.** An `pl.Out[...]` parameter declared
-`pl.INT32` receives the cast result directly, and the harness validates a
-`torch.int32` output tensor, so an integer result does not need casting back to
-FP32 to satisfy the comparison.
+**Dtype rules.** The result dtype is **exactly `target_type`; there is no
+promotion.** An `pl.Out[...]` parameter declared `pl.INT32` receives the cast
+result directly, and the harness validates a `torch.int32` output tensor, so an
+integer result does not need casting back to FP32 to satisfy the comparison.
+
+A2/A3 supports only part of the dtype grid. Some casts pass frontend type
+checking but fail in `LegalizeTileCast`. The following is a **source-checked
+subset**, not an exhaustive list of accepted destinations:
+
+| Source | Accepted destinations in this subset | Rejected single-call destinations |
+|---|---|---|
+| FP32 | BF16, FP16, INT32, INT8 | - |
+| BF16 | FP32 | - |
+| FP16 | FP32 | - |
+| INT32 | FP32, FP16, BF16 | - |
+| INT16 | FP32 | INT32 |
+| INT8 | FP16, UINT8 (see the saturation pitfall) | INT16, INT32, BF16, FP32 |
+
+The native conversion edges include `INT8 -> FP16` and `FP16 -> FP32`.
+However, the legalization pass rejects an implicit FP16 bridge to FP32 because
+it compares the intermediate format's precision and exponent range with the
+**destination**, without accounting for the smaller INT8 source range. The
+rejection's "no native cast path" wording describes that pass outcome; it does
+not mean the two native instructions are unavailable. See the
+[A2/A3 conversion edges](https://github.com/hw-native-sys/pypto/blob/ee49fcea/src/backend/910B/backend_910b_handler.cpp#L60)
+and [chain admission rule](https://github.com/hw-native-sys/pypto/blob/ee49fcea/src/ir/transforms/legalize_tile_cast_pass.cpp#L134).
+
+**Write the INT8-to-FP32 bridge explicitly:**
+
+```python
+x_fp16 = pl.cast(x_i8, target_type=pl.FP16)
+x_fp32 = pl.cast(x_fp16, target_type=pl.FP32)
+```
+
+Both hops preserve every INT8 value exactly. A 32x512 real-device probe covering
+all 256 signed INT8 values matched the torch FP32 cast with `rtol=atol=0`.
+A single-call widening rejection reads:
+
+```text
+LegalizeTileCast: no native cast path from int8 to int32 for arch a2a3;
+pto.tcvt does not support this conversion
+```
 
 `mode="rint"` is round-half-to-even and matched `torch.round` bit-exactly on
 device. `mode="round"` - the default - is **round-half-away-from-zero**, also
@@ -75,8 +106,7 @@ rest) - is
 The rule of thumb it gives is the one that matters most here: **torch narrows with
 RNE, so pass `mode="rint"` whenever a golden compares against a torch cast.**
 
-**Rejected forms.** None in the cast grid: every dtype pair that was tried
-compiled, including the double narrowing in the pitfalls below.
+**Rejected forms.** The single-call integer rejections are listed above.
 
 **The default mode is verified on device, and it is not ties-to-even.** Casting a
 tensor of half-integers FP32 to INT32 with no `mode=` matches *round half away
@@ -111,6 +141,9 @@ rule matters.
   `atol=1e-6`). Do not design around that restriction.
 - The default mode is `"round"`, not `"rint"`. If you are matching
   `torch.round`, pass `mode="rint"` explicitly.
+- With the default cast options, `INT8 -> UINT8` returned `max(v, 0)` for all
+  256 signed INT8 values on device. Torch wraps negatives to `256 + v` instead.
+  Use `pl.reinterpret_view` for a bit reinterpretation.
 - The result dtype is the target, never a promoted type.
 - No memory space is required: every cast here ran on an ordinary tile inside
   `pl.at(level=pl.Level.CORE_GROUP)` with the default space.
@@ -376,68 +409,128 @@ def concat_swap_order(
 
 ## Stacked NZ weights: slicing, strided loops, ragged tiles
 
-`pl.NZ` on a `pl.Tensor` annotation is an **assertion about the bytes already
-in GM** — that they are in pto-isa's NZ fractal order — not a conversion
-request. The host packs them (for a logical `[R, C]` FP16 matrix: 16 elements
-per 32-byte C0 line, 16-row fractals, column blocks outside), and the DSL keeps
-the logical shape and logical slicing throughout; `BlockNzTensorViews` supplies
-the physical description the backend needs. NZ tensors are **read-only matmul
-operands** in this release — `NZ layout currently supports only 'tile.load' and
-'tensor.slice' reading the tensor as their source, plus a whole-tensor
-'tensor.reshape' flatten, but it is used by 'tensor.matmul' at argument 1.`
+`pl.NZ` asserts that the bytes in GM are already NZ-packed; it does not convert
+ND storage. The host packs 16-row fractals with `c0 = 32 / sizeof(dtype)`
+columns per block. The DSL uses logical shapes, and `BlockNzTensorViews`
+rewrites their physical description. Leading dimensions fold into one batch
+slot: `[G, E, N, K]` has batch coordinate `g * E + e`.
 
-Since the `ee49fcea` revision, a **stacked** NZ weight — layer- or
-rank-stacked, e.g. `[LAYERS, N, K]` — is usable across slicing and dispatch.
-What is now supported, with the layer-slice form verified on device at
-`rtol=atol=0` (reading layer 2, so a dropped batch offset cannot match by
-accident):
+NZ tensors are read-only operands in this release. The
+[`BlockNzTensorViews` source check](https://github.com/hw-native-sys/pypto/blob/ee49fcea/src/ir/transforms/block_nz_tensor_views_pass.cpp#L448)
+allows `tile.load`, `tensor.slice`, and a whole-tensor `tensor.reshape` flatten.
+That flatten means a **rank-1 view of every element**, as defined by
+[`IsWholeTensorFlatten`](https://github.com/hw-native-sys/pypto/blob/ee49fcea/src/ir/transforms/block_nz_tensor_views_pass.cpp#L186).
+It does not permit `pl.reshape(w, [G * N, K])`. Reshaping a loaded tile to
+remove a singleton batch axis is a separate path.
 
-- **Leading-axis slices fold into the one batch slot.** pto-isa's NZ
-  `GlobalTensor` has exactly one batch slot, so a logical `[G, E, N, K]` weight
-  folds its two leading axes into a blocked batch of `G*E`, and an offset
-  `[g, e, 0, 0]` addresses batch `g*E + e`. A `pl.slice(w, [1, N, K],
-  [LAYER, 0, 0])` keeps whole `[N, K]` matrices and its bytes stay contiguous —
-  this is how a multi-layer model reaches one layer's weight:
+### Hoist a batch view before its rank-3 windows
 
-  ```python
-  @pl.jit(auto_scope=False)
-  def nz_layer_slice(x: pl.Tensor[[M, K], pl.FP16],
-                     w: pl.Tensor[[LAYERS, N, K], pl.FP16, pl.NZ],
-                     out: pl.Out[pl.Tensor[[M, N], pl.FP32]]):
-      w_layer: pl.Tensor[[1, N, K], pl.FP16, pl.NZ] = pl.slice(w, [1, N, K], [LAYER, 0, 0])
-      with pl.scope():
-          for nb in pl.spmd(N // N_TILE, name_hint="nz_layer_mm"):
-              n0 = nb * N_TILE
-              acc = pl.create_tensor([1, M, N_TILE], dtype=pl.FP32)
-              for k0 in pl.pipeline(0, K, K, stage=2):
-                  acc = pl.matmul_acc(acc, x[0:M, k0 : k0 + K],
-                                      w_layer[0:1, n0 : n0 + N_TILE, k0 : k0 + K],
-                                      b_trans=True, init_cond=(k0 == 0))
-              out[:, n0 : n0 + N_TILE] = pl.reshape(acc, [M, N_TILE])
-      return out
-  ```
+Take the batch slice in orchestration before entering InCore. This form passed
+on device for FP16 into FP32 and INT8 into INT32, using `M=16`,
+`LAYERS=4`, `N=K=1024`, `LAYER=2`, and `N_TILE=K_TILE=256`:
 
-  Note the shape of that body: a **rank-3 window reaches the cube through
-  tensor-level `matmul_acc`**, not `pl.load` + `pl.matmul` — a tile-level load
-  of it would be a rank-3 tile, which the matmul rejects at parse time. The
-  hand-placed `with pl.scope()` needs `@pl.jit(auto_scope=False)`.
-- **Contiguous leading-axis slices and whole-tensor flattening** are the two
-  supported slice shapes; the NZ annotation still requires physically
-  NZ-packed data and does not convert ND storage.
-- **NZ loads accept symbolic starts in strided loops** — `for ob in
-  pl.range(core, TILES, CORES)` — where the offset walk proves both the
-  fractal divisibility and the non-negativity of the computed coordinate.
-  Anything the walk cannot prove is rejected with a diagnostic naming the
-  provable forms; an NZ tensor addressed from a guessed coordinate reads the
-  wrong fractal and nothing downstream would notice, so the refusal is the
-  design.
-- **Dynamic `valid_shape[-2]` that is provably a multiple of 16** (a ragged
-  last tile) is accepted: the row-fractal count becomes `FloorDiv(rows, 16)`.
-  The rows must cover whole 16-row fractals.
-- **One caution from the dispatch side**: keep the window's logical shape
-  consistent with the caller's — a rank-1 NZ annotation is an authoring
-  mistake, and error messages in this area tell you to reshape to `[B, R, C]`
-  *before* the NZ annotation or to annotate the tensor as `pl.ND`.
+```python
+@pl.jit(auto_scope=False)
+def nz_layer_slice(x: pl.Tensor[[M, K], pl.FP16],
+                   w: pl.Tensor[[LAYERS, N, K], pl.FP16, pl.NZ],
+                   out: pl.Out[pl.Tensor[[M, N], pl.FP32]]):
+    w_layer: pl.Tensor[[1, N, K], pl.FP16, pl.NZ] = pl.slice(w, [1, N, K], [LAYER, 0, 0])
+    with pl.scope():
+        for nb in pl.spmd(N // N_TILE, name_hint="nz_layer_mm"):
+            n0 = nb * N_TILE
+            acc = pl.create_tensor([1, M, N_TILE], dtype=pl.FP32)
+            for k0 in pl.pipeline(0, K, K_TILE, stage=2):
+                lhs = x[0:M, k0:k0 + K_TILE]
+                rhs = w_layer[0:1, n0:n0 + N_TILE, k0:k0 + K_TILE]
+                acc = pl.matmul_acc(acc, lhs, rhs, b_trans=True, init_cond=(k0 == 0))
+            out[:, n0:n0 + N_TILE] = pl.reshape(acc, [M, N_TILE])
+    return out
+```
+
+**The batch index need not be constant.** Placing the same view creation inside
+an orchestration `for g in pl.parallel(4)` with offset `[g, 0, 0]` passed for all
+four 1024x1024 INT8 matrices with `rtol=atol=0`. The fixed-layer FP16 and INT8
+controls passed with `rtol=atol=1e-5`.
+
+Moving the batch-view creation into the `pl.spmd` body and then taking rank-3
+windows of that view fails with
+`FlattenTileNdTo2D: tile.slice is not supported on >2D tiles`. This is a
+placement restriction on that chained-slice form, enforced by
+[`FlattenTileNdTo2D`](https://github.com/hw-native-sys/pypto/blob/ee49fcea/src/ir/transforms/flatten_tile_nd_to_2d/analysis.cpp#L115).
+
+### Window before reshaping to rank 2
+
+Inside InCore, an alternative is to select the full tile window in one slice
+and then remove its singleton batch axis:
+
+```python
+w_window = pl.slice(w, [1, N_TILE, K_TILE], [g, n0, k0])
+w_tile = pl.reshape(w_window, [N_TILE, K_TILE])
+x_tile = x[rows:rows + M, k0:k0 + K_TILE]
+acc = pl.matmul_acc(acc, x_tile, w_tile, b_trans=True, init_cond=(kb == 0))
+```
+
+This passed exactly for INT8 into INT32 and BF16 into FP32 at `M=16`, with
+`g` from `pl.parallel` and 256x256 windows. The BF16 control used the linear
+row offset `n0 = block * 256`. The NZ fractal alignment rules below still apply.
+
+Reshaping a whole batch slice to `[N, K]` **before** windowing it stages the
+whole matrix into L1 in this release. A 1024x1024 INT8 parent caused
+`Mat buffer usage (1052672 bytes) exceeds platform limit (524288 bytes)`,
+even though its requested 256x256 weight tile is only 64 KiB. Window first to
+keep the staged operand at the tile's extent.
+
+### Preserve physical M when the batched path pads rows
+
+With a rank-2 lhs of M=8 and rank-3 rhs/accumulator, lowering pads the lhs to
+M=16 while the accumulator remains M=8. The tile verifier reports
+`tile.batch_matmul_acc requires matching M dimensions, but got acc M=8 and lhs M=16`.
+**Padding only the accumulator is insufficient:** the frontend then rejects
+`tensor.matmul_acc: acc M=16 != matmul M=8`. The two checks are in the
+[tensor verifier](https://github.com/hw-native-sys/pypto/blob/ee49fcea/src/ir/op/tensor_ops/matmul.cpp#L463)
+and [batched tile verifier](https://github.com/hw-native-sys/pypto/blob/ee49fcea/src/ir/op/tile_ops/batch_matmul.cpp#L211).
+
+Declare the lhs window's nominal M as 16 with valid M=8, use a 16-row
+accumulator, and mark only 8 output rows valid. A physical 8-row Acc slice is
+not a whole 16-row fractal. This complete INT8 form passed on device against
+`x.int() @ w_logical[2].int().T` with `rtol=atol=0`:
+
+```python
+@pl.jit(auto_scope=False)
+def nz_padded_rows(x: pl.Tensor[[8, 512], pl.INT8],
+                   w: pl.Tensor[[4, 512, 512], pl.INT8, pl.NZ],
+                   out: pl.Out[pl.Tensor[[8, 512], pl.INT32]]):
+    w_layer: pl.Tensor[[1, 512, 512], pl.INT8, pl.NZ] = pl.slice(w, [1, 512, 512], [2, 0, 0])
+    with pl.scope():
+        for nb in pl.spmd(2, name_hint="nz_padded_rows"):
+            n0 = nb * 256
+            acc = pl.create_tensor([1, 16, 256], dtype=pl.INT32)
+            for kb in pl.range(2):
+                k0 = kb * 256
+                lhs = pl.slice(x, [16, 256], [0, k0], valid_shape=[8, 256])
+                rhs = w_layer[0:1, n0:n0 + 256, k0:k0 + 256]
+                acc = pl.matmul_acc(acc, lhs, rhs, b_trans=True, init_cond=(kb == 0))
+            flat = pl.reshape(acc, [16, 256])
+            valid = pl.set_validshape(flat, 8, 256)
+            out[:, n0:n0 + 256] = valid
+    return out
+```
+
+### Symbolic offsets and ragged tiles
+
+NZ row offsets must be non-negative multiples of 16; column offsets must be
+non-negative multiples of `c0`. The
+[offset proof implementation](https://github.com/hw-native-sys/pypto/blob/ee49fcea/include/pypto/ir/transforms/utils/tensor_view_semantics.h#L439)
+accepts constants, non-negative loop/SPMD indices, and provable sums/products.
+It also accepts `%` and `//` when the dividend is provably non-negative and the
+divisor is a positive constant. `(block % 2) * 256` was verified as an NZ row
+offset on device; fused block-index arithmetic is not inherently forbidden.
+The proof does not handle symbolic subtraction directly.
+
+Dynamic `valid_shape[-2]` is accepted when its extent is provably a multiple of
+16; the row-fractal count becomes `FloorDiv(rows, 16)`. NZ rows must cover whole
+16-row fractals. Keep the view's logical shape consistent across dispatch; a
+rank-1 NZ annotation does not describe the matrix's fractal layout.
 
 ## Run the examples
 
@@ -445,7 +538,7 @@ accident):
 contracts above. From the repository root:
 
 ```bash
-PYTHONPATH="$PWD" conda run -n pypto python examples/language/shape_and_cast.py -p a2a3 -d 5
+PYTHONPATH="$PWD" conda run -n pypto npu-run python examples/language/shape_and_cast.py -p a2a3 -d 0
 ```
 
 Exit code 0, on a real Ascend 910B4, one PASS line per entry:

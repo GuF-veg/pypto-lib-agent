@@ -143,6 +143,32 @@ The rules:
    appears much later, from `SSAVerify`: `ForStmt YieldStmt value count (3) !=
    iter_args count (2)`. Count your yields.
 
+### Reinitialize a mutable Tile seed inside the enclosing loop
+
+Within one InCore region, a Tile passed to an inner loop's `init_values=`
+shares storage with the carried accumulator. If the inner loop updates that
+storage, a seed filled before the outer loop retains the preceding iteration's
+sum. Create and initialize the Tile in the outer loop body:
+
+```python
+with pl.at(level=pl.Level.CORE_GROUP, name_hint="sum_tiles"):
+    for nb in pl.range(4):
+        c0 = nb * 16
+        acc0 = pl.full([8, 16], dtype=pl.FP32, value=0.0)
+        for g, (a,) in pl.range(2, init_values=(acc0,)):
+            part = pl.slice(x, [8, 16], [0, 0])
+            a_next = pl.add(a, part)
+            a_out = pl.yield_(a_next)
+        out[:, c0:c0 + 16] = a_out
+```
+
+On an 8x64 real-device probe, the hoisted Tile seed gave `384/512` mismatches;
+the form above passed with `rtol=atol=0`. A scalar seed created before the outer
+loop also passed: scalar `init_values` do not have this Tile-buffer aliasing.
+`pl.create_tensor` allocates storage without initializing its contents.
+The storage sharing is implemented by
+[`InitMemRefMutator::ProcessIterArg`](https://github.com/hw-native-sys/pypto/blob/ee49fcea/src/ir/transforms/init_memref.cpp#L595).
+
 ## While loops
 
 There are two spellings. The **natural** one is ordinary Python:

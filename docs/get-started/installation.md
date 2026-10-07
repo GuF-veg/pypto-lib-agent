@@ -128,6 +128,15 @@ dedicated venv that `PTOAS_ROOT` then points at. While `PTOAS_ROOT` is set only
 that directory is searched, so a `ptoas` earlier on `PATH` cannot shadow the
 pinned one.
 
+PyPTO codegen launches the selected PTOAS executable directly. When that is
+`bin/ptoas`, its `#!/usr/bin/env python3` launcher selects Python from `PATH`.
+Calling the kernel's Python interpreter by absolute path does not activate that
+path for child tools. Activate the intended environment before running the
+kernel, or use `conda run -n pypto npu-run python <kernel>.py -p a2a3 -d 0` for
+this repository's device environment. See
+[PTOAS discovery](https://github.com/hw-native-sys/pypto/blob/ee49fcea/python/pypto/backend/_ptoas_locate.py#L38)
+and [the executable invocation](https://github.com/hw-native-sys/pypto/blob/ee49fcea/python/pypto/backend/pto_backend.py#L228).
+
 ## PTO ISA
 
 Nothing to clone by hand, and nothing to point at. simpler owns the single

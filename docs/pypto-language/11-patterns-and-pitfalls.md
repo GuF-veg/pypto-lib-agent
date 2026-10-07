@@ -215,6 +215,15 @@ empty and do not reuse one for two different stages.
 |---|---|
 | `cannot mix Tensor and Tile arguments` | one binary op mixing levels |
 | `acc M=... != matmul M=...` | matmul tile shapes disagree |
+| `tile.batch_matmul_acc ... acc M=8 and lhs M=16` | the batched path padded the lhs; padding the accumulator alone is insufficient. See the [complete padding example](18-shape-layout.md#preserve-physical-m-when-the-batched-path-pads-rows) |
+| `Mat buffer usage ... exceeds platform limit` on a stacked NZ weight | check for a whole-parent reshape before windowing; [window first](18-shape-layout.md#window-before-reshaping-to-rank-2) to keep the staged extent small |
+| `FlattenTileNdTo2D: tile.slice is not supported on >2D tiles` | chained rank-3 slices inside InCore; [hoist the batch view](18-shape-layout.md#hoist-a-batch-view-before-its-rank-3-windows) or window then reshape |
+| `NZ layout requires the slice offset ... to be non-negative` | the offset's sign cannot be proved; `%`/`//` are supported for a non-negative dividend and positive constant divisor. See [offset rules](18-shape-layout.md#symbolic-offsets-and-ragged-tiles) |
+| `tile.load ... got TileType` | the source view was lowered to a Tile inside InCore; use offsets on the original Tensor or an [orchestration view](19-data-movement.md#plload) |
+| `tile.maximums ... requires first argument to be a TileType` | this exported name is Tile-only; use `pl.maximum` for a Tensor. Other scalar forms have [different dispatch rules](14-elementwise.md#scalar-forms-and-the-naming-traps) |
+| `LegalizeTileCast: no native cast path ...` for an integer widening | the implicit bridge is rejected; use the explicit [INT8-to-FP32 bridge](18-shape-layout.md#plcast) |
+| `ptoas ... unexpected decimal integer literal for a floating point value` | an FP32 `pl.full` used `value=0`; write `value=0.0` |
+| a Tile accumulator is right for the first outer iteration and wrong after | its mutable seed was initialized only once; [initialize it inside the outer loop](04-control-flow.md#reinitialize-a-mutable-tile-seed-inside-the-enclosing-loop) |
 | a `Mat` tile fails to store | `pl.store` accepts `Vec` or `Acc` sources only |
 | `div` shape error where `mul` worked | `div` does not broadcast; the shapes must match exactly |
 | `pl.max` returns something odd | `pl.max` is a **scalar** op, not a reduction |

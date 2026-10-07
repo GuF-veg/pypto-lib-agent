@@ -137,7 +137,7 @@ tile = pl.load(x, [r, 0], [TILE, COLS])
 
 | Argument | Meaning |
 |---|---|
-| `tensor` | source Tensor; any Tensor, including a subview |
+| `tensor` | source **Tensor** or **DistributedTensor**, including an orchestration Tensor view; a Tile is rejected |
 | `offsets` | one integer scalar per dimension, in the **source tensor's** coordinate system |
 | `shapes` | region extents, one integer scalar per dimension, same convention |
 | `valid_shape` | valid extent of the tile; defaults to `shapes` |
@@ -149,6 +149,38 @@ column block is still just offsets plus extents. The only fitting rule is that
 `offset + extent` stays inside the source. With `ROWS = COLS = 128` and
 `TILE = 64`, the tiles `[64, 128]`, `[128, 64]` and `[64, 64]` all loaded
 correctly — square and non-square alike.
+
+**The view's placement determines whether it can be loaded.** The parser makes
+a Tensor subscript into `tensor.slice`. Inside InCore, lowering converts that
+slice to a Tile; an explicit `pl.slice` in the same region behaves identically.
+Passing either result to `pl.load` then fails:
+
+```text
+ValueError: The operator tile.load requires first argument to be a TensorType or
+DistributedTensorType, but got TileType
+Check failed: tensor_type at .../src/ir/op/tile_ops/memory.cpp:144
+```
+
+Use `pl.load(x, [r0, c0], [R, C])` on the original Tensor, or create the view
+in orchestration before the compute region. The latter works with subscript
+syntax too; this FP32 copy passed on device with `rtol=atol=0`:
+
+```python
+@pl.jit(auto_scope=False)
+def load_view(x: pl.Tensor[[64, 64], pl.FP32],
+              out: pl.Out[pl.Tensor[[16, 16], pl.FP32]]):
+    view = x[16:32, 32:48]
+    with pl.scope():
+        with pl.at(level=pl.Level.CORE_GROUP, name_hint="load_view"):
+            tile = pl.load(view, [0, 0], [16, 16])
+            pl.store(tile, [0, 0], out)
+    return out
+```
+
+The relevant implementation is
+[`_parse_tensor_subscript`](https://github.com/hw-native-sys/pypto/blob/ee49fcea/python/pypto/language/parser/ast_parser.py#L9995),
+[`ConvertTensorToTileOps`](https://github.com/hw-native-sys/pypto/blob/ee49fcea/src/ir/transforms/convert_tensor_to_tile_ops_pass.cpp#L1427),
+and [`DeduceTileLoadType`](https://github.com/hw-native-sys/pypto/blob/ee49fcea/src/ir/op/tile_ops/memory.cpp#L132).
 
 **Dtype rules.** No promotion: the tile dtype is the tensor dtype. FP32 was
 verified.
@@ -365,7 +397,7 @@ accumulator legal.
 
 ```bash
 cd <path/to/pypto-lib-agent>   # the repository root
-PYTHONPATH="$PWD" conda run -n pypto python examples/language/data_movement.py -p a2a3 -d 0
+PYTHONPATH="$PWD" conda run -n pypto npu-run python examples/language/data_movement.py -p a2a3 -d 0
 ```
 
 Add `--probe 1` to reproduce every rejected form and print its exact error.

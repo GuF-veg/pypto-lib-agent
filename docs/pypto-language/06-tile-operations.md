@@ -55,12 +55,15 @@ y = pl.store(tile, [0, 0], y)                         # returns the destination
 ```
 
 - Offsets and shapes are flat integer lists in source coordinates.
+- `pl.load` takes a **Tensor** source, including a view created in orchestration.
+  A slice lowered inside InCore becomes a Tile and cannot be loaded again; use
+  offsets on the original Tensor. See [Data movement](19-data-movement.md#plload).
 - `pl.store` **returns** the destination tensor; assign the result if the
   destination name is used later.
 - Optional keywords on `load`: `valid_shape=`, `target_memory=`, plus padding
   and cache controls. There is no `transpose=` or `layout=` keyword.
-- `pl.load` accepts a slice as its source, in which case offsets are relative to
-  the slice — but a slice is never accepted *as* an offset list.
+- Offsets on an orchestration Tensor view are relative to that view; a slice
+  is never accepted *as* an offset list.
 
 ### `pl.move` and `pl.create_tile`
 

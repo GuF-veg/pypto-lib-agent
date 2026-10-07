@@ -61,6 +61,18 @@ conda activate pypto
 Every `python`, `pytest`, `ruff`, or other tool invocation in this repository
 must be executed inside this environment.
 
+### Environment traps that cost real debugging time
+
+- **Activate the environment for child tools too.** Use `conda activate pypto`
+  before `npu-run`, or `conda run -n pypto npu-run python <kernel>.py -p a2a3 -d 0`.
+  An absolute interpreter path alone does not activate `PATH` for the PTOAS
+  launcher; see [PTOAS setup](docs/get-started/installation.md#ptoas).
+- **Retry opaque runtime failures in a fresh process and retain the original
+  diagnostic.** A multi-kernel sweep reported `prepare_native_run failed with
+  code 13` for cases that behaved differently alone. Its trigger remains
+  unverified; a retry helps distinguish a process-state problem from a kernel
+  failure, but does not establish the cause.
+
 ## NPU Usage (Shared Device Pool)
 
 The 8 Ascend NPUs on this machine are shared by multiple concurrent agents and

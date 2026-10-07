@@ -5,7 +5,7 @@ The elementwise families - unary math, binary arithmetic, bitwise/shift and the
 NumPy, and that is the danger: **the shapes are not broadcast the way NumPy
 broadcasts them.**
 
-Every contract here was verified on a real Ascend 910B4 with `-p a2a3`, from
+The runnable examples were verified on a real Ascend 910B4 with `-p a2a3`, from
 `examples/language/elementwise_binary.py` (11 entries, 56 compared outputs) and
 `examples/language/unary_math.py`.
 
@@ -20,13 +20,12 @@ Every contract here was verified on a real Ascend 910B4 with `-p a2a3`, from
 | Bitwise / shift | `pl.and_`, `pl.or_`, `pl.xor`, `pl.not_`, `pl.shl`, `pl.shr` | integer dtypes; **`not_` is INT16/UINT16 only** (INT32 rejected) |
 | Carry | `pl.addc`, `pl.subc`, `pl.addsc`, `pl.subsc` | carry is an ordinary addend |
 | Partial | `pl.part_add`, `pl.part_mul`, `pl.part_max`, `pl.part_min` | same-shape only; respects the valid region |
-| Scalar forms | `pl.maximums`, `pl.minimums`, `pl.rems`, `pl.fmods`, `pl.ands`, `pl.ors`, `pl.xors`, `pl.shls`, `pl.shrs`, `pl.addsc`, `pl.subsc` | tile with a scalar |
+| Scalar forms | `pl.maximums`, `pl.minimums`, `pl.rems`, `pl.fmods`, `pl.ands`, `pl.ors`, `pl.xors`, `pl.shls`, `pl.shrs`, `pl.addsc`, `pl.subsc` | operand level depends on the exported name; see [Scalar forms](#scalar-forms-and-the-naming-traps) |
 
-Everything in this table was re-run on an Ascend 910B4 with `-p a2a3` in
-September 2026 (probe kernels under golden check); the constraints called out
-in the notes column are measured, not read out of docstrings. `mask = a < b`
-style Python comparison operators do not exist — build masks with
-`pl.cmp`/`pl.cmps`.
+The example runs date from September 2026. The scalar-form operand levels were
+rechecked against source and targeted probes in October; their evidence is
+linked below. `mask = a < b` style Python comparison operators do not exist —
+build masks with `pl.cmp`/`pl.cmps`.
 
 ## There is no usable implicit broadcasting - and it fails silently
 
@@ -113,6 +112,23 @@ x = 1 is *not* ill-conditioned: it stays at 1 ULP with a 1.16e-10 absolute error
 
 ## Scalar forms and the naming traps
 
+- **`maximums`, `minimums`, `rems`, `addsc` and `subsc` are Tile-only.**
+  `pl.maximums(x[:, :], 1e-4)` with a Tensor `x` is rejected on the operand-level
+  check:
+
+  ```text
+  InvalidOperationError: pl operation 'maximums': The operator tile.maximums
+  requires first argument to be a TileType, but got TensorType
+  ```
+
+  For a Tensor use `pl.maximum(x[:, :], 1e-4)`. To use the Tile form, load from
+  the original Tensor with offsets before calling `pl.maximums`.
+- **`fmods`, `ands`, `ors`, `xors`, `shls` and `shrs` dispatch on Tensor or Tile.**
+  The suffix alone does not determine the operand level. Tensor
+  `pl.fmods(x[:, :], 2.0)` passed on device against `torch.fmod` with
+  `rtol=atol=0`. The exports and dispatch branches are defined in
+  [`op/__init__.py`](https://github.com/hw-native-sys/pypto/blob/ee49fcea/python/pypto/language/op/__init__.py#L69)
+  and [`unified_ops.py`](https://github.com/hw-native-sys/pypto/blob/ee49fcea/python/pypto/language/op/unified_ops.py#L522).
 - `pl.add(tile, 3)` routes to `tile.adds` and is verified identical to
   `pl.tile.adds(tile, 3)`.
 - **`pl.adds`, `pl.subs`, `pl.muls` and `pl.divs` are not exported.** Using one
@@ -203,9 +219,9 @@ and is one of the verified entries.
 
 ```bash
 cd <path/to/pypto-lib-agent>   # the repository root
-PYTHONPATH="$PWD" conda run -n pypto python examples/language/elementwise_binary.py -p a2a3 -d 1
-PYTHONPATH="$PWD" conda run -n pypto python examples/language/unary_math.py -p a2a3 -d 7
-PYTHONPATH="$PWD" conda run -n pypto python examples/language/select_ops.py -p a2a3 -d 7
+PYTHONPATH="$PWD" conda run -n pypto npu-run python examples/language/elementwise_binary.py -p a2a3 -d 0
+PYTHONPATH="$PWD" conda run -n pypto npu-run python examples/language/unary_math.py -p a2a3 -d 0
+PYTHONPATH="$PWD" conda run -n pypto npu-run python examples/language/select_ops.py -p a2a3 -d 0
 ```
 
 ```text

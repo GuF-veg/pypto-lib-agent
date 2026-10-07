@@ -183,6 +183,16 @@ K = 512 forcing internal K blocking, codegen emits `TMATMUL_BIAS` on block 0 and
   `st_phase=pl.STPhase.Final` on the store or compilation fails with
   `Verification failed after 'InlineFunctions' for properties {AccStorePhaseValid}`.
 
+## Rank-3 windows and the 16-row fractal
+
+For stacked NZ weights, take a rank-3 batch view in orchestration or window the
+weight before reshaping it to rank 2. A hoisted batch view can use a runtime
+`pl.parallel` index. For the rank-3 path with `M=8`, padding only the accumulator
+fails the frontend shape check: the lhs and the accumulator must both declare
+the padded M, and the output must preserve the Acc tile's physical extent.
+The verified forms and the complete M=8 example are in
+[Stacked NZ weights](18-shape-layout.md#stacked-nz-weights-slicing-strided-loops-ragged-tiles).
+
 ## Memory space
 
 Placement is automatic. `pl.load` accepts only `Vec` or `Mat` - `Left` and
@@ -221,7 +231,7 @@ as 4096/4096 wrong, not as a tolerance cliff.
 
 ```bash
 cd <path/to/pypto-lib-agent>   # the repository root
-PYTHONPATH="$PWD" conda run -n pypto python examples/language/matmul_family.py -p a2a3 -d 4
+PYTHONPATH="$PWD" conda run -n pypto npu-run python examples/language/matmul_family.py -p a2a3 -d 0
 ```
 
 ```text
@@ -238,7 +248,7 @@ accumulates — the two-step result matched `2 * a @ b` at `rtol=atol=1e-4`.
 The FIXPIPE epilogue forms live in their own file:
 
 ```bash
-PYTHONPATH="$PWD" conda run -n pypto python examples/language/fixpipe_epilogue.py -p a2a3 -d 4
+PYTHONPATH="$PWD" conda run -n pypto npu-run python examples/language/fixpipe_epilogue.py -p a2a3 -d 0
 ```
 
 ```text

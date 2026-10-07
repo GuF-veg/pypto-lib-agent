@@ -20,53 +20,31 @@ for workflow and tuning.
 
 ## Verification baseline
 
-This guide was written against, and every claim in it was checked against,
-these revisions:
+The guide targets PyPTO `ee49fcea`. The September 2026 verification used
+`pypto-lib-agent 43d62af` and ran the `examples/language/` kernels on Ascend
+910B4. A focused operand-contract audit on **2026-10-06** used this pinned
+chain, also on 910B4 with `-p a2a3`:
 
-| Repository | Revision |
+| Component | Revision or version |
 |---|---|
-| `pypto` (compiler + DSL implementation) | `ee49fcea` (`main`, 58 commits past `2f892f9`) |
-| `pypto-lib-agent` (kernels) | `43d62af` |
+| PyPTO compiler and DSL | `ee49fcea` |
+| PyPTO-Lib probe baseline | `1fa5d1f` |
+| simpler | `6e383fc5` |
+| PTOAS | `v0.65` |
+| PTO ISA | `c0d7148e`, matching simpler's `pto_isa.pin` |
+| CANN | `9.0.0` |
 
-The whole guide was **re-verified against the same revisions in September
-2026**: all `examples/language/` kernels re-run on Ascend 910B4 with `-p a2a3`
-(all pass), every chapter's claims re-checked against the `pypto` source, the
-distributed chapter re-proven on two devices, and the operator claims that were
-previously marked "unproven" either measured or replaced with the measured
-failure text. The `pypto` revision was then moved from `2f892f9` to `ee49fcea`
-and re-verified the same way: the language-surface changes in those 58 commits
-(`tile.select`, the FIXPIPE epilogue, binary-tree Tensor `col_sum`, the L2
-bypass offset, `FP4E2M1X2`, the transposed-window rejection, the annotated
-scalar dtype fix, per-constexpr-value dep compilation, stacked-NZ-weight
-slicing, the call-boundary layout check, the relaxed manual `split_aiv`
-region) are covered by device-run probe kernels and by new/extended
-`examples/language/` files (`select_ops.py`, `fixpipe_epilogue.py`, the
-`col_sum_binary` entry of `reductions_col.py`, the GM-slice output of
-`matmul_family.py`'s `mm_transpose`), and every previously-measured claim the
-new commits invalidate was re-measured — most notably the `BYPASS` cache
-policy, which used to kill the run and now bypasses L2 for real.
+The audit covered [casts and stacked NZ weights](18-shape-layout.md),
+[load sources](19-data-movement.md#plload),
+[scalar-form dispatch](14-elementwise.md#scalar-forms-and-the-naming-traps), and
+[mutable Tile seeds](04-control-flow.md#reinitialize-a-mutable-tile-seed-inside-the-enclosing-loop).
+The relevant sections cite source at the selected revision. Rejected forms were
+checked by compilation for `a2a3`; those checks do not require execution on an
+NPU. Numerical claims use real-device golden comparisons, with shapes and
+tolerances stated beside the examples. Unverified causes remain marked as such.
 
-Two rules were applied throughout:
-
-- **The source is the authority.** Claims were verified by reading the
-  implementation under `pypto/python/pypto/language/` (and the C++ passes and
-  verifiers where relevant), not by trusting other documentation.
-- **Where possible, claims were executed.** The DSL parser was run on probe
-  kernels to confirm which constructs are accepted and which are rejected, and
-  the error messages quoted in [Syntax](02-syntax.md) are the real ones.
-- **Operator claims were run on hardware.** The per-operator pages, and most of
-  [Patterns and Pitfalls](11-patterns-and-pitfalls.md), are backed by kernels
-  executed on an Ascend 910B4 with `-p a2a3`. Where a behaviour was measured
-  rather than read, the guide says so and quotes the mismatch count or the
-  compiler error verbatim. Behaviours that could **not** be established are
-  marked as such rather than asserted - search a page for "not verified" or
-  "unproven" to find them.
-
-Older PyPTO documentation in both repositories is **not** a reliable source: it
-describes keywords that do not exist, omits keywords that do, and documents
-several constructs the parser rejects. [Patterns and Pitfalls](11-patterns-and-pitfalls.md)
-collects the specific contradictions found, so you can tell which statements in
-which document to distrust.
+[Patterns and Pitfalls](11-patterns-and-pitfalls.md) provides a symptom index;
+the linked operator sections contain the detailed contracts and examples.
 
 ## A first kernel
 
