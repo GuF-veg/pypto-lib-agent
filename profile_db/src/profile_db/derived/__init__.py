@@ -7,22 +7,7 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 
-"""The derived layer (DESIGN.md 5.3/6.3, T3): pure, deterministic derivators.
-
-``derive_run(conn, run_id)`` is the single orchestrated entry: it reads
-only schema tables (run/task/task_row/dep_edge), runs the pure derivators
-(time_band / idle_gap / cpm / stall / early_dispatch), and returns the
-row lists the ingest writer persists — the derivators themselves never
-touch the filesystem, the raw JSON artifacts, or the ingest parsers.
-
-Evidence conventions (facts.Evidence): the three deterministically
-derived idle-gap kinds and every positive derivation carry ``proven``;
-genuinely unexplained gaps carry ``unknown`` with ``unproven``; inputs
-that a capture does not provide (level-1 FIN stream, missing clock,
-untimed producers) surface as absent cells / ``unavailable`` rather than
-guesses. Re-running any derivator over the same tables is field-wise
-idempotent (tests pin this).
-"""
+"""Derive occupancy and timestamp facts; consume persisted runtime critical paths."""
 
 from __future__ import annotations
 
@@ -44,8 +29,7 @@ from profile_db.errors import PfdbError
 def derive_run(conn, run_id: int) -> DerivedResult:
     """Derive every T3 table row for one run from its stored tables."""
     run = conn.execute(
-        "SELECT swimlane_level, clock_freq_hz, CAST(core_types AS VARCHAR) "
-        "FROM run WHERE run_id = ?",
+        "SELECT swimlane_level, clock_freq_hz, CAST(core_types AS VARCHAR) FROM run WHERE run_id = ?",
         [run_id],
     ).fetchone()
     if run is None:
@@ -110,14 +94,16 @@ def derive_run(conn, run_id: int) -> DerivedResult:
         [run_id],
     ).fetchall()
     edges: list[EdgeRec] = [
-        EdgeRec(pred=str(e[0]), succ=str(e[1]), source=str(e[2] or ""))
-        for e in edge_tuples
+        EdgeRec(pred=str(e[0]), succ=str(e[1]), source=str(e[2] or "")) for e in edge_tuples
     ]
 
     bands = time_band.build_bands(rows, core_types)
     windows = time_band.gap_windows(bands)
     gaps = idle_gap.build_gaps(rows, tasks, edges, windows, level)
-    facts = cpm.compute_paths(rows, edges, freq_hz)
+    snapshot_row = conn.execute(
+        "SELECT 1 FROM analysis_snapshot WHERE run_id=? AND family='critical_path'", [run_id]
+    ).fetchone()
+    facts = cpm.stored_paths(conn, run_id, rows) if snapshot_row else cpm.compute_paths(rows, edges, freq_hz)
 
     rows_by_task: dict[str, list[RowSlice]] = {}
     for row in rows:
@@ -128,12 +114,15 @@ def derive_run(conn, run_id: int) -> DerivedResult:
         chain = preds_by_succ.setdefault(edge.succ, [])
         if edge.pred not in chain:
             chain.append(edge.pred)
-            pred_edges_by_succ.setdefault(edge.succ, []).append(
-                (edge.source, edge.pred)
-            )
+            pred_edges_by_succ.setdefault(edge.succ, []).append((edge.source, edge.pred))
 
     observed_ids = [step.task_id for step in facts.observed]
     static_ids = [step.task_id for step in facts.static]
+
+    from profile_db.runtime_adapter.storage import read_snapshot
+
+    eligibility_doc = read_snapshot(conn, run_id, "deps")
+    eligibility = (eligibility_doc.get("payload") or {}).get("eligibility", {})
 
     def early_status(task_id: str) -> str:
         return early_dispatch.classify(
@@ -142,6 +131,7 @@ def derive_run(conn, run_id: int) -> DerivedResult:
             tasks,
             freq_hz,
             level,
+            eligibility.get(task_id),
         )
 
     paths: list[dict[str, Any]] = []
@@ -149,9 +139,7 @@ def derive_run(conn, run_id: int) -> DerivedResult:
         task = tasks[step.task_id]
         gap_us = None
         if stall.has_fin_stream(level):
-            ready = stall.ready_time_us(
-                preds_by_succ.get(step.task_id, ()), tasks
-            )
+            ready = stall.ready_time_us(preds_by_succ.get(step.task_id, ()), tasks)
             if ready is not None:
                 gap_us = step.start_us - ready
         paths.append(

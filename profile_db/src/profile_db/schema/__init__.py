@@ -32,7 +32,7 @@ MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 _MIGRATION_NAME = re.compile(r"^(\d{4})_[A-Za-z0-9_]+\.sql$")
 
 # Highest migration version shipped by this package.
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 # Artifact kinds that identify a run's records file (the accepted records
 # filenames minus ``.json``). The records file's sha256 is the run identity

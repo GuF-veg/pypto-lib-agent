@@ -88,17 +88,25 @@ BAND band_idx=12 busy_cores=0 drain_tail=true engine="aiv" run_id=1 sparse=false
         "sparse_regions",
         "sparse_regions",
         {"run_id": 1},
-        """SPARSE busy_cores=0 engine="aiv" kind="unknown" run_id=1 stored_band_idx=0 t0_us=0.0 t1_us=5.0 total_cores=2 evidence=unproven
-SPARSE busy_cores=0 engine="aiv" kind="unknown" run_id=1 stored_band_idx=1 t0_us=5.0 t1_us=10.0 total_cores=2 evidence=unproven
-SPARSE busy_cores=0 engine="aiv" fin_us=10.0 kind="ready_starved" lagging_producer="1" run_id=1 stored_band_idx=4 t0_us=20.0 t1_us=25.0 total_cores=2 evidence=proven
-SPARSE busy_cores=0 engine="aic" fin_us=10.0 kind="ready_starved" lagging_producer="1" run_id=1 stored_band_idx=5 t0_us=25.0 t1_us=30.0 total_cores=2 evidence=proven
-SPARSE busy_cores=0 engine="aiv" fin_us=10.0 kind="ready_starved" lagging_producer="1" run_id=1 stored_band_idx=5 t0_us=25.0 t1_us=30.0 total_cores=2 evidence=proven""",
+        """SPARSE busy_cores=0 engine="aiv" kind="sparse" run_id=1 stored_band_idx=0 t0_us=0.0 t1_us=5.0 total_cores=2 evidence=measured
+SPARSE busy_cores=0 engine="aiv" kind="sparse" run_id=1 stored_band_idx=1 t0_us=5.0 t1_us=10.0 total_cores=2 evidence=measured
+SPARSE busy_cores=0 engine="aiv" kind="sparse" run_id=1 stored_band_idx=4 t0_us=20.0 t1_us=25.0 total_cores=2 evidence=measured
+SPARSE busy_cores=0 engine="aic" kind="sparse" run_id=1 stored_band_idx=5 t0_us=25.0 t1_us=30.0 total_cores=2 evidence=measured
+SPARSE busy_cores=0 engine="aiv" kind="sparse" run_id=1 stored_band_idx=5 t0_us=25.0 t1_us=30.0 total_cores=2 evidence=measured""",
     ),
     GoldenQuestion(
         "why_sparse",
         "why_sparse",
         {"run_id": 1, "band": 2},
-        """SPARSE band=2 bands=20 busy_cores=1 fin_us=10.0 kind="ready_starved" lagging_producer="1" run_id=1 t0_us=20.0 t1_us=30.0 evidence=proven""",
+        """ANALYSIS adapter_version="pfdb/0.4.0" analysis_version="runtime/1" backend_revision="6e383fc57c12a8bd4dce045289b8b4f5d55a15f1" compatibility=[] family="scheduler" run_id=1 status="ok" evidence=proven
+OVERHEAD_WINDOW integral_core_us=18.0 peak=2 t0_us=20.0 t1_us=30.0 track="oh_aic_idle" evidence=measured
+OVERHEAD_WINDOW integral_us=3.0 peak=1 t0_us=20.0 t1_us=30.0 track="oh_aic_overhead" evidence=measured
+OVERHEAD_WINDOW integral_task_us=3.0 peak=1 t0_us=20.0 t1_us=30.0 track="oh_aic_ready" evidence=measured
+OVERHEAD_WINDOW integral_core_us=10.0 peak=1 t0_us=20.0 t1_us=30.0 track="oh_aiv_idle" evidence=measured
+OVERHEAD_WINDOW integral_us=10.0 peak=1 t0_us=20.0 t1_us=30.0 track="oh_aiv_overhead" evidence=measured
+OVERHEAD_WINDOW integral_task_us=10.0 peak=1 t0_us=20.0 t1_us=30.0 track="oh_aiv_ready" evidence=measured
+OVERHEAD_WINDOW integral_us=3.0 peak=1 t0_us=20.0 t1_us=30.0 track="oh_all_overhead" evidence=measured
+OVERHEAD_WINDOW integral_us=10.0 peak=1 t0_us=20.0 t1_us=30.0 track="oh_has_overhead" evidence=measured""",
     ),
     GoldenQuestion(
         "region",
@@ -110,9 +118,9 @@ TASK block_num=1 busy_us=10.0 early_dispatch_flag=false engine="aic" family="q_p
 TASK block_num=1 busy_us=20.0 early_dispatch_flag=false engine="aic" family="kv_proj" kernel_ids=[] max_end_us=50.0 max_finish_us=51.0 min_dispatch_us=25.0 min_receive_us=29.0 min_start_us=30.0 name="kv_proj" num_rows=1 on_cpm_observed=true on_cpm_static=true run_id=1 scope="" task_id="3" wall_us=26.0 evidence=measured
 TASK block_num=1 busy_us=6.0 early_dispatch_flag=false engine="aiv" family="layernorm" kernel_ids=[] max_end_us=20.0 max_finish_us=21.0 min_dispatch_us=13.0 min_receive_us=13.8 min_start_us=14.0 name="layernorm" num_rows=1 on_cpm_observed=false on_cpm_static=false run_id=1 scope="" task_id="4" wall_us=8.0 evidence=measured
 TASK block_num=1 busy_us=5.0 early_dispatch_flag=false engine="aiv" family="softmax" kernel_ids=[] max_end_us=45.0 max_finish_us=46.0 min_dispatch_us=38.0 min_receive_us=39.8 min_start_us=40.0 name="softmax" num_rows=1 on_cpm_observed=false on_cpm_static=false run_id=1 scope="" task_id="5" wall_us=8.0 evidence=measured
-GAP core_index=0 engine="aic" fin_us=10.0 kind="ready_starved" lagging_producer="1" run_id=1 t0_us=22.0 t1_us=30.0 evidence=proven
-GAP core_index=0 engine="aic" fin_us=23.0 kind="ready_starved" lagging_producer="2" run_id=1 t0_us=50.0 t1_us=102.0 evidence=proven
-GAP core_index=2 engine="aiv" fin_us=10.0 kind="ready_starved" lagging_producer="1" run_id=1 t0_us=20.0 t1_us=40.0 evidence=proven""",
+GAP core_index=0 engine="aic" kind="idle" run_id=1 t0_us=22.0 t1_us=30.0 evidence=measured
+GAP core_index=0 engine="aic" kind="idle" run_id=1 t0_us=50.0 t1_us=102.0 evidence=measured
+GAP core_index=2 engine="aiv" kind="idle" run_id=1 t0_us=20.0 t1_us=40.0 evidence=measured""",
     ),
     GoldenQuestion(
         "region_family",
@@ -121,9 +129,9 @@ GAP core_index=2 engine="aiv" fin_us=10.0 kind="ready_starved" lagging_producer=
         """REGION family="gemm" gaps=3 run_id=1 t0_us=0.0 t1_us=120.0 tasks=2 evidence=measured
 TASK block_num=1 busy_us=6.0 early_dispatch_flag=false engine="aic" family="gemm" kernel_ids=[] max_end_us=108.0 max_finish_us=109.0 min_dispatch_us=100.0 min_receive_us=101.5 min_start_us=102.0 name="gemm_0_aic" num_rows=1 on_cpm_observed=true on_cpm_static=false run_id=1 scope="" task_id="7" wall_us=9.0 evidence=measured
 TASK block_num=1 busy_us=10.0 early_dispatch_flag=false engine="aic" family="gemm" kernel_ids=[] max_end_us=120.0 max_finish_us=121.0 min_dispatch_us=103.0 min_receive_us=109.0 min_start_us=110.0 name="gemm_1_aic" num_rows=1 on_cpm_observed=true on_cpm_static=false run_id=1 scope="" task_id="8" wall_us=18.0 evidence=measured
-GAP core_index=0 engine="aic" fin_us=10.0 kind="ready_starved" lagging_producer="1" run_id=1 t0_us=22.0 t1_us=30.0 evidence=proven
-GAP core_index=0 engine="aic" fin_us=23.0 kind="ready_starved" lagging_producer="2" run_id=1 t0_us=50.0 t1_us=102.0 evidence=proven
-GAP core_index=2 engine="aiv" fin_us=10.0 kind="ready_starved" lagging_producer="1" run_id=1 t0_us=20.0 t1_us=40.0 evidence=proven""",
+GAP core_index=0 engine="aic" kind="idle" run_id=1 t0_us=22.0 t1_us=30.0 evidence=measured
+GAP core_index=0 engine="aic" kind="idle" run_id=1 t0_us=50.0 t1_us=102.0 evidence=measured
+GAP core_index=2 engine="aiv" kind="idle" run_id=1 t0_us=20.0 t1_us=40.0 evidence=measured""",
     ),
     GoldenQuestion(
         "core",
@@ -135,8 +143,8 @@ ROW core_index=0 dispatch_us=11.0 end_us=22.0 finish_us=23.0 receive_us=11.5 row
 ROW core_index=0 dispatch_us=25.0 end_us=50.0 finish_us=51.0 receive_us=29.0 row_index=0 run_id=1 start_us=30.0 task_id="3" evidence=measured
 ROW core_index=0 dispatch_us=100.0 end_us=108.0 finish_us=109.0 receive_us=101.5 row_index=0 run_id=1 start_us=102.0 task_id="7" evidence=measured
 ROW core_index=0 dispatch_us=103.0 end_us=120.0 finish_us=121.0 receive_us=109.0 row_index=0 run_id=1 start_us=110.0 task_id="8" evidence=measured
-GAP core_index=0 engine="aic" fin_us=10.0 kind="ready_starved" lagging_producer="1" run_id=1 t0_us=22.0 t1_us=30.0 evidence=proven
-GAP core_index=0 engine="aic" fin_us=23.0 kind="ready_starved" lagging_producer="2" run_id=1 t0_us=50.0 t1_us=102.0 evidence=proven""",
+GAP core_index=0 engine="aic" kind="idle" run_id=1 t0_us=22.0 t1_us=30.0 evidence=measured
+GAP core_index=0 engine="aic" kind="idle" run_id=1 t0_us=50.0 t1_us=102.0 evidence=measured""",
     ),
     GoldenQuestion(
         "task",
@@ -169,7 +177,7 @@ DEP arg="0" consumer_dtype="" consumer_shape=[] consumer_start_offset="0" consum
         "why_late",
         "why_late",
         {"run_id": 1, "task_id": "7"},
-        """STALL dispatch_us=100.0 dispatch_wait_us=1.5 fin_detect_us=-6.0 gap_us=-4.0 ready_us=106.0 receive_us=101.5 run_id=1 start_us=102.0 start_wait_us=0.5 task_id="7" upstream_depth=1 evidence=measured""",
+        """STALL data_ready_to_start_us=-2.0 data_ready_us=104.0 dispatch_us=100.0 fin_observation_us=2.0 local_setup_us=0.5 observed_ready_to_start_us=-4.0 observed_ready_us=106.0 observed_to_dispatch_us=-6.0 post_dispatch_us=1.5 receive_us=101.5 run_id=1 start_us=102.0 task_id="7" upstream_depth=1 evidence=measured""",
     ),
     GoldenQuestion(
         "why_long",
@@ -187,7 +195,9 @@ DEP arg="0" consumer_dtype="" consumer_shape=[] consumer_start_offset="0" consum
         "scheduler",
         "scheduler",
         {"run_id": 1, "task_id": "3"},
-        """SCHED kind="dispatch" lane=0 loop_iter=0 run_id=1 t0_us=24.0 t1_us=26.0 tasks_processed=1 evidence=measured
+        """ANALYSIS adapter_version="pfdb/0.4.0" analysis_version="runtime/1" backend_revision="6e383fc57c12a8bd4dce045289b8b4f5d55a15f1" compatibility=[] family="scheduler" run_id=1 status="ok" evidence=proven
+SCHED_ROW core=0 head_us=5.0 run_id=1 tail_us=1.0 task_id="3" evidence=measured
+SCHED kind="dispatch" lane=0 loop_iter=0 run_id=1 t0_us=24.0 t1_us=26.0 tasks_processed=1 evidence=measured
 SCHED kind="complete" lane=0 loop_iter=0 run_id=1 t0_us=51.0 t1_us=53.0 tasks_processed=1 evidence=measured
 ORCH lane=0 run_id=1 submit_idx=0 t0_us=23.0 t1_us=25.0 task_id="3" evidence=measured""",
     ),
@@ -195,7 +205,7 @@ ORCH lane=0 run_id=1 submit_idx=0 t0_us=23.0 t1_us=25.0 task_id="3" evidence=mea
         "early_dispatch",
         "early_dispatch",
         {"run_id": 1, "task_id": "7"},
-        """EARLY proven_blocks=1 ready_us=106.0 run_id=1 status="full" task_id="7" tol_us=0.04 total_blocks=1 evidence=proven""",
+        """EARLY observed_ready_us=106.0 proven_blocks=1 run_id=1 status="full" task_id="7" tol_us=0.04 total_blocks=1 evidence=proven""",
     ),
     GoldenQuestion(
         "pmu",
@@ -267,13 +277,13 @@ MEMORY kernel="rmsnorm" limit_value=65536.0 run_id=1 space="Vec" usage=512.0 evi
         "args_dump_unavailable",
         "args_dump",
         {"run_id": 1},
-        """ARGS run_id=1 evidence=unavailable""",
+        """ANALYSIS family="args" reason="no registered artifact" run_id=1 status="unavailable" evidence=unavailable""",
     ),
     GoldenQuestion(
         "scope_stats_unavailable",
         "scope_stats",
         {"run_id": 1},
-        """SCOPE run_id=1 evidence=unavailable""",
+        """ANALYSIS family="scope" reason="no registered artifact" run_id=1 status="unavailable" evidence=unavailable""",
     ),
     GoldenQuestion(
         "bench_unavailable",
@@ -281,6 +291,12 @@ MEMORY kernel="rmsnorm" limit_value=65536.0 run_id=1 space="Vec" usage=512.0 evi
         {"run_id": 1},
         """BENCH max_us=13.0 mean_us=12.5 median_us=12.4 min_us=12.0 rounds=100 run_id=1 evidence=measured""",
     ),
+    GoldenQuestion(
+        "host_unavailable", "host", {"run_id": 1},
+        'ANALYSIS family="host" reason="no registered artifact" run_id=1 status="unavailable" evidence=unavailable',
+    ),
+
+
 ]
 
 

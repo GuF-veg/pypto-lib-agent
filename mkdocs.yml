@@ -129,6 +129,7 @@ nav:
       - Profiling commands and evidence: debug-and-tune/profiling-options.md
       - Agent profile feedback: debug-and-tune/agent-profile-feedback.md
       - Profile database (pfdb): debug-and-tune/profile-db.md
+      - pfdb runtime integration: debug-and-tune/pfdb-runtime-integration.md
       - Profile database dogfood feedback: debug-and-tune/profile-db-dogfood-feedback.md
       - Decode CSA pfdb tuning plan: debug-and-tune/decode-csa-pfdb-tuning-plan.md
       - Decode CSA optimization report: debug-and-tune/decode-csa-optimization-report.md

@@ -1,5 +1,11 @@
 # 面向 Agent 的 Profiling 与 Feedback 数据库系统 · 顶层设计
 
+> Current 0.4.0 behavior is anchored by the canonical
+> [runtime integration and compatibility ledger](../docs/debug-and-tune/pfdb-runtime-integration.md)
+> (schema 8, MCP schema 4). Earlier milestone descriptions below retain
+> historical contracts; copied algorithms, FIN-based idle classifications and
+> unregistered binary payloads have been superseded.
+
 > 状态：顶层设计稿（v0.3），待评审。
 > 本文是后续逐步实现的总蓝图：先定架构与数据模型，再按第 11 节的任务分解逐个落地。
 > 每个子任务都附带可自动验证的验收标准；文档语言为中文（经用户明确要求）。

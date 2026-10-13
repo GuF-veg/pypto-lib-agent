@@ -42,7 +42,7 @@ def timing(
         min_dispatch_us=None,
         min_receive_us=None,
         min_start_us=None,
-        max_end_us=None,
+        max_end_us=max_finish - 1 if max_finish is not None else None,
         max_finish_us=max_finish,
     )
 
@@ -116,7 +116,7 @@ def test_negative_fin_detect_is_early_signal() -> None:
 def test_unavailable_inputs() -> None:
     tasks = {"P": timing("P", max_finish=12.0)}
     rows = [slice_of("C", dispatch=13.0, receive=14.5, start=15.0, end=25.0)]
-    all_none = stall.StallDecomposition(None, None, None, None, None, None, None, None)
+    all_none = stall.StallDecomposition.unavailable()
     assert stall.decompose_stall([], ["P"], tasks, level=4) == all_none
     assert stall.decompose_stall(rows, ["P"], tasks, level=1) == all_none
     assert stall.decompose_stall(rows, ["P3"], tasks, level=4) == all_none

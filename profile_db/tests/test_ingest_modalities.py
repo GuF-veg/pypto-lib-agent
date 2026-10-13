@@ -65,7 +65,7 @@ def test_args_dump_raw_payload_never_stored(tmp_path: Path) -> None:
             ).fetchall()
         ]
         assert any("args_dump.json" in p for p in rel_paths)  # metadata registered
-        assert not any(p.endswith("args.bin") for p in rel_paths)  # payload never registered
+        assert any(p.endswith("args.bin") for p in rel_paths)  # registered for bounded slices
         # link mode: no store copies at all
         assert not (tmp_path / "store").exists()
     finally:

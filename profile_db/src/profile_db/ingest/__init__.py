@@ -39,9 +39,18 @@ from typing import Any, Sequence
 from profile_db.db import WriterGuard
 from profile_db.derived import derive_run
 from profile_db.errors import IngestError
-from profile_db.ingest import args_dump, deps, incore, scope_stats, source as source_mod, swimlane, text_evidence, writer
+from profile_db.ingest import (
+    args_dump,
+    deps,
+    scope_stats,
+    source as source_mod,
+    swimlane,
+    text_evidence,
+    writer,
+)
 
 _CHILD_TABLES = (
+    "analysis_snapshot",
     "artifact",
     "task",
     "task_row",
@@ -107,9 +116,7 @@ def _merge_task_timing(graph: deps.DepGraph, swimlane_run: swimlane.Swimlane) ->
         groups.setdefault(row.task_id, []).append(row)
     unknown = sorted(set(groups) - graph.task_ids)
     if unknown:
-        raise IngestError(
-            f"swimlane contains rows for tasks absent from deps.json: {unknown[:5]}"
-        )
+        raise IngestError(f"swimlane contains rows for tasks absent from deps.json: {unknown[:5]}")
     for task in graph.tasks:
         rows = groups.get(task.task_id)
         if not rows:
@@ -180,9 +187,7 @@ def ingest_capture(
     if program is None:
         program = src.program
     if program is None:
-        raise IngestError(
-            f"cannot determine program name; pass --program (source: {src.path})"
-        )
+        raise IngestError(f"cannot determine program name; pass --program (source: {src.path})")
     if captured_at is None:
         captured_at = src.captured_at
     if captured_at is not None:
@@ -207,12 +212,9 @@ def ingest_capture(
     # silently join the 'single' bucket and mix ranks, so it is refused.
     # Re-ingesting a capture already in the database is exempt — it inherits
     # its own label.
-    if rank_label is None and writer.find_run_by_records(
-        db.connection, artifacts[0]["sha256"]
-    ) is None:
+    if rank_label is None and writer.find_run_by_records(db.connection, artifacts[0]["sha256"]) is None:
         labelled = db.connection.execute(
-            "SELECT DISTINCT rank_label FROM run WHERE rank_label <> 'single' "
-            "ORDER BY rank_label"
+            "SELECT DISTINCT rank_label FROM run WHERE rank_label <> 'single' ORDER BY rank_label"
         ).fetchall()
         if labelled:
             raise IngestError(
@@ -225,9 +227,7 @@ def ingest_capture(
     # parser failure are capture facts, not reasons to discard the core trace.
     report_dir = src.path.parent / "report"
     perf_hints_path = report_dir / "perf_hints.log" if report_dir.is_dir() else None
-    memory_path = (
-        report_dir / "memory_after_AllocateMemoryAddr.txt" if report_dir.is_dir() else None
-    )
+    memory_path = report_dir / "memory_after_AllocateMemoryAddr.txt" if report_dir.is_dir() else None
     pmu_path = src.path / "pmu.csv"
     args_dump_path = src.path / "args_dump" / "args_dump.json"
     scope_stats_path = src.path / "scope_stats" / "scope_stats.jsonl"
@@ -266,22 +266,35 @@ def ingest_capture(
             parsed_optional[modality] = []
             modality_statuses.append(
                 _modality_status(
-                    modality, requested, request_value, source_mod.rel_path(src, path),
-                    path.stat().st_size, "parse_error", None, str(exc),
+                    modality,
+                    requested,
+                    request_value,
+                    source_mod.rel_path(src, path),
+                    path.stat().st_size,
+                    "parse_error",
+                    None,
+                    str(exc),
                 )
             )
             continue
         parsed_optional[modality] = rows
         modality_statuses.append(
             _modality_status(
-                modality, requested, request_value, source_mod.rel_path(src, path),
-                path.stat().st_size, "parsed", len(rows),
+                modality,
+                requested,
+                request_value,
+                source_mod.rel_path(src, path),
+                path.stat().st_size,
+                "parsed",
+                len(rows),
             )
         )
     for modality in ("l2_swimlane", "dep_gen"):
         requested = _request_bool(requests.get(modality))
         modality_statuses.append(
-            _modality_status(modality, requested, _request_value(requests.get(modality)), None, None, "core", 1)
+            _modality_status(
+                modality, requested, _request_value(requests.get(modality)), None, None, "core", 1
+            )
         )
     perf_hints_rows = parsed_optional["perf_hints"]
     memory_rows = parsed_optional["memory"]
@@ -296,9 +309,7 @@ def ingest_capture(
         ("scope_stats", scope_stats_path),
     ):
         if isinstance(path, Path) and path.is_file():
-            artifacts.append(
-                _artifact(kind, path, source_mod.rel_path(src, path), store_mode)
-            )
+            artifacts.append(_artifact(kind, path, source_mod.rel_path(src, path), store_mode))
 
     # runtime_cfg carries the artifact-declared orchestrator source: a
     # host-orchestrated capture splices a second clock domain, and µs
@@ -334,10 +345,13 @@ def ingest_capture(
     copied: list[Path] = []
 
     def _archive(target_dir: Path, name: str, artifact_path: Path) -> str:
-        dest = target_dir / name
-        shutil.copy2(artifact_path, dest)
-        copied.append(dest)
-        return f"store/{target_dir.name}/{name}"
+        dest = target_dir / (_sha256(artifact_path) + "-" + name)
+        if not dest.exists():
+            shutil.copy2(artifact_path, dest)
+            copied.append(dest)
+        elif _sha256(dest) != _sha256(artifact_path):
+            raise IngestError("archive contents changed")
+        return f"store/{target_dir.name}/{dest.name}"
 
     conn = db.connection
     with WriterGuard(db.path or ":memory:"):
@@ -352,9 +366,7 @@ def ingest_capture(
                     # Raw benchmarks are independent of the profiled capture.
                     # Preserve a previously ingested authoritative benchmark
                     # when the user merely re-ingests its DFX artifacts.
-                    child_tables = tuple(
-                        table for table in _CHILD_TABLES if table != "bench_stratum"
-                    )
+                    child_tables = tuple(table for table in _CHILD_TABLES if table != "bench_stratum")
                 writer.delete_run_rows(conn, run_id, child_tables)
                 writer.update_run(conn, run_id, meta)
             else:
@@ -366,9 +378,7 @@ def ingest_capture(
                 target_dir = db.path.parent / "store" / str(run_id)
                 target_dir.mkdir(parents=True, exist_ok=True)
                 for artifact in artifacts:
-                    artifact["rel_path"] = _archive(
-                        target_dir, Path(artifact["path"]).name, artifact["path"]
-                    )
+                    artifact["rel_path"] = _archive(target_dir, Path(artifact["path"]).name, artifact["path"])
 
             writer.insert_artifacts(
                 conn,
@@ -376,6 +386,22 @@ def ingest_capture(
                 writer.next_id(conn, "artifact", "artifact_id"),
                 [a for a in artifacts],
             )
+            from profile_db.ingest.analysis import collect, discover_optional, persist, register_paths
+            from profile_db.runtime_adapter.storage import base_dir
+
+            for artifact in artifacts:
+                location = base_dir(conn) / artifact["rel_path"] if copy else artifact["path"]
+                conn.execute(
+                    "UPDATE artifact SET locator=?, mtime_ns=? WHERE run_id=? AND kind=?",
+                    [
+                        os.path.relpath(location, base_dir(conn)),
+                        location.stat().st_mtime_ns,
+                        run_id,
+                        artifact["kind"],
+                    ],
+                )
+            register_paths(conn, run_id, discover_optional(src.path), copy=copy, copied=copied)
+            persist(conn, run_id, collect(conn, run_id))
             writer.insert_tasks(conn, run_id, _task_rows(graph))
             writer.insert_task_rows(conn, run_id, _task_row_rows(swimlane_run))
             writer.insert_edges(
@@ -407,6 +433,9 @@ def ingest_capture(
             writer.insert_args_dump_entries(conn, run_id, args_dump_rows)
             writer.insert_scope_stats_entries(conn, run_id, scope_stats_rows)
             writer.insert_modality_statuses(conn, run_id, modality_statuses)
+            from profile_db.ingest.analysis import sync_modality_statuses
+
+            sync_modality_statuses(conn, run_id)
             if bench_strata is not None:
                 conn.execute("DELETE FROM bench_sample WHERE run_id = ?", [run_id])
                 conn.execute("DELETE FROM bench_stratum WHERE run_id = ?", [run_id])
@@ -449,7 +478,9 @@ def ingest_capture(
         "tasks": len(graph.tasks),
         "task_rows": len(swimlane_run.rows),
         "edges": len(graph.edges),
-        "artifacts": len(artifacts),
+        "artifacts": int(
+            conn.execute("SELECT count(*) FROM artifact WHERE run_id=?", [run_id]).fetchone()[0]
+        ),
         "perf_hints": len(perf_hints_rows),
         "memory_entries": len(memory_rows),
         "pmu_counters": len(pmu_rows),
@@ -601,12 +632,7 @@ def _carry_forward(conn, run_id: int, meta: dict[str, Any]) -> None:
     if row is None:
         return
     existing = dict(zip(carried, row))
-    meta.update(
-        {
-            key: (meta.get(key) if meta.get(key) is not None else existing.get(key))
-            for key in carried
-        }
-    )
+    meta.update({key: (meta.get(key) if meta.get(key) is not None else existing.get(key)) for key in carried})
 
 
 def _task_rows(graph: deps.DepGraph) -> list[dict[str, Any]]:
@@ -653,65 +679,8 @@ def _task_row_rows(swimlane_run: swimlane.Swimlane) -> list[dict[str, Any]]:
     ]
 
 
-def ingest_incore(
-    db,
-    source: Path | str,
-    *,
-    run_id: int,
-) -> dict[str, Any]:
-    """Ingest an in-core collection root (``manifest_export.csv``) into the
-    ``incore_entry`` table, attached to an existing run. Raw traces are
-    never read, copied, or registered — only the manifest's status/paths
-    summary and the optional ``instr_metrics.json`` are kept. Idempotent:
-    re-ingesting replaces the run's incore rows in one transaction."""
-    root = Path(source)
-    manifest_path = root / "manifest_export.csv"
-    if not manifest_path.is_file():
-        raise IngestError(f"in-core collection is missing manifest_export.csv: {root}")
-    if db.connection.execute("SELECT 1 FROM run WHERE run_id = ?", [run_id]).fetchone() is None:
-        raise IngestError(f"run {run_id} does not exist; ingest the capture first")
+def ingest_incore(db, source, *, run_id):
+    """Compatibility alias for the generic existing-artifact attachment."""
+    from profile_db.ingest.analysis import attach
 
-    manifest_text = manifest_path.read_text(encoding="utf-8")
-    rows = incore.parse_manifest(manifest_text)
-    instr_path = root / "instr_metrics.json"
-    instr_text = instr_path.read_text(encoding="utf-8") if instr_path.is_file() else None
-    incore.merge_instr_metrics(rows, instr_text)
-
-    artifacts: list[dict[str, Any]] = [
-        _artifact("incore_manifest", manifest_path, manifest_path.name, "link")
-    ]
-    if instr_path.is_file():
-        artifacts.append(_artifact("instr_metrics", instr_path, instr_path.name, "link"))
-
-    conn = db.connection
-    with WriterGuard(db.path or ":memory:"):
-        conn.execute("BEGIN TRANSACTION")
-        try:
-            conn.execute("DELETE FROM incore_entry WHERE run_id = ?", [run_id])
-            # Replace this collection's artifact rows too, or a repeated
-            # attach would stack duplicate manifest entries in `inventory`.
-            marks = ", ".join("?" for _ in _INCORE_ARTIFACT_KINDS)
-            conn.execute(
-                f"DELETE FROM artifact WHERE run_id = ? AND kind IN ({marks})",
-                [run_id, *_INCORE_ARTIFACT_KINDS],
-            )
-            writer.insert_incore_entries(conn, run_id, rows)
-            writer.insert_artifacts(
-                conn,
-                run_id,
-                writer.next_id(conn, "artifact", "artifact_id"),
-                artifacts,
-            )
-            conn.execute("COMMIT")
-        except Exception as exc:
-            conn.execute("ROLLBACK")
-            if isinstance(exc, IngestError):
-                raise
-            raise IngestError(f"in-core ingest transaction failed: {exc}") from exc
-
-    return {
-        "run_id": run_id,
-        "incore_entries": len(rows),
-        "exported": sum(1 for row in rows if row.get("status") == "exported"),
-        "artifacts": len(artifacts),
-    }
+    return attach(db, source, run_id=run_id)

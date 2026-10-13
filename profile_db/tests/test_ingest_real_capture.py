@@ -306,7 +306,7 @@ def test_derived_stall_segments_sum_to_gap(db_file: Path) -> None:
                 preds[succ].append(pred)
         tasks = {}
         for row in db.connection.execute(
-            "SELECT task_id, max_finish_us FROM task WHERE run_id = 1"
+            "SELECT task_id, max_finish_us, max_end_us FROM task WHERE run_id = 1"
         ).fetchall():
             tasks[row[0]] = TaskTiming(
                 task_id=row[0],
@@ -318,7 +318,7 @@ def test_derived_stall_segments_sum_to_gap(db_file: Path) -> None:
                 min_dispatch_us=None,
                 min_receive_us=None,
                 min_start_us=None,
-                max_end_us=None,
+                max_end_us=row[2],
                 max_finish_us=row[1],
             )
         checked = 0

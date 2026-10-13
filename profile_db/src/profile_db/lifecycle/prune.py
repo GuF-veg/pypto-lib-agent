@@ -28,6 +28,9 @@ from profile_db.lifecycle.working_set import retained_run_ids
 # Every run-scoped child table (DESIGN.md 5.2) except trial/baseline,
 # which are memory and are deliberately kept.
 _RUN_TABLES = (
+    "analysis_snapshot",
+    "modality_status",
+    "bench_stratum",
     "artifact",
     "task",
     "task_row",

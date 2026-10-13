@@ -18,4 +18,5 @@ layers =
     profile_db.facts
     profile_db.render
     profile_db.schema
+    profile_db.runtime_adapter
     profile_db.errors

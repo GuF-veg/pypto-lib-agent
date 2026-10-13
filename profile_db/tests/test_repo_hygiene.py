@@ -126,6 +126,13 @@ LAYERS: dict[str, int] = {
     "profile_db.db": 3,
     "profile_db.facts": 2,
     "profile_db.schema": 1,
+    "profile_db.ingest.analysis": 4,
+    "profile_db.query.runtime": 4,
+    "profile_db.render.exports": 2,
+    "profile_db.runtime_adapter": 1,
+    "profile_db.runtime_adapter.storage": 1,
+    "profile_db.runtime_adapter.modalities": 1,
+    "profile_db.runtime_adapter.exports": 1,
     "profile_db.errors": 0,
     "profile_db._version": 0,
     "profile_db.task_ids": 0,
@@ -142,6 +149,7 @@ _SIBLING_PREFIXES = {
     "profile_db.query",
     "profile_db.render",
     "profile_db.lifecycle",
+    "profile_db.runtime_adapter",
 }
 
 

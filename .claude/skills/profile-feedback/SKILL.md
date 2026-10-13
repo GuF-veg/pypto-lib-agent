@@ -15,6 +15,11 @@ The full command reference is
 skill is the agent-facing quick map. Capture flags live in
 [Profiling Commands and Their Evidence](../../../docs/debug-and-tune/profiling-options.md).
 
+Runtime reuse, metric authority, compatibility and upgrade rules live in
+[pfdb runtime integration](../../../docs/debug-and-tune/pfdb-runtime-integration.md).
+Use attach for existing auxiliary artifacts and refresh for explicit reanalysis.
+pfdb never runs a capture, device or simulator collection.
+
 ## Who writes the verdict
 
 Query handlers never emit `win` / `regression` / a bottleneck label / "do
@@ -72,7 +77,7 @@ Do not bind the wrong `build_output/_jit_*` timestamp. Ingest the
 | Command | What it does |
 |---|---|
 | `pfdb ingest <dfx_outputs> [--program …] [--platform …] [--rank …] [--bench "min=… median=… mean=… max=… rounds=…"] [--bench-log <file>]… [--copy] [--no-prune]` | Turn one existing capture directory into a run. Link mode by default. Each `--bench-log` is one independent raw-sample stratum. Idempotent. Auto-prunes to the latest 3 runs after ingest. Pass the same `--program` for every capture of one kernel: the default name embeds the one-shot build-dir hash, and `compare` / `baseline diff` refuse runs whose program differs. |
-| `pfdb ingest-incore <collection> --run <id>` | Attach an in-core simulator collection (`manifest_export.csv`) to an existing run. Raw traces are never copied. |
+| `pfdb ingest-incore <collection> --run <id>` | Attach an in-core simulator collection (`manifest_export.csv`) to an existing run. Use generic attach --copy to archive registered files. |
 
 **Campaigns longer than three captures must pass `--no-prune`.** Auto-keep-3
 will drop history that is not a named baseline or an *active* (still
@@ -125,7 +130,7 @@ bound, `trial_id`. Run-scoped queries accept optional `--rank <label>`.
 - `pfdb query region --run-id <id> --t0-us … --t1-us … [--family …] [--core …]`
   — activity and gaps in a window.
 - `pfdb query why_sparse --run-id <id> [--stored-band N] | [--band N [--bands N]] [--engine …]`
-  — deterministic reason a band is empty. Do not mix the two coordinates.
+  — official ready/idle/overhead counter integrals in a band. Do not mix the two coordinates.
 - `pfdb query core --run-id <id> --core N` — one core's rows and idle gaps.
 - `pfdb query idle_window --run-id <id> --after-task-id <producer> [--until-task-id <consumer>] [--engine aic|aiv]`
   — occupancy of one engine between a producer finishing and a later
@@ -151,9 +156,9 @@ bound, `trial_id`. Run-scoped queries accept optional `--rank <label>`.
 **Z4 — micro attribution** (level ≥ 2; `unavailable` on level-1 means the
 capture does not carry FIN/dispatch, not "this task had no wait"):
 
-- `pfdb query why_late --run-id <id> --task-id <t>` — FIN→dispatch→receive→start.
-  When `gap_us` is present, `fin_detect_us + dispatch_wait_us + start_wait_us`
-  equals it exactly.
+- `pfdb query why_late --run-id <id> --task-id <t>` — end→FIN→dispatch→receive→start.
+  Separate data_ready_us from observed_ready_us and preserve signed
+  observed_to_dispatch_us; segment definitions live in the runtime contract.
 - `pfdb query why_long --run-id <id> --task-id <t>` — busy time vs its family.
 - `pfdb query rows --run-id <id> --task-id <t>` — physical row-level timings.
 - `pfdb query scheduler --run-id <id> --task-id <t>` — scheduler/orchestrator
@@ -181,6 +186,15 @@ capture does not carry FIN/dispatch, not "this task had no wait"):
 - `pfdb query args_dump --run-id <id> [--task-id t] [--stage s]`.
 - `pfdb query scope_stats --run-id <id> [--site name]`.
 - `pfdb query bench --run-id <id>` — unprofiled PYPTO_BENCH summary.
+
+For the new views, use scheduler summary/phases/cores/rows, deps
+reduced/dataflow/wait, host summary/rounds/tree/cpu, and scope summary/records.
+Generic attach registers existing auxiliary artifacts; refresh explicitly
+rebuilds analyses. Inventory --analysis-details includes backend/input/function
+provenance. Argument values require --view values --seq N; in-core events
+require --view events --kernel NAME. Both page with offset/limit (default 64,
+max 256). File exports use render --file-format html|perfetto; consult the
+runtime integration ledger for supported combinations and metric definitions.
 
 ## Optional modalities that look "dark"
 

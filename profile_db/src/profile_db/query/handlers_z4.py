@@ -94,7 +94,7 @@ def _timing_map(conn, run_id: int, pred_ids: list[str]) -> dict[str, TaskTiming]
     marks = ", ".join("?" for _ in pred_ids)
     rows = common.q(
         conn,
-        f"SELECT task_id, max_finish_us, early_dispatch_flag FROM task "
+        f"SELECT task_id, max_finish_us, early_dispatch_flag, max_end_us FROM task "
         f"WHERE run_id = ? AND task_id IN ({marks})",
         [run_id, *pred_ids],
     )
@@ -109,7 +109,7 @@ def _timing_map(conn, run_id: int, pred_ids: list[str]) -> dict[str, TaskTiming]
             min_dispatch_us=None,
             min_receive_us=None,
             min_start_us=None,
-            max_end_us=None,
+            max_end_us=r[3],
             max_finish_us=r[1],
         )
         for r in rows
@@ -166,14 +166,17 @@ def why_late(conn, params: WhyLateParams) -> list[Fact]:
             common.fields(
                 run_id=run_id,
                 task_id=params.task_id,
-                ready_us=common.us(dec.ready_us),
+                data_ready_us=common.us(dec.data_ready_us),
+                observed_ready_us=common.us(dec.ready_us),
                 dispatch_us=common.us(dec.dispatch_us),
                 receive_us=common.us(dec.receive_us),
                 start_us=common.us(dec.start_us),
-                fin_detect_us=common.us(dec.fin_detect_us),
-                dispatch_wait_us=common.us(dec.dispatch_wait_us),
-                start_wait_us=common.us(dec.start_wait_us),
-                gap_us=common.us(dec.gap_us),
+                fin_observation_us=common.us(dec.fin_observation_us),
+                observed_to_dispatch_us=common.us(dec.fin_detect_us),
+                post_dispatch_us=common.us(dec.dispatch_wait_us),
+                local_setup_us=common.us(dec.start_wait_us),
+                observed_ready_to_start_us=common.us(dec.gap_us),
+                data_ready_to_start_us=common.us(dec.start_us - dec.data_ready_us),
                 upstream_depth=depth,
             ),
             Evidence.MEASURED,
@@ -284,6 +287,10 @@ def rows(conn, params: RowsParams) -> list[Fact]:
     SchedulerParams,
 )
 def scheduler(conn, params: SchedulerParams) -> list[Fact]:
+    from profile_db.query import runtime
+
+    if params.task_id is None:
+        return runtime.scheduler(conn, params)
     run_id = params.run_id
     task = common.task_row(conn, run_id, params.task_id)
     if task is None:
@@ -343,7 +350,7 @@ def scheduler(conn, params: SchedulerParams) -> list[Fact]:
         return [
             Fact("SCHED", common.fields(run_id=run_id, task_id=params.task_id), Evidence.UNAVAILABLE)
         ]
-    return facts
+    return [*runtime.scheduler(conn, params), *facts]
 
 
 @register(
@@ -375,12 +382,17 @@ def early(conn, params: EarlyDispatchParams) -> list[Fact]:
         if pred not in seen:
             seen.add(pred)
             deduped.append((source, pred))
+    from profile_db.runtime_adapter.storage import read_snapshot
+
+    eligibility_doc = read_snapshot(conn, run_id, "deps")
+    eligible = (eligibility_doc.get("payload") or {}).get("eligibility", {}).get(params.task_id)
     proof = early_dispatch.prove(
         _rows_of(conn, run_id, params.task_id),
         deduped,
         _timing_map(conn, run_id, pred_ids),
         freq,
         level,
+        eligible,
     )
     return [
         Fact(
@@ -389,7 +401,8 @@ def early(conn, params: EarlyDispatchParams) -> list[Fact]:
                 run_id=run_id,
                 task_id=params.task_id,
                 status=proof.status,
-                ready_us=common.us(proof.ready_us),
+                structurally_eligible=eligible,
+                observed_ready_us=common.us(proof.ready_us),
                 tol_us=common.us(proof.tol_us),
                 proven_blocks=proof.proven_blocks,
                 total_blocks=proof.total_blocks,

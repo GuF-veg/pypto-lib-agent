@@ -48,12 +48,21 @@ class ImageRef:
 
 
 @dataclass(frozen=True)
+class FileRef:
+    """An HTML or Perfetto export reference."""
+
+    kind: str
+    path: str
+
+
+@dataclass(frozen=True)
 class Result:
-    """One query answer: facts + (render) images + the budget flag."""
+    """One query answer: facts, image/file references, and the budget flag."""
 
     facts: tuple[Fact, ...]
     images: tuple[ImageRef, ...]
     truncated: bool
+    files: tuple[FileRef, ...] = ()
 
 
 class ProfileDB(_ProfileDB):
@@ -79,21 +88,27 @@ class ProfileDB(_ProfileDB):
 
     def ingest_incore(self, source, *, run_id: int) -> dict[str, Any]:
         """Attach an in-core collection (``manifest_export.csv``) to an
-        existing run; raw traces are never copied. Returns the summary."""
+        existing run; delegates to generic existing-artifact attachment. Returns the summary."""
         from profile_db.ingest import ingest_incore
 
         return ingest_incore(self, source, run_id=run_id)
 
-    def query(
-        self, name: str, *, budget_bytes: int | None = None, **params: Any
-    ) -> Result:
+    def attach(self, source, *, run_id: int, copy: bool = False):
+        from profile_db.ingest.analysis import attach
+
+        return attach(self, source, run_id=run_id, copy=copy)
+
+    def refresh(self, *, run_id: int, source=None):
+        from profile_db.ingest.analysis import refresh
+
+        return refresh(self, run_id=run_id, source=source)
+
+    def query(self, name: str, *, budget_bytes: int | None = None, **params: Any) -> Result:
         """Run a registered query and return its Result envelope.
 
         ``budget_bytes=None`` uses the query's registered default.
         """
-        output = execute_query(
-            self.connection, name, params, budget_bytes=budget_bytes
-        )
+        output = execute_query(self.connection, name, params, budget_bytes=budget_bytes)
         return Result(facts=tuple(output.facts), images=(), truncated=output.truncated)
 
     def render(
@@ -108,6 +123,9 @@ class ProfileDB(_ProfileDB):
         core_index: int | None = None,
         image_max_bytes: int | None = None,
         cache_max_bytes: int | None = None,
+        format: str = "png",
+        kernel: str | None = None,
+        run_ids: list[int] | None = None,
     ) -> Result:
         """Render one swimlane view (R0–R3) and return its Result.
 
@@ -124,10 +142,52 @@ class ProfileDB(_ProfileDB):
 
         if render_dir is None:
             if self.path is None:
-                raise RenderError(
-                    "render_dir is required when rendering from an in-memory database"
-                )
+                raise RenderError("render_dir is required when rendering from an in-memory database")
             render_dir = self.path.parent / "render"
+        if format != "png" or kind in ("deps", "scope", "host", "incore", "merged"):
+            from profile_db.render.exports import render_export
+
+            try:
+                if task_id is not None:
+                    from profile_db.task_ids import normalize_task_id
+
+                    task_id = normalize_task_id(task_id).canonical
+                meta = render_export(
+                    self.connection,
+                    run_id,
+                    kind,
+                    format,
+                    render_dir,
+                    dict(
+                        t0_us=t0_us,
+                        t1_us=t1_us,
+                        task_id=task_id,
+                        core_index=core_index,
+                        kernel=kernel,
+                        run_ids=run_ids,
+                    ),
+                    cache_max_bytes if cache_max_bytes is not None else DEFAULT_CACHE_MAX_BYTES,
+                    image_max_bytes if image_max_bytes is not None else DEFAULT_CACHE_MAX_BYTES,
+                )
+            except (
+                QueryError,
+                ImportError,
+                AttributeError,
+                ValueError,
+                TypeError,
+                KeyError,
+                IndexError,
+                RuntimeError,
+                OSError,
+            ) as exc:
+                return Result(
+                    (Fact("FILE", dict(run_id=run_id, kind=kind, reason=str(exc)), Evidence.UNAVAILABLE),),
+                    (),
+                    False,
+                )
+            return Result(
+                (Fact("FILE", meta, Evidence.MEASURED),), (), False, (FileRef(kind=kind, path=meta["path"]),)
+            )
         rendered = render_image(
             self.connection,
             run_id,
@@ -441,6 +501,8 @@ def _compare_result(comparison: Mapping[str, Any]) -> Result:
         "run_b": comparison["run_b"],
         "program": comparison.get("program"),
         "compatible": comparison.get("compatible", True),
+        "profile_compatible": comparison.get("profile_compatible", True),
+        "reasons": comparison.get("reasons", []),
     }
     for key in ("baseline", "baseline_run_id"):
         if key in comparison:

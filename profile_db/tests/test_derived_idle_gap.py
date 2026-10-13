@@ -46,9 +46,9 @@ def test_dispatch_wait_scenario(db_file: Path) -> None:
     gap = gaps[0]
     assert gap["core_index"] == 0
     assert gap["t0_us"] == 8.0 and gap["t1_us"] == 30.0
-    assert gap["kind"] == "dispatch_wait"
-    assert gap["ready_task_ids"] == ("2",)
-    assert gap["evidence"] == "proven"
+    assert gap["kind"] == "idle"
+    assert gap["ready_task_ids"] is None
+    assert gap["evidence"] == "measured"
 
 
 def test_dispatch_wait_ready_boundary_is_strict(db_file: Path) -> None:
@@ -68,9 +68,9 @@ def test_dispatch_wait_ready_boundary_is_strict(db_file: Path) -> None:
     )
     gaps = _gaps(result)
     assert len(gaps) == 1
-    assert gaps[0]["kind"] == "unknown"
+    assert gaps[0]["kind"] == "idle"
     assert gaps[0]["ready_task_ids"] is None
-    assert gaps[0]["evidence"] == "unproven"
+    assert gaps[0]["evidence"] == "measured"
 
 
 def test_ready_starved_scenario(db_file: Path) -> None:
@@ -100,9 +100,9 @@ def test_ready_starved_scenario(db_file: Path) -> None:
     assert len(gaps) == 1
     gap = gaps[0]
     assert (gap["core_index"], gap["t0_us"], gap["t1_us"]) == (0, 6.0, 40.0)
-    assert gap["kind"] == "ready_starved"
-    assert gap["ready_task_ids"] == ({"task_id": "P4", "fin_us": 4.5},)
-    assert gap["evidence"] == "proven"
+    assert gap["kind"] == "idle"
+    assert gap["ready_task_ids"] is None
+    assert gap["evidence"] == "measured"
 
 
 def test_drain_tail_scenario(db_file: Path) -> None:
@@ -146,8 +146,8 @@ def test_unknown_scenario(db_file: Path) -> None:
     )
     gaps = _gaps(result)
     assert len(gaps) == 1
-    assert gaps[0]["kind"] == "unknown"
-    assert gaps[0]["evidence"] == "unproven"
+    assert gaps[0]["kind"] == "idle"
+    assert gaps[0]["evidence"] == "measured"
     assert gaps[0]["ready_task_ids"] is None
 
 
@@ -170,8 +170,8 @@ def test_level1_placeholders_never_interpreted(db_file: Path) -> None:
     )
     gaps = _gaps(result)
     assert len(gaps) == 1
-    assert gaps[0]["kind"] == "unknown"
-    assert gaps[0]["evidence"] == "unproven"
+    assert gaps[0]["kind"] == "idle"
+    assert gaps[0]["evidence"] == "measured"
 
 
 @pytest.mark.parametrize("split", [14.999999, 15.000001, 14.5])

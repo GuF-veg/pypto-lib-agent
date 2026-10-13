@@ -47,7 +47,7 @@ class OverviewParams(RunIdParams):
 
 
 class InventoryParams(RunIdParams):
-    pass
+    analysis_details: bool = Field(default=False, description="include full analysis provenance and function fingerprints")
 
 
 class DensityParams(RunIdParams):
@@ -147,7 +147,23 @@ class TasksParams(RunIdParams):
     )
 
 
-class DepsParams(TaskIdParams):
+class DepsParams(RunIdParams):
+    task_id: str | None = None
+    view: str = Field(default="direct", pattern="^(direct|reduced|dataflow|wait)$")
+    windows: list[int] = Field(default=[64, 128, 256], max_length=8)
+
+    @field_validator("task_id")
+    @classmethod
+    def _optional_task(cls, value):
+        return normalize_task_id(value).canonical if value is not None else None
+
+    @field_validator("windows")
+    @classmethod
+    def _windows(cls, value):
+        if not value or any(n < 1 or n > 65536 for n in value):
+            raise ValueError("WAIT windows must lie in 1..65536")
+        return value
+
     direction: str = Field(default="out", pattern="^(in|out|all)$")
 
 
@@ -168,8 +184,15 @@ class RowsParams(TaskIdParams):
     pass
 
 
-class SchedulerParams(TaskIdParams):
-    pass
+class SchedulerParams(RunIdParams):
+    task_id: str | None = None
+    view: str = Field(default="summary", pattern="^(summary|phases|cores|rows)$")
+
+    @field_validator("task_id")
+    @classmethod
+    def _optional_task(cls, value):
+        return normalize_task_id(value).canonical if value is not None else None
+
 
 
 class EarlyDispatchParams(TaskIdParams):
@@ -197,9 +220,19 @@ class MemoryParams(RunIdParams):
 
 class IncoreParams(RunIdParams):
     kernel: str | None = Field(default=None, description="restrict to one kernel")
+    view: str = Field(default="summary", pattern="^(summary|events)$")
+    pipe: str | None = None
+    t0_us: float | None = None
+    t1_us: float | None = None
+    offset: int = Field(default=0, ge=0)
+    limit: int = Field(default=64, ge=1, le=256)
 
 
 class ArgsDumpParams(RunIdParams):
+    view: str = Field(default="metadata", pattern="^(metadata|values)$")
+    seq: int | None = Field(default=None, ge=0)
+    offset: int = Field(default=0, ge=0)
+    limit: int = Field(default=64, ge=1, le=256)
     task_id: str | None = Field(default=None, description="restrict to one task")
     stage: str | None = Field(default=None, description="restrict to one stage")
 
@@ -209,7 +242,18 @@ class ArgsDumpParams(RunIdParams):
         return normalize_task_id(value).canonical if value is not None else None
 
 
+class HostParams(RunIdParams):
+    view: str = Field(default="summary", pattern="^(summary|rounds|tree|cpu)$")
+    pid: int | None = None
+    inv: int | None = None
+    hid: str | None = None
+    offset: int = Field(default=0, ge=0)
+    limit: int = Field(default=64, ge=1, le=256)
+
+
 class ScopeStatsParams(RunIdParams):
+    view: str = Field(default="summary", pattern="^(summary|records)$")
+    ring: int | None = None
     site: str | None = Field(default=None, description="restrict to one site")
 
 

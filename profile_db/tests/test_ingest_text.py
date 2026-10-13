@@ -181,4 +181,4 @@ def test_copy_mode_archives_text_evidence(tmp_path: Path, db_file: Path) -> None
         "memory_after_AllocateMemoryAddr.txt",
         "pmu.csv",
     ):
-        assert (store / name).is_file(), name
+        assert list(store.glob("*-" + name)), name

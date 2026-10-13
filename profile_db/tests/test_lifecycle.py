@@ -39,6 +39,9 @@ def _load_run(db: ProfileDB, run_id: int, *, program: str = "synth", bench_mean_
         program=program,
         bench_mean_us=bench_mean_us,
     )
+    from fixtures.synth_derived import runtime_snapshots
+
+    runtime_snapshots(db.connection, run_id, None)
 
 
 def _distinct_capture(root: Path, offset: int) -> Path:

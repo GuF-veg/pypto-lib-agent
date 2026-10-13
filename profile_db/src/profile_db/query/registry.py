@@ -151,6 +151,38 @@ def execute(
     _validate_rank(conn, model)
     try:
         facts = spec.handler(conn, model)
+        if hasattr(model, "run_id"):
+            from profile_db.runtime_adapter.storage import read_snapshot
+            from profile_db.facts import Evidence
+
+            doc = read_snapshot(conn, model.run_id, "critical_path")
+            if doc["status"] != "ok":
+                unavailable = Fact(
+                    "ANALYSIS",
+                    dict(
+                        run_id=model.run_id,
+                        family="critical_path",
+                        status=doc["status"],
+                        reason=doc.get("reason", "analysis unavailable"),
+                    ),
+                    Evidence.UNAVAILABLE,
+                )
+                if (
+                    name == "critical_path"
+                    or (name == "why_sparse" and doc["status"] == "stale")
+                    or (name == "idle_window" and model.until_task_id is None)
+                    or (name == "tasks" and model.on_cpm is not None)
+                ):
+                    facts = [unavailable]
+                else:
+                    keys = {"cpm_us", "on_cpm_observed", "on_cpm_static"}
+                    if any(keys.intersection(f.fields) for f in facts):
+                        facts = [
+                            Fact(f.rec, {k: v for k, v in f.fields.items() if k not in keys}, f.evidence)
+                            for f in facts
+                        ]
+                        facts.append(unavailable)
+
     except PfdbError:
         raise
     except Exception as exc:
@@ -169,9 +201,7 @@ def _validate_rank(conn, model: BaseModel) -> None:
     """
     if not hasattr(model, "run_id") or getattr(model, "rank", None) is None:
         return
-    row = conn.execute(
-        "SELECT rank_label FROM run WHERE run_id = ?", [getattr(model, "run_id")]
-    ).fetchone()
+    row = conn.execute("SELECT rank_label FROM run WHERE run_id = ?", [getattr(model, "run_id")]).fetchone()
     if row is not None and row[0] != getattr(model, "rank"):
         raise QueryError(
             f"run {getattr(model, 'run_id')} belongs to rank {row[0]!r}, "

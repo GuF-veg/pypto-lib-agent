@@ -343,6 +343,7 @@ def chip_records(level: int = 1, *, schema: str = "legacy") -> dict[str, Any]:
 
 def deps_doc() -> dict[str, Any]:
     return {
+        "runtime": "tensormap_and_ringbuffer",
         "tasks": _deps_tasks(),
         "edges": [
             _edge("4294967297", "4294967298", T_RMS, [16, 8192], "BFLOAT16"),

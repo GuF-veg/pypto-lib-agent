@@ -231,8 +231,8 @@ def test_copy_mode_archives_files(tmp_path: Path, db_file: Path) -> None:
     assert report["store_mode"] == "copy"
     store = db_file.parent / "store" / str(report["run_id"])
     assert store.is_dir()
-    assert (store / "chip_swimlane_records.json").is_file()
-    assert (store / "deps.json").is_file()
+    assert list(store.glob("*-chip_swimlane_records.json"))
+    assert list(store.glob("*-deps.json"))
     db = ProfileDB(db_file)
     try:
         rels = {
@@ -243,11 +243,9 @@ def test_copy_mode_archives_files(tmp_path: Path, db_file: Path) -> None:
         }
     finally:
         db.close()
-    assert rels == {
-        f"store/{report['run_id']}/chip_swimlane_records.json",
-        f"store/{report['run_id']}/deps.json",
-        f"store/{report['run_id']}/name_map_Qwen3Decode_20260825_101508.json",
-    }
+    expected = {f"store/{report['run_id']}/{hashlib.sha256(p.read_bytes()).hexdigest()}-{p.name}"
+                for p in source.iterdir() if p.name == "deps.json" or p.name == "chip_swimlane_records.json" or p.name.startswith("name_map")}
+    assert rels == expected
 
 
 def test_malformed_records_rejected_cleanly(tmp_path: Path, db_file: Path) -> None:
@@ -371,7 +369,7 @@ def test_level4_converter_join_path(tmp_path: Path, db_file: Path) -> None:
             "SELECT kind, CAST(ready_task_ids AS VARCHAR), evidence FROM idle_gap "
             "WHERE run_id = 1"
         ).fetchone()
-        assert gap == ("dispatch_wait", '["4294967299"]', "proven")
+        assert gap == ("drain_tail", None, "proven")
         # observed/static paths match the level-1 shape (the µs join does
         # not move start/end relative to the shared base in this fixture)
         observed = conn.execute(

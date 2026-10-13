@@ -25,6 +25,7 @@ lifetime of its session and exits it when done.
 from __future__ import annotations
 
 import base64
+import json
 import sys
 from pathlib import Path
 from typing import Any, Literal
@@ -41,7 +42,7 @@ from profile_db.query import get_query, list_queries
 
 # Bumped on any breaking change to the tool surface; published with the
 # release (semantic versioning guards the contract).
-TOOL_SCHEMA_VERSION = "3"
+TOOL_SCHEMA_VERSION = "4"
 
 # Query registry names -> MCP tool names (only ``runs_list`` is renamed).
 _TOOL_RENAMES = {"runs_list": "list_runs"}
@@ -52,7 +53,10 @@ class RenderToolParams(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["whole", "window", "task", "core"]
+    kind: Literal["whole", "window", "task", "core", "deps", "scope", "host", "incore", "merged"]
+    format: Literal["png", "html", "perfetto"] = "png"
+    kernel: str | None = None
+    run_ids: list[int] | None = None
     run_id: int
     t0_us: float | None = Field(default=None, description="window start (µs)")
     t1_us: float | None = Field(default=None, description="window end (µs)")
@@ -159,7 +163,22 @@ class NoteToolParams(BaseModel):
 
 
 # tool suffix -> (params model, description, writes?)
+class AttachToolParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run_id: int
+    source: str
+    copy: bool = False
+
+
+class RefreshToolParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run_id: int
+    source: str | None = None
+
+
 _LIFECYCLE_TOOLS: dict[str, tuple[type[BaseModel], str, bool]] = {
+    "attach": (AttachToolParams, "attach existing profiling artifacts to a run", True),
+    "refresh": (RefreshToolParams, "explicitly refresh persisted runtime analyses", True),
     "compare": (
         CompareToolParams,
         "verify: neutral before/after deltas between two runs (refuses "
@@ -257,6 +276,9 @@ def _lifecycle_result(db: ProfileDB, suffix: str, arguments: dict[str, Any]) -> 
     """Run one lifecycle tool and render its answer as facts text."""
     model_cls, _description, _writes = _LIFECYCLE_TOOLS[suffix]
     model = model_cls.model_validate(arguments)
+    if suffix in ("attach", "refresh"):
+        result = db.attach(model.source, run_id=model.run_id, copy=model.copy) if suffix == "attach" else db.refresh(run_id=model.run_id, source=model.source)
+        return json.dumps(result, sort_keys=True)
     if suffix == "compare":
         budget = 16384 if model.family is not None else 4096
         return format_result(
@@ -339,6 +361,9 @@ async def _dispatch(db: ProfileDB, name: str, arguments: dict[str, Any]):
             t1_us=model.t1_us,
             task_id=model.task_id,
             core_index=model.core_index,
+            format=model.format,
+            kernel=model.kernel,
+            run_ids=model.run_ids,
         )
         blocks: list[Any] = [TextContent(type="text", text=format_result(result, "facts"))]
         for image in result.images:

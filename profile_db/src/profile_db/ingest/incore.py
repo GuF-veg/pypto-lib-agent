@@ -7,15 +7,7 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 
-"""in-core collection parser (DESIGN.md T9).
-
-Reads the in-core collection's authoritative ``manifest_export.csv`` and
-returns one row per exported function: ``kernel`` (func), ``status``,
-``export_dir``, and a ``metrics`` JSON of the CSV's summary columns.
-Raw traces (``trace.clean.json``, ``visualize_data.bin``, per-core CSVs)
-are never read, copied, or registered — only their counts and the
-optional ``instr_metrics.json`` summary (cycles by pipeline) are kept.
-"""
+"""In-core manifest metadata; existing traces are registered by generic attachment."""
 
 from __future__ import annotations
 

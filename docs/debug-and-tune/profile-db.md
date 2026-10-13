@@ -29,6 +29,35 @@ returned facts. This page is the complete reference; the skill is the
 agent-facing quick map. Both share one contract: the database returns
 evidence-tagged facts and never a tuning verdict.
 
+## Runtime analysis contract
+
+Version 0.4.0 reuses runtime analysis and stores provenance, with explicit
+offline attachment/refresh. The authoritative inventory, metric definitions,
+compatibility guards and upgrade procedure are in
+[pfdb runtime integration](pfdb-runtime-integration.md).
+Only host adds a query family; existing questions gain bounded views.
+
+~~~bash
+pfdb attach existing_artifacts/ --run-id 1       # existing files only
+pfdb refresh --run-id 1                        # explicit reanalysis
+pfdb query inventory --run-id 1 --analysis-details
+pfdb query scheduler --run-id 1 --view phases
+pfdb query deps --run-id 1 --view wait
+pfdb query host --run-id 1 --view tree --limit 64
+pfdb query args_dump --run-id 1 --view values --seq 0 --limit 64
+pfdb query scope_stats --run-id 1 --view summary
+pfdb query incore --run-id 1 --view events --kernel op --limit 64
+pfdb render scope --run 1 --file-format html
+pfdb render whole --run 1 --file-format perfetto
+~~~
+
+Schema migration retains measurements and lifecycle memory. Until explicit
+refresh, legacy path metrics/flags and scheduler-derived attribution are stale.
+Queries read saved analysis; bounded values/events read registered immutable files.
+Attach/refresh require a writer, while query/render keep read-only database access.
+The integration ledger lists remaining views and exports; all interfaces use the
+same parameter models and budgets.
+
 ## Install
 
 ```bash
@@ -62,9 +91,9 @@ pfdb ingest-incore build_output/<case>/kernel_insight_all_funcs_<ts> --run 1
 Optional evidence is auto-discovered when present beside/inside the capture:
 `report/perf_hints.log`, `report/memory_after_AllocateMemoryAddr.txt`,
 `pmu.csv`, `args_dump/args_dump.json`, and
-`scope_stats/scope_stats.jsonl`. Raw payloads (`args.bin`, in-core
-`trace.clean.json` / `visualize_data.bin`) are never copied or registered —
-only their metadata and metrics enter the database.
+`scope_stats/scope_stats.jsonl`. Payload binaries and existing in-core JSON traces are registered by digest/location.
+Link is default; explicit copy archives registered files. Only metadata and
+summaries enter database rows; values/events are bounded registered-file reads.
 
 Both capture generations are accepted: the current scheduler schema
 (`scheduler_tasks` + `scheduler_records.streams` with per-record metrics,
@@ -148,8 +177,7 @@ same-named `.manifest.json` (sha256, size, µs/px, legend, generator and
 matplotlib versions, run fingerprint). Repeated requests with identical
 parameters hit the cache and are byte-identical; the cache key includes the
 generator version (a renderer upgrade invalidates old entries as one unit)
-and the run's data fingerprint (the records-file sha256 that defines run
-identity), so two databases sharing one render directory — or a rebuilt
+and the run's data fingerprint (registered artifact digests plus saved analysis), so two databases sharing one render directory — or a rebuilt
 database reusing run ids — never serve another capture's cached image. A
 cached PNG whose bytes no longer match its manifest sha256 is dropped and
 re-rendered.

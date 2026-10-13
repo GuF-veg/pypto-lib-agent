@@ -1,5 +1,11 @@
 # profile_db — 面向 Agent 的 Profiling/Feedback 数据库
 
+> Current 0.4.0 behavior is anchored by the canonical
+> [runtime integration and compatibility ledger](../docs/debug-and-tune/pfdb-runtime-integration.md)
+> (schema 8, MCP schema 4). Earlier milestone descriptions below retain
+> historical contracts; copied algorithms, FIN-based idle classifications and
+> unregistered binary payloads have been superseded.
+
 查询优先、数据可弃的 profiling 工作台（定位见 DESIGN.md 1.2）：
 
 - profiling 数据强时效性：每轮算子修改后旧数据大多失去价值，仅余对比之用；

@@ -108,8 +108,7 @@ def sparse_regions(conn, params: SparseRegionsParams) -> list[Fact]:
     rows = common.q(conn, sql, args)
     facts: list[Fact] = []
     for band_idx, t0, t1, engine, total, busy in rows:
-        kind, payload = _sparse_kind(conn, run_id, engine, t0, t1)
-        evidence = Evidence.PROVEN if kind != "unknown" else Evidence.UNPROVEN
+        evidence = Evidence.MEASURED
         fields = common.fields(
             run_id=run_id,
             # Storage band index (5 µs granularity), NOT a density display
@@ -121,47 +120,9 @@ def sparse_regions(conn, params: SparseRegionsParams) -> list[Fact]:
             engine=engine,
             total_cores=total,
             busy_cores=busy,
-            kind=kind,
+            kind="sparse",
         )
-        if kind == "dispatch_wait":
-            fields["ready_task_ids"] = payload
-        elif kind == "ready_starved":
-            fields["lagging_producer"], fields["fin_us"] = payload[0], common.us(payload[1])
         facts.append(Fact("SPARSE", fields, evidence))
     if not facts:
         return [Fact("SPARSE", common.fields(run_id=run_id), Evidence.UNAVAILABLE)]
     return facts
-
-
-def _sparse_kind(conn, run_id: int, engine: str, t0: float, t1: float):
-    """Classify one sparse band window from the derived idle-gap rows.
-
-    Returns ``(kind, payload)`` following the 6.3 priority: dispatch_wait
-    (ready task ids), then ready_starved (lagging producer id + fin_us),
-    then unknown."""
-    gaps = common.q(
-        conn,
-        "SELECT kind, CAST(ready_task_ids AS VARCHAR) FROM idle_gap "
-        "WHERE run_id = ? AND engine = ? AND t0_us < ? AND t1_us > ?",
-        [run_id, engine, t1, t0],
-    )
-    ready_ids: list[str] = []
-    lagging: list[tuple[str, float]] = []
-    has_starved = False
-    for kind, payload_text in gaps:
-        if kind == "dispatch_wait":
-            for task_id in common.json_cell(payload_text) or []:
-                if str(task_id) not in ready_ids:
-                    ready_ids.append(str(task_id))
-        elif kind == "ready_starved":
-            has_starved = True
-            for item in common.json_cell(payload_text) or []:
-                if isinstance(item, dict) and "task_id" in item:
-                    lagging.append((str(item["task_id"]), float(item.get("fin_us", 0.0))))
-    if ready_ids:
-        ready_ids.sort(key=common.num_key)
-        return "dispatch_wait", ready_ids
-    if has_starved and lagging:
-        lagging.sort(key=lambda kv: (-kv[1], common.num_key(kv[0])))
-        return "ready_starved", lagging[0]
-    return "unknown", None

@@ -42,7 +42,7 @@ _PNG_SUFFIX = ".png"
 # Render identity. It participates in the cache key so a style/layout bump
 # invalidates every cached entry as one unit; defined here (below the
 # package ``__init__``) to keep the import graph acyclic.
-RENDER_VERSION = "profile_db.render/2"
+RENDER_VERSION = "profile_db.render/3"
 
 
 def params_key(
@@ -193,11 +193,13 @@ class RenderCache:
                 return
             if victim in removed:
                 continue
-            stem = victim.name.removesuffix(_PNG_SUFFIX).removesuffix(_MANIFEST_SUFFIX)
-            sibling = victim.parent / f"{stem}{_MANIFEST_SUFFIX}"
-            if sibling == victim:
-                sibling = victim.parent / f"{stem}{_PNG_SUFFIX}"
-            for path in (victim, sibling):
+            stem = victim.name
+            for suffix in (_MANIFEST_SUFFIX, ".png", ".json", ".html"):
+                if stem.endswith(suffix):
+                    stem = stem.removesuffix(suffix)
+                    break
+            siblings = [victim.parent / (stem + suffix) for suffix in (_MANIFEST_SUFFIX, ".png", ".json", ".html")]
+            for path in siblings:
                 if path in removed or path in protected:
                     continue
                 try:

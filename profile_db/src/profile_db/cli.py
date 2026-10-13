@@ -23,6 +23,7 @@ $PFDB_PATH environment variable, then ``<cwd>/.pfdb/profile.duckdb``.
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 import typing
@@ -90,6 +91,16 @@ def _parser() -> argparse.ArgumentParser:
         help="override capture-manifest modality provenance (repeatable)",
     )
 
+    for command in ("attach", "refresh"):
+        operation = sub.add_parser(command, help="attach or reanalyze existing artifacts")
+        operation.add_argument("--run-id", type=int, required=True)
+        if command == "attach":
+            operation.add_argument("source")
+            operation.add_argument("--copy", action="store_true")
+        else:
+            operation.add_argument("--source")
+        _add_format_args(operation)
+
     incore_cmd = sub.add_parser("ingest-incore", help="attach an in-core collection to a run")
     incore_cmd.add_argument("source", help="in-core collection root (contains manifest_export.csv)")
     incore_cmd.add_argument("--run", type=int, required=True, dest="run_id")
@@ -113,7 +124,10 @@ def _parser() -> argparse.ArgumentParser:
         query_parser.add_argument("--read-only", action="store_true", help="open the database read-only (default)")
 
     render_cmd = sub.add_parser("render", help="render a swimlane image (R0-R3)")
-    render_cmd.add_argument("kind", choices=("whole", "window", "task", "core"))
+    render_cmd.add_argument("kind", choices=("whole", "window", "task", "core", "deps", "scope", "host", "incore", "merged"))
+    render_cmd.add_argument("--file-format", choices=("png", "html", "perfetto"), default="png")
+    render_cmd.add_argument("--kernel")
+    render_cmd.add_argument("--run-ids", type=json.loads)
     render_cmd.add_argument("--run", type=int, required=True, dest="run_id")
     render_cmd.add_argument("--t0", type=float, dest="t0_us", help="window start (µs)")
     render_cmd.add_argument("--t1", type=float, dest="t1_us", help="window end (µs)")
@@ -239,6 +253,8 @@ def _field_kind(field_info) -> str:
     if origin in (typing.Union,):
         args = [a for a in typing.get_args(annotation) if a is not type(None)]
         annotation = args[0] if len(args) == 1 else None
+    if typing.get_origin(annotation) is list:
+        return "json"
     if annotation is int:
         return "int"
     if annotation is float:
@@ -258,7 +274,7 @@ def _add_query_params(parser: argparse.ArgumentParser, spec) -> None:
             kwargs["action"] = "store_true"
             kwargs["default"] = False
         else:
-            kwargs["type"] = {"int": int, "float": float, "str": str}[kind]
+            kwargs["type"] = {"int": int, "float": float, "str": str, "json": json.loads}[kind]
             if field_info.is_required():
                 kwargs["required"] = True
             else:
@@ -530,6 +546,9 @@ def _run_render(args: argparse.Namespace) -> int:
             args.kind,
             args.run_id,
             render_dir=args.render_dir,
+            format=args.file_format,
+            kernel=args.kernel,
+            run_ids=args.run_ids,
             t0_us=args.t0_us,
             t1_us=args.t1_us,
             task_id=args.task_id,
@@ -734,6 +753,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command == "ingest":
         return _run_ingest(args)
+    if args.command in ("attach", "refresh"):
+        try:
+            with ProfileDB() as db:
+                report = db.attach(args.source, run_id=args.run_id, copy=args.copy) if args.command == "attach" else db.refresh(run_id=args.run_id, source=args.source)
+            print(json.dumps(report, sort_keys=True))
+            return 0
+        except PfdbError as exc:
+            print(f"pfdb: {exc}", file=sys.stderr)
+            return 1
     if args.command == "ingest-incore":
         return _run_ingest_incore(args)
     if args.command == "list":

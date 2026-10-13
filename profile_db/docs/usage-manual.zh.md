@@ -1,7 +1,41 @@
 # pfdb（profile_db）使用手册
 
-> 版本基准：**profile-db 0.3.1**（数据库 schema v7 / MCP tool schema v3 / 渲染器 `profile_db.render/2`）。
-> 本手册全部示例均在真实 Ascend 910B 设备（`a2a3`，device 0）上实跑验证，输出为原样摘录（仅对含本机绝对路径的字段做了截断脱敏）。数值会随每次运行漂移，复现时请以你自己的实跑输出为准。
+> 版本基准：**profile-db 0.4.0**（数据库 schema v8 / MCP tool schema v4 / 渲染器 `profile_db.render/3`）。
+
+> 0.4.0 的复用清单、口径、兼容条件和升级流程以
+> [runtime 集成维护文档](../../docs/debug-and-tune/pfdb-runtime-integration.md)
+> 为准。下文 1–13 节保留为历史版本参考；当前接口和字段以本节及维护文档为准。
+
+## 0.4.0 离线工作流
+
+pfdb 只分析已有工件，不采集数据，不编译或运行算子。runtime 的正常分析口径
+为准；上游错误仅在 pfdb 一侧兼容，上游代码不修改。
+
+~~~bash
+pfdb attach existing_artifacts/ --run-id 1
+pfdb refresh --run-id 1
+pfdb refresh --run-id 1 --source existing_capture/dfx_outputs
+pfdb query scheduler --run-id 1
+pfdb query host --run-id 1 --view rounds
+pfdb query deps --run-id 1 --view wait
+pfdb query args_dump --run-id 1 --view values --seq 0 --limit 64
+pfdb query incore --run-id 1 --view events --kernel op --limit 64
+pfdb render deps --run 1 --file-format html
+pfdb render whole --run 1 --file-format perfetto
+~~~
+
+why_late 分开返回生产者结束 data_ready_us 与 FIN 观测 observed_ready_us。
+分段为 fin_observation_us、observed_to_dispatch_us、post_dispatch_us、
+local_setup_us；下发早于 FIN 时保留负值。why_sparse 返回 runtime 的
+就绪、空闲、overhead 计数轨迹窗口积分，不能继续套用旧版 dispatch_wait
+或 ready_starved 标签。空闲积分为 core-us，就绪积分为 task-us，布尔 overhead 积分为微秒；不能相加当作路径延迟。
+
+默认链接已有工件；--copy 显式归档。二进制和完整 trace 不展开成数据库行。
+数值切片与事件翻页默认 64 项、最多 256 项。缺失或变化的原文件会明确报告。
+升级保留观测、benchmark、note、baseline、trial；衍生分析需显式 refresh。
+profiling 口径不兼容时不提供 profiling 差值；程序、拓扑、时钟等原有兼容条件仍满足时，独立 benchmark 可比较。
+
+> 下文历史版本示例曾在真实 Ascend 910B 设备（`a2a3`，device 0）上实跑验证，输出为原样摘录（仅对含本机绝对路径的字段做了截断脱敏）。数值会随每次运行漂移，复现时请以你自己的实跑输出为准。
 
 本文是**完整参考手册**：覆盖安装、数据来源、入库、查询、渲染、生命周期管理、MCP 与 Python API 的全部功能。每个功能给出用途、参数、返回字段与经过实机验证的示例。如果你只想看一个端到端的完整故事（复杂大算子、从采集到调优结论），请阅读配套的[实机演示文档](./demo-walkthrough.zh.md)。
 

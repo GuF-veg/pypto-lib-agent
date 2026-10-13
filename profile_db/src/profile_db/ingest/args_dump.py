@@ -7,14 +7,7 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 
-"""args_dump metadata parser (DESIGN.md T9).
-
-Reads ``args_dump/args_dump.json`` — a manifest of per-task tensor/scalar
-captures — and returns one metadata row per captured argument. The raw
-``args.bin`` payload is never read, copied, or registered: only its
-``bin_size`` (byte count) is recorded so the agent knows whether a tensor
-has data.
-"""
+"""Argument metadata rows; payload registration/decoding use the shared artifact context."""
 
 from __future__ import annotations
 

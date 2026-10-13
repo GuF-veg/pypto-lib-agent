@@ -7,29 +7,20 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 
-"""Extended-modality readers for the tables T9 ingests.
-
-``incore_entry`` / ``args_dump_entry`` / ``scope_stats_entry`` and the
-optional ``bench_sample`` rows were written but had no way back out, which
-left them invisible to every consumer of the query layer. These handlers
-close that loop; like every other query they read only schema tables and
-report absence as ``unavailable`` rather than an empty answer.
-
-Raw payloads (``args.bin``, ``trace.clean.json``) are never registered by
-ingest, so nothing here can surface them — only the metadata rows.
-"""
+"""Persisted modality summaries and bounded registered-file slices."""
 
 from __future__ import annotations
 
 from typing import Any
 
 from profile_db.facts import Evidence, Fact
-from profile_db.query import common
+from profile_db.query import common, runtime
 from profile_db.query.params import (
     ArgsDumpParams,
     BenchParams,
     IncoreParams,
     ScopeStatsParams,
+    HostParams,
 )
 from profile_db.query.registry import register
 
@@ -41,6 +32,8 @@ from profile_db.query.registry import register
     IncoreParams,
 )
 def incore(conn, params: IncoreParams) -> list[Fact]:
+    if params.view == "events":
+        return runtime.incore_events(conn, params)
     run_id = params.run_id
     if common.one(conn, "SELECT 1 FROM run WHERE run_id = ?", [run_id]) is None:
         return common.run_missing("INCORE", run_id)
@@ -85,56 +78,8 @@ def incore(conn, params: IncoreParams) -> list[Fact]:
     ArgsDumpParams,
 )
 def args_dump(conn, params: ArgsDumpParams) -> list[Fact]:
-    run_id = params.run_id
-    if common.one(conn, "SELECT 1 FROM run WHERE run_id = ?", [run_id]) is None:
-        return common.run_missing("ARGS", run_id)
-    sql = (
-        "SELECT seq, task_id, task_id_raw, task_id_u64, stage, role, arg_index, kind, dtype, "
-        "CAST(shape AS VARCHAR), bin_size FROM args_dump_entry WHERE run_id = ?"
-    )
-    args: list[Any] = [run_id]
-    if params.task_id is not None:
-        sql += " AND task_id = ?"
-        args.append(params.task_id)
-    if params.stage is not None:
-        sql += " AND stage = ?"
-        args.append(params.stage)
-    rows = common.q(conn, sql + " ORDER BY seq", args)
-    if not rows:
-        status = common.modality_status_fact(conn, run_id, "args_dump")
-        facts = [
-            Fact(
-                "ARGS",
-                common.fields(
-                    run_id=run_id, task_id=params.task_id, stage=params.stage
-                ),
-                Evidence.UNAVAILABLE,
-            )
-        ]
-        return [*([status] if status is not None else []), *facts]
-    facts = [
-        Fact(
-            "ARGS",
-            common.fields(
-                run_id=run_id,
-                seq=seq,
-                task_id=task_id,
-                task_id_raw=task_id_raw,
-                task_id_u64=task_id_u64,
-                stage=stage,
-                role=role,
-                arg_index=arg_index,
-                kind=kind,
-                dtype=dtype,
-                shape=common.json_cell(shape),
-                bin_size=bin_size,
-            ),
-            Evidence.MEASURED,
-        )
-        for seq, task_id, task_id_raw, task_id_u64, stage, role, arg_index, kind, dtype, shape, bin_size in rows
-    ]
-    status = common.modality_status_fact(conn, run_id, "args_dump")
-    return [*([status] if status is not None else []), *facts]
+    status = common.modality_status_fact(conn, params.run_id, "args_dump")
+    return [*([status] if status is not None else []), *runtime.args_dump(conn, params)]
 
 
 @register(
@@ -144,45 +89,8 @@ def args_dump(conn, params: ArgsDumpParams) -> list[Fact]:
     ScopeStatsParams,
 )
 def scope_stats(conn, params: ScopeStatsParams) -> list[Fact]:
-    run_id = params.run_id
-    if common.one(conn, "SELECT 1 FROM run WHERE run_id = ?", [run_id]) is None:
-        return common.run_missing("SCOPE", run_id)
-    sql = (
-        "SELECT seq, site, ring, phase, CAST(payload AS VARCHAR) "
-        "FROM scope_stats_entry WHERE run_id = ?"
-    )
-    args: list[Any] = [run_id]
-    if params.site is not None:
-        sql += " AND site = ?"
-        args.append(params.site)
-    rows = common.q(conn, sql + " ORDER BY seq", args)
-    if not rows:
-        status = common.modality_status_fact(conn, run_id, "scope_stats")
-        facts = [
-            Fact(
-                "SCOPE",
-                common.fields(run_id=run_id, site=params.site),
-                Evidence.UNAVAILABLE,
-            )
-        ]
-        return [*([status] if status is not None else []), *facts]
-    facts = [
-        Fact(
-            "SCOPE",
-            common.fields(
-                run_id=run_id,
-                seq=seq,
-                site=site,
-                ring=ring,
-                phase=phase,
-                payload=common.json_cell(payload),
-            ),
-            Evidence.MEASURED,
-        )
-        for seq, site, ring, phase, payload in rows
-    ]
-    status = common.modality_status_fact(conn, run_id, "scope_stats")
-    return [*([status] if status is not None else []), *facts]
+    status = common.modality_status_fact(conn, params.run_id, "scope_stats")
+    return [*([status] if status is not None else []), *runtime.scope_stats(conn, params)]
 
 
 @register(
@@ -246,3 +154,8 @@ def bench(conn, params: BenchParams) -> list[Fact]:
         for stratum, rnd, value in samples
     )
     return facts
+
+
+@register("host", "Attribute: which host phases, invocations and CPU/off-CPU costs explain this capture?", HostParams)
+def host(conn, params: HostParams) -> list[Fact]:
+    return runtime.host(conn, params)

@@ -131,8 +131,8 @@ def test_row_order_independence() -> None:
 
 def test_unrelated_dependents_keep_first_sink_tie_deterministic() -> None:
     """Deterministic ties: when every task holds an equal duration, the
-    static path collapses to one task chosen by the numeric task key."""
+    static path collapses to one task chosen in runtime record order."""
     rows = [row("10", 0, 0.0, 5.0), row("9", 1, 0.0, 5.0)]
     facts = compute_paths(rows, [], FREQ)
-    assert [s.task_id for s in facts.static] == ["9"]
+    assert [s.task_id for s in facts.static] == ["10"]
     assert facts.cpm_us == 5.0

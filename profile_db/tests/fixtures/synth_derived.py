@@ -233,4 +233,42 @@ def materialize(
     writer.insert_cpm_paths(db.connection, loaded_id, result.paths)
     writer.update_task_path_flags(db.connection, loaded_id, result.task_flags)
     writer.update_run_cpm(db.connection, loaded_id, result.cpm_us)
+    runtime_snapshots(db.connection, loaded_id, result)
     return loaded_id
+
+def runtime_snapshots(conn, run_id, result):
+    from profile_db.runtime_adapter import snapshot
+    from profile_db.runtime_adapter.storage import save_snapshot
+    from profile_db.derived.types import RowSlice, EdgeRec
+    from profile_db.derived.cpm import compute_paths
+
+    rows = [RowSlice(*r) for r in conn.execute(
+        "SELECT task_id, core_index, engine, start_us, end_us, dispatch_us, receive_us, finish_us "
+        "FROM task_row WHERE run_id=? ORDER BY core_index,row_index", [run_id]).fetchall()]
+    edge_pairs = conn.execute("SELECT pred,succ FROM dep_edge WHERE run_id=? ORDER BY edge_id", [run_id]).fetchall()
+    freq = conn.execute("SELECT clock_freq_hz FROM run WHERE run_id=?", [run_id]).fetchone()[0]
+    facts = compute_paths(rows, [EdgeRec(p,s,"") for p,s in edge_pairs], freq)
+    cp = dict(static=[dict(task_id=s.task_id,busy_us=s.busy_us) for s in facts.static],
+              observed=[dict(task_id=s.task_id,kind=s.kind,compute_us=s.compute_us,stall_us=s.stall_us,
+                             start_ticks=round(s.start_us*freq/1e6),end_ticks=round(s.end_us*freq/1e6))
+                        for s in facts.observed],
+              cpm_us=facts.cpm_us,t0_ticks=round(facts.t0_us*freq/1e6) if facts.t0_us is not None else None,
+              t1_ticks=round(facts.t1_us*freq/1e6) if facts.t1_us is not None else None,freq_hz=freq)
+    save_snapshot(conn, run_id, snapshot("critical_path", {}, lambda c:cp))
+    tasks = [dict(task_id=r.task_id,core_id=r.core_index,core_type=r.engine,
+                  start_time_us=r.start_us,end_time_us=r.end_us,dispatch_time_us=r.dispatch_us or 0,
+                  finish_time_us=r.finish_us or 0,receive_time_us=r.receive_us or 0) for r in rows]
+    edges = {}
+    for p,s in edge_pairs:
+        edges.setdefault(p,[]).append(s)
+    def sched(c):
+        if not tasks:
+            return {}
+        lo,hi = min(t["start_time_us"] for t in tasks), max(t["end_time_us"] for t in tasks)
+        deps = dict(edges=[dict(pred=p,succ=s) for p,s in edge_pairs])
+        oh=c.call("sched_overhead_analysis","compute_overhead",tasks,deps,lo,hi)
+        h,t=c.call("sched_overhead_analysis","compute_head_tail",tasks)
+        return dict(window_us=[lo,hi],overhead=oh,threads={},loops={},
+                    counters=c.call("swimlane_converter","build_overhead_counter_events",tasks,edges),
+                    rows=[dict(task_id=r.task_id,core=r.core_index,head_us=a,tail_us=b) for r,a,b in zip(rows,h,t)])
+    save_snapshot(conn,run_id,snapshot("scheduler",{},sched))

@@ -58,7 +58,9 @@ def _run_meta(conn, run_id: int) -> dict[str, Any] | None:
 def _counts(conn, run_id: int) -> dict[str, int]:
     counts: dict[str, int] = {}
     for name, table in (("tasks", "task"), ("task_rows", "task_row"), ("edges", "dep_edge")):
-        counts[name] = int(conn.execute(f"SELECT COUNT(*) FROM {table} WHERE run_id = ?", [run_id]).fetchone()[0])
+        counts[name] = int(
+            conn.execute(f"SELECT COUNT(*) FROM {table} WHERE run_id = ?", [run_id]).fetchone()[0]
+        )
     return counts
 
 
@@ -78,7 +80,9 @@ def compat_reasons(a: Mapping[str, Any], b: Mapping[str, Any]) -> list[str]:
                 )
             reasons.append(reason)
     if list(a.get("core_types") or []) != list(b.get("core_types") or []):
-        reasons.append(f"core_types differs: {list(a.get('core_types') or [])} vs {list(b.get('core_types') or [])}")
+        reasons.append(
+            f"core_types differs: {list(a.get('core_types') or [])} vs {list(b.get('core_types') or [])}"
+        )
     return reasons
 
 
@@ -111,10 +115,7 @@ def _family_deltas(
     ranked = sorted(
         names,
         key=lambda name: (
-            -abs(
-                stats_b.get(name, {}).get("busy_us", 0.0)
-                - stats_a.get(name, {}).get("busy_us", 0.0)
-            ),
+            -abs(stats_b.get(name, {}).get("busy_us", 0.0) - stats_a.get(name, {}).get("busy_us", 0.0)),
             name,
         ),
     )
@@ -142,9 +143,7 @@ def _family_deltas(
     return deltas
 
 
-def compare_runs(
-    conn, run_a: int, run_b: int, *, family: str | None = None
-) -> dict[str, Any]:
+def compare_runs(conn, run_a: int, run_b: int, *, family: str | None = None) -> dict[str, Any]:
     """Compare two runs. Returns ``{run_a, run_b, program, compatible,
     reasons, deltas}``. Raises ``LifecycleError`` when incompatible.
 
@@ -158,17 +157,44 @@ def compare_runs(
     if meta_b is None:
         raise LifecycleError(f"run {run_b} does not exist")
 
+    from profile_db.runtime_adapter.storage import read_snapshot
+    from profile_db.runtime_adapter import ANALYSIS_VERSION
+
+    def semantics(run_id):
+        docs = [read_snapshot(conn, run_id, family) for family in ("critical_path", "scheduler")]
+        if any(d.get("analysis_version") != ANALYSIS_VERSION for d in docs):
+            return None
+        return [
+            {
+                k: d.get(k)
+                for k in (
+                    "analysis_version",
+                    "adapter_version",
+                    "backend_revision",
+                    "functions",
+                    "compatibility",
+                    "parameters",
+                    "status",
+                )
+            }
+            for d in docs
+        ]
+
     reasons = compat_reasons(meta_a, meta_b)
+    semantic_a, semantic_b = semantics(run_a), semantics(run_b)
+    profile_reasons = list(reasons)
+    if semantic_a is None or semantic_b is None or semantic_a != semantic_b:
+        profile_reasons.append("analysis semantics differ or are stale; refresh both runs")
     if reasons:
-        raise LifecycleError(
-            f"runs {run_a} and {run_b} are not comparable: " + "; ".join(reasons)
-        )
+        raise LifecycleError(f"runs {run_a} and {run_b} are not comparable: " + "; ".join(reasons))
 
     counts_a = _counts(conn, run_a)
     counts_b = _counts(conn, run_b)
 
     deltas: list[dict[str, Any]] = []
     for metric in _METRIC_COLS:
+        if profile_reasons and not metric.startswith("bench_"):
+            continue
         before = meta_a.get(metric)
         after = meta_b.get(metric)
         if before is None or after is None:
@@ -182,7 +208,7 @@ def compare_runs(
                 "ratio": (after / before) if before else None,
             }
         )
-    for name in ("tasks", "task_rows", "edges"):
+    for name in () if profile_reasons else ("tasks", "task_rows", "edges"):
         before = counts_a[name]
         after = counts_b[name]
         deltas.append(
@@ -194,15 +220,14 @@ def compare_runs(
                 "ratio": (after / before) if before else None,
             }
         )
-    if family is not None:
-        deltas.extend(
-            _family_deltas(_family_stats(conn, run_a), _family_stats(conn, run_b), family)
-        )
+    if family is not None and not profile_reasons:
+        deltas.extend(_family_deltas(_family_stats(conn, run_a), _family_stats(conn, run_b), family))
     return {
         "run_a": run_a,
         "run_b": run_b,
         "program": meta_a["program"],
-        "compatible": True,
-        "reasons": [],
+        "compatible": not profile_reasons,
+        "profile_compatible": not profile_reasons,
+        "reasons": profile_reasons,
         "deltas": deltas,
     }

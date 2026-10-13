@@ -100,6 +100,11 @@ def tasks(conn, params: TasksParams) -> list[Fact]:
     DepsParams,
 )
 def deps(conn, params: DepsParams) -> list[Fact]:
+    from profile_db.query import runtime
+
+    answer = runtime.deps(conn, params)
+    if answer is not None:
+        return answer
     run_id = params.run_id
     if common.task_fact(conn, run_id, params.task_id) is None:
         return [

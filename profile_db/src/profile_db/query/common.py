@@ -268,15 +268,9 @@ def gap_fact(run_id: int, row: tuple) -> Fact:
         t1_us=us(t1),
         kind=kind,
     )
-    payload = json_cell(payload_text)
-    if kind == "dispatch_wait" and payload:
-        fact_fields["ready_task_ids"] = payload
-    elif kind == "ready_starved" and payload:
-        for item in payload:
-            if isinstance(item, dict) and "task_id" in item:
-                fact_fields["lagging_producer"] = str(item["task_id"])
-                fact_fields["fin_us"] = us(item.get("fin_us", 0.0))
-                break
+    if kind not in ("idle", "drain_tail"):
+        return Fact("GAP", fields(run_id=run_id, reason="legacy derived labels; refresh required"),
+                    Evidence.UNAVAILABLE)
     return Fact("GAP", fact_fields, Evidence(evidence))
 
 

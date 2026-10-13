@@ -81,54 +81,9 @@ def why_sparse(conn, params: WhySparseParams) -> list[Fact]:
         ]
     t0, t1 = window[0][1], window[-1][2]
 
-    args: list[Any] = [run_id, t1, t0]
-    sql = (
-        "SELECT kind, CAST(ready_task_ids AS VARCHAR) FROM idle_gap "
-        "WHERE run_id = ? AND t0_us < ? AND t1_us > ?"
-    )
-    if params.engine is not None:
-        sql += " AND engine = ?"
-        args.append(params.engine)
-    gaps = common.q(conn, sql, args)
+    from profile_db.query.runtime import counter_window
 
-    ready_ids: list[str] = []
-    lagging: list[tuple[str, float]] = []
-    has_starved = False
-    for kind, payload_text in gaps:
-        if kind == "dispatch_wait":
-            for task_id in common.json_cell(payload_text) or []:
-                if str(task_id) not in ready_ids:
-                    ready_ids.append(str(task_id))
-        elif kind == "ready_starved":
-            has_starved = True
-            for item in common.json_cell(payload_text) or []:
-                if isinstance(item, dict) and "task_id" in item:
-                    lagging.append((str(item["task_id"]), float(item.get("fin_us", 0.0))))
-
-    fact_fields = common.fields(
-        run_id=run_id,
-        band=params.band,
-        bands=params.bands if params.band is not None else None,
-        stored_band=params.stored_band,
-        engine=params.engine,
-        t0_us=common.us(t0),
-        t1_us=common.us(t1),
-        busy_cores=max(row[5] for row in window),
-    )
-    if ready_ids:
-        ready_ids.sort(key=common.num_key)
-        fact_fields.update(kind="dispatch_wait", ready_task_ids=ready_ids)
-        return [Fact("SPARSE", fact_fields, Evidence.PROVEN)]
-    if has_starved and lagging:
-        lagging.sort(key=lambda kv: (-kv[1], common.num_key(kv[0])))
-        producer, fin_us = lagging[0]
-        fact_fields.update(kind="ready_starved", lagging_producer=producer, fin_us=common.us(fin_us))
-        return [Fact("SPARSE", fact_fields, Evidence.PROVEN)]
-    if any(row[8] for row in window):
-        fact_fields.update(kind="drain_tail")
-        return [Fact("SPARSE", fact_fields, Evidence.PROVEN)]
-    fact_fields.update(kind="unknown")
-    return [Fact("SPARSE", fact_fields, Evidence.UNPROVEN)]
+    return counter_window(conn, run_id, t0, t1, params.engine)
 
 
 @register(

@@ -52,13 +52,13 @@ def test_six_four_full_session(scenario_db) -> None:
     assert density.text.splitlines()[1].startswith("BAND band_idx=1 ")
     assert 'engine="aiv"' in density.text and 'busy_cores=0' in density.text
     why = _run(conn, "why_sparse", {"run_id": 1, "band": 2, "engine": "aiv"})
-    assert 'kind="ready_starved"' in why.text and 'lagging_producer="1"' in why.text
+    assert 'track="oh_aiv_overhead"' in why.text and "integral_us=" in why.text
     task = _run(conn, "task", {"run_id": 1, "task_id": "4"})
     assert 'family="layernorm"' in task.text and 'engine="aiv"' in task.text
     deps = _run(conn, "deps", {"run_id": 1, "task_id": "4", "direction": "in"})
     assert 'pred="1"' in deps.text and 'succ="4"' in deps.text
     late = _run(conn, "why_late", {"run_id": 1, "task_id": "5"})
-    assert "gap_us=19.0" in late.text and "fin_detect_us=17.0" in late.text
+    assert "observed_ready_to_start_us=19.0" in late.text and "observed_to_dispatch_us=17.0" in late.text
 
 
 def test_registry_every_query_bound_and_questioned(scenario_db) -> None:

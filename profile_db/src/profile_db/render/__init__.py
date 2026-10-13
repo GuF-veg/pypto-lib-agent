@@ -33,7 +33,6 @@ import matplotlib
 from profile_db.errors import RenderError
 from profile_db.render import renderers
 from profile_db.render.cache import RENDER_VERSION, RenderCache, params_key
-from profile_db.schema import RECORD_KINDS
 from profile_db.render.styles import (
     DEFAULT_CACHE_MAX_BYTES,
     DEFAULT_IMAGE_MAX_BYTES,
@@ -133,17 +132,9 @@ def _manifest(
 
 
 def _run_fingerprint(conn, run_id: int) -> str | None:
-    """The run's records-file sha256 (run identity), or None when the run
-    has no records artifact registered. The value scopes the render cache
-    key to one run's data, so a ``run_id`` reused by a different database
-    sharing the render directory can never hit another capture's image."""
-    placeholders = ", ".join("?" for _ in RECORD_KINDS)
-    row = conn.execute(
-        f"SELECT sha256 FROM artifact WHERE run_id = ? AND kind IN ({placeholders}) "
-        "LIMIT 1",
-        [run_id, *RECORD_KINDS],
-    ).fetchone()
-    return str(row[0]) if row and row[0] is not None else None
+    from profile_db.runtime_adapter.storage import fingerprint
+
+    return fingerprint(conn, run_id)
 
 
 def render(

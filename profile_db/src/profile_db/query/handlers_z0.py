@@ -33,15 +33,12 @@ _COUNT_SQL = {
 
 
 def _run_counts(conn, run_id: int) -> dict[str, int]:
-    return {
-        name: int(common.one(conn, sql, [run_id])[0]) for name, sql in _COUNT_SQL.items()
-    }
+    return {name: int(common.one(conn, sql, [run_id])[0]) for name, sql in _COUNT_SQL.items()}
 
 
 @register(
     "runs_list",
-    "Orient: what is the baseline, which platform/config, and which run is "
-    "the latest usable one?",
+    "Orient: what is the baseline, which platform/config, and which run is the latest usable one?",
     RunsListParams,
     rank_axis=True,
 )
@@ -172,8 +169,7 @@ def overview(conn, params: OverviewParams) -> list[Fact]:
 
 @register(
     "inventory",
-    "Orient: which artifacts does this run hold, how are they stored, and can "
-    "it be rebuilt?",
+    "Orient: which artifacts does this run hold, how are they stored, and can it be rebuilt?",
     InventoryParams,
 )
 def inventory(conn, params: InventoryParams) -> list[Fact]:
@@ -224,9 +220,23 @@ def inventory(conn, params: InventoryParams) -> list[Fact]:
             ),
             Evidence.MEASURED if state == "available" else Evidence.UNAVAILABLE,
         )
-        for modality, requested, request_value, rel_path, size_bytes, parser_state, entry_count, state, reason
-        in statuses
+        for modality, requested, request_value, rel_path, size_bytes, parser_state, entry_count, state, reason in statuses
     )
+    if params.analysis_details:
+        from profile_db.runtime_adapter.storage import read_snapshot
+
+        families = common.q(
+            conn, "SELECT family FROM analysis_snapshot WHERE run_id=? ORDER BY family", [run_id]
+        )
+        for (family,) in families:
+            doc = read_snapshot(conn, run_id, family)
+            facts.append(
+                Fact(
+                    "ANALYSIS",
+                    dict(run_id=run_id, **{k: v for k, v in doc.items() if k != "payload"}),
+                    Evidence.PROVEN if doc["status"] == "ok" else Evidence.UNAVAILABLE,
+                )
+            )
     if not facts:
         return [Fact("ARTIFACT", common.fields(run_id=run_id), Evidence.UNAVAILABLE)]
     return facts

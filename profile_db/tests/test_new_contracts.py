@@ -160,7 +160,7 @@ def test_why_sparse_stored_band_round_trip(populated_db_module: ProfileDB) -> No
             ws = populated_db_module.query(
                 "why_sparse", run_id=1, engine="aiv", stored_band=stored
             )
-            ws_facts = [f for f in ws.facts if f.rec == "SPARSE"]
+            ws_facts = [f for f in ws.facts if f.rec == "OVERHEAD_WINDOW"]
             assert ws_facts
             assert ws_facts[0].fields.get("t0_us") == t0
             assert ws_facts[0].fields.get("t1_us") == t1

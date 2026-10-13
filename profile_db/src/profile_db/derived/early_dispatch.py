@@ -7,25 +7,7 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 
-"""Early-dispatch proof (DESIGN.md 6.3, T3), ported from the runtime's
-structural rule and timestamp proof:
-
-- every direct predecessor must either be an allocation source (an edge
-  from a host-side creator that has no timed producer task) or a producer
-  carrying ``early_dispatch`` (``allow_early_resolve``), and at least one
-  must be a non-alloc early producer — otherwise the structure cannot
-  claim speculative dispatch at all (``none``);
-- timestamps: fold every timed producer's latest FIN into
-  ``observed_ready``; a physical row (block) proves early dispatch when
-  ``row.dispatch + 2 clock ticks < observed_ready``;
-- status: ``full`` (every row proves), ``partial`` (some rows prove),
-  ``none`` (eligible but no row proves), ``unavailable`` (no FIN stream,
-  no timed producer, missing dispatch timestamps, or unknown clock).
-
-The 2-tick tolerance matches the runtime's ``critical_path --tol``
-default; the comparison is strict, so a dispatch exactly at
-``ready - 2 ticks`` does not prove.
-"""
+"""Runtime structural eligibility and separate two-tick timestamp proof."""
 
 from __future__ import annotations
 
@@ -64,28 +46,27 @@ def prove(
     tasks: Mapping[str, TaskTiming],
     freq_hz: int | None,
     level: int,
+    eligible: bool | None = None,
 ) -> EarlyProof:
     """Prove early dispatch for one consumer, returning status + evidence."""
     if not succ_rows or not has_fin_stream(level) or freq_hz is None:
         return EarlyProof.unavailable()
 
-    producers: list[str] = []
-    blockers: list[str] = []
-    for source, pred in pred_edges:
-        task = tasks.get(pred)
-        if task is None:
-            continue  # external/creator edge: allocation source, no flag data
-        if not task.early_dispatch_flag:
-            blockers.append(pred)
-        elif source != "creator":
-            producers.append(pred)
-    if blockers or not producers:
+    if eligible is None:
+        from profile_db.runtime_adapter import module
+
+        nodes = set(tasks) | {p for _, p in pred_edges}
+        table = {t: dict(early_dispatch=task.early_dispatch_flag) for t, task in tasks.items()}
+        consumer = "__consumer__"
+        markers = module("deps_viewer")._task_markers(
+            nodes | {consumer}, [(p, consumer) for _, p in pred_edges], {}, table
+        )
+        eligible = "⭐" in markers.get(consumer, "")
+    if not eligible:
         return EarlyProof(NONE, None, None, 0, len(succ_rows))
 
     fins = [
-        tasks[p].max_finish_us
-        for _, p in pred_edges
-        if p in tasks and tasks[p].max_finish_us is not None
+        tasks[p].max_finish_us for _, p in pred_edges if p in tasks and tasks[p].max_finish_us is not None
     ]
     if not fins:
         return EarlyProof.unavailable()
@@ -110,6 +91,7 @@ def classify(
     tasks: Mapping[str, TaskTiming],
     freq_hz: int | None,
     level: int,
+    eligible: bool | None = None,
 ) -> str:
     """Backward-compatible status-only form (T3 tests use this)."""
-    return prove(succ_rows, pred_edges, tasks, freq_hz, level).status
+    return prove(succ_rows, pred_edges, tasks, freq_hz, level, eligible).status
