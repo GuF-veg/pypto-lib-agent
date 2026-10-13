@@ -31,7 +31,8 @@ npu-run python benchmarks/basic_operator/<model>/<op>.py -p a2a3 -d 0
 会自动抢占一张空闲的物理卡并把它映射为进程内的逻辑 0 号卡，物理卡的
 选择由池子完成——不要手动指定设备号，也不要自行设置
 `ASCEND_RT_VISIBLE_DEVICES`。全忙时 `npu-run` 会自动排队等待，属正常
-现象，不要为避开等待绕过它。脚本退出码为 0 即该题通过 golden 验证。
+现象，不要为避开等待绕过它。脚本退出码为 0 表示本次运行的 case 通过
+golden 验证；该题的默认 case 与所有增强测试 case 均通过才算完成。
 编译产物与运行数据默认落在 `build_output/`。
 
 ## 硬性约束（参评 agent 必须遵守）
@@ -70,6 +71,20 @@ npu-run python benchmarks/basic_operator/<model>/<op>.py -p a2a3 -d 0
 4. **正确性以 PyTorch golden 验证为准**。每道题必须通过其文件内 golden
    参考实现的数值比对（容差以脚本中的 `rtol`/`atol` 为准）。性能暂不作
    要求，无需调优。
+
+   **默认 case 与所有增强测试 case 都必须通过**。参评 agent 必须检查
+   题目的测试入口或 `--help`，确认其提供的增强测试选项，并逐项运行验证，
+   不得仅以默认 case 通过作为完成依据。例如，
+   `benchmarks/basic_operator/deepseek_v4_flash_mtp/decode_sparse_attn_swa.py`
+   除默认运行外，还必须分别启用 `--causal-regression-fixture` 和
+   `--short-window-fixture`，通过对应的 golden 验证：
+
+   ```bash
+   npu-run python benchmarks/basic_operator/deepseek_v4_flash_mtp/decode_sparse_attn_swa.py \
+     -p a2a3 -d 0 --causal-regression-fixture
+   npu-run python benchmarks/basic_operator/deepseek_v4_flash_mtp/decode_sparse_attn_swa.py \
+     -p a2a3 -d 0 --short-window-fixture
+   ```
 
 ## 任务提交要求（面向评测组织者，而非参评 agent）
 

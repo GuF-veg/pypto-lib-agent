@@ -86,252 +86,157 @@ def sparse_attn_swa(
     wo_b_scale: pl.Tensor[[D], pl.FP32],
     attn_out: pl.Tensor[[T, D], pl.BF16],
 ):
-    """Sparse attention over the sliding window, then the grouped output projection.
+    """Sparse sliding-window decode attention fused with the grouped INT8 o_proj.
 
-    The window is exactly one attention K tile, so no online-softmax block merge
-    is needed. Each stage below is one task per tile of the axis it reduces, and
-    every handoff between stages goes through a global-memory scratch tensor:
-
-    swa_kv_gather   gather the window rows by physical cache-row index
-    swa_score       q @ kv^T, scaled and pushed through the padding bias
-    swa_softmax     exp/sum with the per-head sink added to the denominator
-    swa_value       probabilities weighted onto the gathered KV, then normalized
-    swa_cast_nope   narrow the columns the rotation does not touch
-    swa_rope_pair   inverse-rotate the trailing even/odd column pairs
-    swa_rope_join   re-interleave the rotated halves
-    swa_group_pack  one head group per cube row block, padded to a fractal
-    swa_proj_a      group @ wo_a as a BF16 cube pass
-    swa_amax        one activation scale per (token, group) row
-    swa_quant       apply that scale and narrow to INT8
-    swa_proj_b      INT8 group @ wo_b^T accumulating in INT32
-    swa_dequant     dequantize per row and sum the groups
-    swa_out_scale   apply the per-channel weight scale, then narrow to BF16
+    Four device stages over GM workspaces:
+      1. gather the window KV rows named by `swa_indices` out of the paged cache;
+      2. per head chunk, softmax attention (the `-1e20` mask rides `sparse_bias`)
+         followed by the inverse split-half RoPE;
+      3. grouped o_proj_a plus the per-(token, group) INT8 activation quant;
+      4. grouped o_proj_b, dequantised per group before the group sum, then the
+         per-channel weight scale and the BF16 writeback.
     """
-    kv_win = pl.create_tensor([T * WIN, HEAD_DIM], dtype=pl.BF16)
-    score_buf = pl.create_tensor([T * H, PADDED_TOPK], dtype=pl.FP32)
-    prob_buf = pl.create_tensor([T * H, PADDED_TOPK], dtype=pl.BF16)
-    denom_buf = pl.create_tensor([T * H, 1], dtype=pl.FP32)
-    attn_buf = pl.create_tensor([T * H, HEAD_DIM], dtype=pl.FP32)
-    attn_bf = pl.create_tensor([T * H, HEAD_DIM], dtype=pl.BF16)
-    rope_buf = pl.create_tensor([T * H, ROPE_DIM], dtype=pl.FP32)
-    grp_buf = pl.create_tensor([O_GROUPS * NZ_FRACTAL_ROWS, O_GROUP_IN], dtype=pl.BF16)
-    proj_a_buf = pl.create_tensor([O_GROUPS * NZ_FRACTAL_ROWS, O_LORA], dtype=pl.FP32)
-    proj_i8 = pl.create_tensor([O_GROUPS * NZ_FRACTAL_ROWS, O_LORA], dtype=pl.INT8)
-    proj_scale = pl.create_tensor([O_GROUPS * NZ_FRACTAL_ROWS, 1], dtype=pl.FP32)
-    proj_acc = pl.create_tensor([O_GROUPS * NZ_FRACTAL_ROWS, D], dtype=pl.INT32)
-    dequant_buf = pl.create_tensor([T, D], dtype=pl.FP32)
+    # Tiling is written as module constants and literals: the parser folds only
+    # those into tile shapes, not function-local aliases. The SWA window is
+    # exactly one paged block (128 rows), the attention head chunk is 16, and the
+    # projection tiles are 256.
 
-    kv_all = pl.reshape(ori_kv, [pl.tensor.dim(ori_kv, 0) * BLOCK_SIZE, HEAD_DIM])
-    q_all = pl.reshape(q, [T * H, HEAD_DIM])
-    sink_col = pl.reshape(attn_sink, [H, 1])
-    scale_col = pl.reshape(wo_b_scale, [1, D])
+    # GM workspaces; pl.create_tensor allocates without initialising. T=8 is
+    # padded to the 16-row L0 fractal, so attn_heads, act_i8, act_scale and
+    # out_pad all carry a 16-token M and the projection matmuls agree with their
+    # physical extent; token rows 8..15 are never read back out.
+    kv_rows = pl.create_tensor([T, WIN, HEAD_DIM], dtype=pl.BF16)
+    attn_heads = pl.create_tensor([16, H * HEAD_DIM], dtype=pl.BF16)
+    act_i8 = pl.create_tensor([16, O_GROUPS * O_LORA], dtype=pl.INT8)
+    # Group-major so one group's scale is a contiguous 16-wide row: a [16, 1]
+    # column store into a token-major buffer lowers to a contiguous blit.
+    act_scale = pl.create_tensor([O_GROUPS, 16], dtype=pl.FP32)
+    out_pad = pl.create_tensor([16, D], dtype=pl.BF16)
+    o_r_pad = pl.create_tensor([O_GROUPS * 16, O_LORA], dtype=pl.FP32)
 
-    # The window is addressed by absolute cache rows, so one 128-entry index
-    # vector selects the whole tile out of the flattened page pool.
-    for gt in pl.parallel(0, T, 1):
-        with pl.at(level=pl.Level.CORE_GROUP, name_hint="swa_kv_gather"):
-            # -1 marks a padded slot; clamping keeps every read in range because
-            # the score bias below discards those columns anyway.
-            gt_slot = pl.maximums(pl.load(swa_indices, [gt, 0], [1, WIN]), 0)
-            gt_kv = pl.mgather(kv_all, gt_slot, coalesce="row")
-            pl.store(gt_kv, [gt * WIN, 0], kv_win)
+    # Row r of the cache pool is ori_kv[r // BLOCK_SIZE, r % BLOCK_SIZE, 0, :].
+    pool_rows = pl.tensor.dim(ori_kv, 0) * BLOCK_SIZE
+    cache_rows = pl.reshape(ori_kv, [pool_rows, HEAD_DIM])
 
-    for sc in pl.parallel(0, T, 1):
-        with pl.at(level=pl.Level.CORE_GROUP, name_hint="swa_score"):
-            sc_rows = sc * H
-            sc_acc = pl.create_tensor([H, PADDED_TOPK], dtype=pl.FP32)
-            for sc_kb in pl.range(HEAD_DIM // 128):
-                sc_k0 = sc_kb * 128
-                sc_acc = pl.matmul_acc(
-                    sc_acc,
-                    q_all[sc_rows : sc_rows + H, sc_k0 : sc_k0 + 128],
-                    kv_win[sc * WIN : (sc + 1) * WIN, sc_k0 : sc_k0 + 128],
-                    b_trans=True,
-                    init_cond=(sc_kb == 0),
+    # Stage 1 -- gather the physical cache rows listed by swa_indices.
+    for t in pl.parallel(0, T):
+        with pl.at(level=pl.Level.CORE_GROUP, name_hint="swa_gather"):
+            slots = pl.load(swa_indices, [t, 0], [1, WIN])
+            rows = pl.mgather(cache_rows, slots, coalesce="row")
+            pl.store(pl.reshape(rows, [1, WIN, HEAD_DIM]), [t, 0, 0], kv_rows)
+
+    # Stage 2 -- sparse softmax attention and the inverse RoPE per head chunk.
+    for t in pl.parallel(0, T):
+        for hb in pl.parallel(0, H, 16):
+            with pl.at(level=pl.Level.CORE_GROUP, name_hint="swa_attn_rope"):
+                q_tile = pl.reshape(
+                    q[t : t + 1, hb : hb + 16, 0:HEAD_DIM], [16, HEAD_DIM]
                 )
-            sc_biased = pl.col_expand_add(
-                pl.mul(sc_acc, SOFTMAX_SCALE), sparse_bias[sc : sc + 1, 0:PADDED_TOPK]
-            )
-            score_buf[sc_rows : sc_rows + H, :] = sc_biased
+                kv_tile = pl.reshape(
+                    kv_rows[t : t + 1, 0:WIN, 0:HEAD_DIM], [WIN, HEAD_DIM]
+                )
+                scores = pl.mul(pl.matmul(q_tile, kv_tile, b_trans=True), SOFTMAX_SCALE)
+                # sparse_bias is 0 on a valid slot and +1e20 past swa_lens, so
+                # subtracting it is the additive -1e20 mask the softmax needs.
+                scores = pl.col_expand_sub(scores, sparse_bias[t : t + 1, 0:PADDED_TOPK])
+                row_max = pl.row_max(scores)
+                probs = pl.row_expand_expdif(scores, row_max)
+                row_sum = pl.row_sum(probs)
+                sink = pl.reshape(attn_sink[hb : hb + 16], [16, 1])
+                denom = pl.add(row_sum, pl.exp(pl.sub(sink, row_max)))
+                oi = pl.matmul(pl.cast(probs, target_type=pl.BF16), kv_tile)
+                o_tile = pl.row_expand_div(oi, denom)
 
-    for sm in pl.parallel(0, T, 1):
-        with pl.at(level=pl.Level.CORE_GROUP, name_hint="swa_softmax"):
-            sm_rows = sm * H
-            sm_score = score_buf[sm_rows : sm_rows + H, :]
-            sm_max = pl.row_max(sm_score)
-            sm_prob = pl.row_expand_expdif(sm_score, sm_max)
-            # The sink enters the denominator but never the numerator, so a query
-            # that attends to nothing still normalizes to zero.
-            sm_denom = pl.add(pl.row_sum(sm_prob), pl.exp(pl.sub(sink_col, sm_max)))
-            prob_buf[sm_rows : sm_rows + H, :] = pl.cast(sm_prob, target_type=pl.BF16, mode="rint")
-            denom_buf[sm_rows : sm_rows + H, 0:1] = sm_denom
+                # Inverse split-half RoPE over the trailing ROPE_DIM columns: the
+                # even columns pair with the odd ones this rotation swaps.
+                rope = o_tile[0:16, NOPE_DIM:HEAD_DIM]
+                even = pl.gather(rope, mask_pattern=pl.tile.MaskPattern.P0101)
+                odd = pl.gather(rope, mask_pattern=pl.tile.MaskPattern.P1010)
+                cos_half = pl.cast(freqs_cos[t : t + 1, 0:HALF_ROPE], target_type=pl.FP32)
+                sin_half = pl.cast(freqs_sin[t : t + 1, 0:HALF_ROPE], target_type=pl.FP32)
+                rot_even = pl.add(
+                    pl.col_expand_mul(even, cos_half), pl.col_expand_mul(odd, sin_half)
+                )
+                rot_odd = pl.sub(
+                    pl.col_expand_mul(odd, cos_half), pl.col_expand_mul(even, sin_half)
+                )
+                # The reference rounds each rotated pair to BF16 before the projection.
+                rot_even = pl.cast(pl.cast(rot_even, target_type=pl.BF16), target_type=pl.FP32)
+                rot_odd = pl.cast(pl.cast(rot_odd, target_type=pl.BF16), target_type=pl.FP32)
+                rope_base = pl.full([16, ROPE_DIM], dtype=pl.FP32, value=0.0)
+                rope_row = pl.scatter(
+                    rot_even, mask_pattern=pl.tile.MaskPattern.P0101, dst=rope_base
+                )
+                rope_row = pl.scatter(
+                    rot_odd, mask_pattern=pl.tile.MaskPattern.P1010, dst=rope_row
+                )
+                o_head = pl.concat(o_tile[0:16, 0:NOPE_DIM], rope_row)
+                attn_heads[t : t + 1, hb * HEAD_DIM : (hb + 16) * HEAD_DIM] = pl.cast(
+                    pl.reshape(o_head, [1, 16 * HEAD_DIM]), target_type=pl.BF16
+                )
 
-    for vl in pl.parallel(0, T * (HEAD_DIM // 128), 1):
-        with pl.at(level=pl.Level.CORE_GROUP, name_hint="swa_value"):
-            vl_tok = vl // (HEAD_DIM // 128)
-            vl_n0 = (vl % (HEAD_DIM // 128)) * 128
-            vl_rows = vl_tok * H
-            vl_prob = prob_buf[vl_rows : vl_rows + H, :]
-            vl_kv = kv_win[vl_tok * WIN : (vl_tok + 1) * WIN, vl_n0 : vl_n0 + 128]
-            vl_out = pl.matmul(vl_prob, vl_kv, out_dtype=pl.FP32)
-            attn_buf[vl_rows : vl_rows + H, vl_n0 : vl_n0 + 128] = pl.row_expand_div(
-                vl_out, denom_buf[vl_rows : vl_rows + H, 0:1]
-            )
-
-    # NOPE_DIM is 3.5 attention tiles wide, so the narrowing walks it in 64-wide
-    # columns blocks instead and still covers every column exactly.
-    for cn in pl.parallel(0, T * (NOPE_DIM // 64), 1):
-        with pl.at(level=pl.Level.CORE_GROUP, name_hint="swa_cast_nope"):
-            cn_tok = cn // (NOPE_DIM // 64)
-            cn_n0 = (cn % (NOPE_DIM // 64)) * 64
-            cn_rows = cn_tok * H
-            cn_src = attn_buf[cn_rows : cn_rows + H, cn_n0 : cn_n0 + 64]
-            attn_bf[cn_rows : cn_rows + H, cn_n0 : cn_n0 + 64] = pl.cast(cn_src, target_type=pl.BF16, mode="rint")
-
-    for rp in pl.parallel(0, T, 1):
-        with pl.at(level=pl.Level.CORE_GROUP, name_hint="swa_rope_pair"):
-            rp_rows = rp * H
-            rp_in = attn_buf[rp_rows : rp_rows + H, NOPE_DIM:HEAD_DIM]
-            # The rope region holds adjacent (even, odd) pairs, so each half is
-            # selected by column index rather than by a strided slice.
-            rp_seq = pl.arange(0, [1, HALF_ROPE], dtype=pl.INT32)
-            rp_ev = pl.mul(rp_seq, 2)
-            rp_od = pl.add(rp_ev, 1)
-            # The bare col_expand ignores its first operand, which only supplies
-            # the shape and dtype, so it copies the index row down every head.
-            rp_iev = pl.col_expand(pl.full([H, HALF_ROPE], dtype=pl.INT32, value=0), rp_ev)
-            rp_iod = pl.col_expand(pl.full([H, HALF_ROPE], dtype=pl.INT32, value=0), rp_od)
-            rp_even = pl.gather(rp_in, dim=-1, index=rp_iev)
-            rp_odd = pl.gather(rp_in, dim=-1, index=rp_iod)
-            rp_cos = pl.cast(freqs_cos[rp : rp + 1, 0:HALF_ROPE], target_type=pl.FP32)
-            rp_sin = pl.cast(freqs_sin[rp : rp + 1, 0:HALF_ROPE], target_type=pl.FP32)
-            rp_inv_e = pl.add(pl.col_expand_mul(rp_even, rp_cos), pl.col_expand_mul(rp_odd, rp_sin))
-            rp_inv_o = pl.sub(pl.col_expand_mul(rp_odd, rp_cos), pl.col_expand_mul(rp_even, rp_sin))
-            # The reference narrows each half to BF16 before recombining them.
-            rope_buf[rp_rows : rp_rows + H, 0:HALF_ROPE] = pl.cast(
-                pl.cast(rp_inv_e, target_type=pl.BF16, mode="rint"), target_type=pl.FP32
-            )
-            rope_buf[rp_rows : rp_rows + H, HALF_ROPE:ROPE_DIM] = pl.cast(
-                pl.cast(rp_inv_o, target_type=pl.BF16, mode="rint"), target_type=pl.FP32
-            )
-
-    for rj in pl.parallel(0, T, 1):
-        with pl.at(level=pl.Level.CORE_GROUP, name_hint="swa_rope_join"):
-            rj_rows = rj * H
-            rj_seq = pl.arange(0, [1, HALF_ROPE], dtype=pl.INT32)
-            rj_ev = pl.mul(rj_seq, 2)
-            rj_od = pl.add(rj_ev, 1)
-            rj_iev = pl.col_expand(pl.full([H, HALF_ROPE], dtype=pl.INT32, value=0), rj_ev)
-            rj_iod = pl.col_expand(pl.full([H, HALF_ROPE], dtype=pl.INT32, value=0), rj_od)
-            rj_base = attn_buf[rj_rows : rj_rows + H, NOPE_DIM:HEAD_DIM]
-            rj_half_e = rope_buf[rj_rows : rj_rows + H, 0:HALF_ROPE]
-            rj_half_o = rope_buf[rj_rows : rj_rows + H, HALF_ROPE:ROPE_DIM]
-            rj_join = pl.scatter(rj_base, dim=-1, index=rj_iev, src=rj_half_e)
-            rj_join = pl.scatter(rj_join, dim=-1, index=rj_iod, src=rj_half_o)
-            attn_bf[rj_rows : rj_rows + H, NOPE_DIM:HEAD_DIM] = pl.cast(rj_join, target_type=pl.BF16, mode="rint")
-
-    for pk in pl.parallel(0, T * O_GROUPS, 1):
-        with pl.at(level=pl.Level.CORE_GROUP, name_hint="swa_group_pack"):
-            pk_tok = pk // O_GROUPS
-            pk_grp = pk % O_GROUPS
-            pk_block = attn_bf[pk_tok * H + pk_grp * HEADS_PER_GROUP : pk_tok * H + (pk_grp + 1) * HEADS_PER_GROUP, :]
-            grp_buf[pk_grp * NZ_FRACTAL_ROWS + pk_tok : pk_grp * NZ_FRACTAL_ROWS + pk_tok + 1, :] = pl.reshape(
-                pk_block, [1, O_GROUP_IN]
-            )
-
-    # Cube operands are blocked on whole 16-row fractals, so the T tokens are
-    # padded up to one fractal and the pad rows carry zeros, not stale bytes.
-    for pd in pl.parallel(0, O_GROUPS, 1):
-        with pl.at(level=pl.Level.CORE_GROUP, name_hint="swa_group_pad"):
-            grp_buf[pd * NZ_FRACTAL_ROWS + T : (pd + 1) * NZ_FRACTAL_ROWS, :] = pl.full(
-                [T, O_GROUP_IN], dtype=pl.BF16, value=0.0
-            )
-
-    for pa in pl.parallel(0, O_GROUPS, 1):
-        with pl.at(level=pl.Level.CORE_GROUP, name_hint="swa_proj_a"):
-            pa_rows = pa * NZ_FRACTAL_ROWS
-            for pa_nb in pl.range(O_LORA // 256):
-                pa_n0 = pa_nb * 256
-                pa_acc = pl.create_tensor([NZ_FRACTAL_ROWS, 256], dtype=pl.FP32)
-                for pa_kb in pl.range(O_GROUP_IN // 256):
-                    pa_k0 = pa_kb * 256
-                    # Cutting the NZ window before flattening it keeps only the
-                    # tile in L1; a window taken off an already flattened stacked
-                    # weight stages the whole 8 MB matrix instead.
-                    pa_w = pl.reshape(pl.slice(wo_a, [1, 256, 256], [pa, pa_n0, pa_k0]), [256, 256])
-                    pa_acc = pl.matmul_acc(
-                        pa_acc,
-                        grp_buf[pa_rows : pa_rows + NZ_FRACTAL_ROWS, pa_k0 : pa_k0 + 256],
-                        pa_w,
-                        b_trans=True,
-                        init_cond=(pa_kb == 0),
+    # Stage 3 -- grouped o_proj_a, then the per-(token, group) INT8 activation
+    # quant. M is padded to the 16-row L0 fractal: the product and the accumulator
+    # must agree on the physical M, and the extra rows are dropped on read.
+    for g in pl.parallel(0, O_GROUPS):
+        with pl.at(level=pl.Level.CORE_GROUP, name_hint="o_proj_a_quant"):
+            for nb in pl.range(0, O_LORA // 256):
+                n0 = nb * 256
+                acc = pl.create_tensor([16, 256], dtype=pl.FP32)
+                for kb in pl.range(0, O_GROUP_IN // 256):
+                    k0 = kb * 256
+                    lhs = attn_heads[
+                        0:16, g * O_GROUP_IN + k0 : g * O_GROUP_IN + k0 + 256
+                    ]
+                    rhs = pl.reshape(
+                        pl.slice(wo_a, [1, 256, 256], [g, n0, k0]),
+                        [256, 256],
                     )
-                proj_a_buf[pa_rows : pa_rows + NZ_FRACTAL_ROWS, pa_n0 : pa_n0 + 256] = pa_acc
+                    acc = pl.matmul_acc(acc, lhs, rhs, b_trans=True, init_cond=(kb == 0))
+                o_r_pad[g * 16 : g * 16 + 16, n0 : n0 + 256] = pl.mul(acc, 1.0)
+            # One amax per (token, group) localises the reduction so proj_a ->
+            # quant -> proj_b can pipeline back to back. Chunking the 1024-wide
+            # row holds every live Vec tile at the 256-wide block extent.
+            amax0 = pl.row_max(pl.abs(o_r_pad[g * 16 : g * 16 + 16, 0:256]))
+            for cb, (amax,) in pl.range(1, O_LORA // 256, init_values=(amax0,)):
+                c0 = cb * 256
+                blk = o_r_pad[g * 16 : g * 16 + 16, c0 : c0 + 256]
+                amax_out = pl.yield_(pl.maximum(amax, pl.row_max(pl.abs(blk))))
+            scale_q = pl.mul(pl.recip(pl.maximum(amax_out, INT8_AMAX_EPS)), INT8_SCALE_MAX)
+            for cb in pl.range(0, O_LORA // 256):
+                c0 = cb * 256
+                blk = o_r_pad[g * 16 : g * 16 + 16, c0 : c0 + 256]
+                q_i8 = pl.cast(
+                    pl.row_expand_mul(blk, scale_q), target_type=pl.INT8, mode="rint"
+                )
+                pl.assemble(act_i8, q_i8, [0, g * O_LORA + c0])
+            pl.assemble(act_scale, pl.reshape(pl.recip(scale_q), [1, 16]), [g, 0])
 
-    # One amax per (token, group) row: that scale cannot factor out of the K-sum
-    # of the next matmul, so it travels along as its own dequant column.
-    for am in pl.parallel(0, O_GROUPS, 1):
-        with pl.at(level=pl.Level.CORE_GROUP, name_hint="swa_amax"):
-            am_rows = am * NZ_FRACTAL_ROWS
-            # amax(max(|x|, eps)) is the reference's amax(...).clamp_min(eps), and
-            # it keeps the floor out of the [rows, 1] reduction result.
-            am_max = pl.maximum(pl.abs(proj_a_buf[am_rows : am_rows + NZ_FRACTAL_ROWS, :]), INT8_AMAX_EPS)
-            proj_scale[am_rows : am_rows + NZ_FRACTAL_ROWS, 0:1] = pl.mul(
-                pl.recip(pl.row_max(am_max)), INT8_SCALE_MAX
-            )
+    # Stage 4 -- grouped INT8 o_proj_b, one D tile at a time. The per-group scale
+    # cannot factor out of the K-sum, so each group's INT32 partial is dequantised
+    # before the sum; the padded M rides out_pad and is dropped in the final copy.
+    with pl.at(level=pl.Level.CORE_GROUP, name_hint="o_proj_b"):
+        for db in pl.range(0, D // 256):
+            d0 = db * 256
+            acc0 = pl.full([16, 256], dtype=pl.FP32, value=0.0)
+            for g, (acc,) in pl.range(O_GROUPS, init_values=(acc0,)):
+                q_group = act_i8[0:16, g * O_LORA : (g + 1) * O_LORA]
+                w_group = pl.reshape(
+                    pl.slice(wo_b, [1, 256, O_LORA], [g, d0, 0]),
+                    [256, O_LORA],
+                )
+                partial = pl.matmul(q_group, w_group, b_trans=True)
+                s_row = pl.reshape(act_scale[g : g + 1, 0:16], [16, 1])
+                contrib = pl.row_expand_mul(pl.cast(partial, target_type=pl.FP32), s_row)
+                acc_new = pl.add(acc, contrib)
+                acc_out = pl.yield_(acc_new)
+            w_scale = pl.reshape(wo_b_scale[d0 : d0 + 256], [1, 256])
+            out_tile = pl.col_expand_mul(acc_out, w_scale)
+            out_pad[0:16, d0 : d0 + 256] = pl.cast(out_tile, target_type=pl.BF16)
 
-    for qt in pl.parallel(0, O_GROUPS * (O_LORA // 256), 1):
-        with pl.at(level=pl.Level.CORE_GROUP, name_hint="swa_quant"):
-            qt_grp = qt // (O_LORA // 256)
-            qt_k0 = (qt % (O_LORA // 256)) * 256
-            qt_rows = qt_grp * NZ_FRACTAL_ROWS
-            qt_scaled = pl.row_expand_mul(
-                proj_a_buf[qt_rows : qt_rows + NZ_FRACTAL_ROWS, qt_k0 : qt_k0 + 256],
-                proj_scale[qt_rows : qt_rows + NZ_FRACTAL_ROWS, 0:1],
-            )
-            proj_i8[qt_rows : qt_rows + NZ_FRACTAL_ROWS, qt_k0 : qt_k0 + 256] = pl.cast(
-                qt_scaled, target_type=pl.INT8, mode="rint"
-            )
-
-    for pb in pl.parallel(0, O_GROUPS, 1):
-        with pl.at(level=pl.Level.CORE_GROUP, name_hint="swa_proj_b"):
-            pb_rows = pb * NZ_FRACTAL_ROWS
-            for pb_nb in pl.range(D // 512):
-                pb_n0 = pb_nb * 512
-                pb_acc = pl.create_tensor([NZ_FRACTAL_ROWS, 512], dtype=pl.INT32)
-                for pb_kb in pl.range(O_LORA // 256):
-                    pb_k0 = pb_kb * 256
-                    pb_w = pl.reshape(pl.slice(wo_b, [1, 512, 256], [pb, pb_n0, pb_k0]), [512, 256])
-                    pb_acc = pl.matmul_acc(
-                        pb_acc,
-                        proj_i8[pb_rows : pb_rows + NZ_FRACTAL_ROWS, pb_k0 : pb_k0 + 256],
-                        pb_w,
-                        b_trans=True,
-                        init_cond=(pb_kb == 0),
-                    )
-                proj_acc[pb_rows : pb_rows + NZ_FRACTAL_ROWS, pb_n0 : pb_n0 + 512] = pb_acc
-
-    for ds in pl.parallel(0, D // 512, 1):
-        with pl.at(level=pl.Level.CORE_GROUP, name_hint="swa_dequant_seed"):
-            ds_n0 = ds * 512
-            dequant_buf[0:T, ds_n0 : ds_n0 + 512] = pl.full([T, 512], dtype=pl.FP32, value=0.0)
-
-    for dq in pl.parallel(0, O_GROUPS * (D // 512), 1):
-        with pl.at(level=pl.Level.CORE_GROUP, name_hint="swa_dequant"):
-            dq_grp = dq // (D // 512)
-            dq_n0 = (dq % (D // 512)) * 512
-            dq_rows = dq_grp * NZ_FRACTAL_ROWS
-            dq_part = pl.row_expand_mul(
-                pl.cast(proj_acc[dq_rows : dq_rows + T, dq_n0 : dq_n0 + 512], target_type=pl.FP32),
-                pl.recip(proj_scale[dq_rows : dq_rows + T, 0:1]),
-            )
-            pl.assemble(dequant_buf, dq_part, [0, dq_n0], atomic=pl.AtomicType.Add)
-
-    for ow in pl.parallel(0, D // 1024, 1):
-        with pl.at(level=pl.Level.CORE_GROUP, name_hint="swa_out_scale"):
-            ow_n0 = ow * 1024
-            ow_scaled = pl.col_expand_mul(dequant_buf[0:T, ow_n0 : ow_n0 + 1024], scale_col[0:1, ow_n0 : ow_n0 + 1024])
-            attn_out[0:T, ow_n0 : ow_n0 + 1024] = pl.cast(ow_scaled, target_type=pl.BF16, mode="rint")
+    # Stage 5 -- drop the padding rows into the BF16 output.
+    with pl.at(level=pl.Level.CORE_GROUP, name_hint="out_unpad"):
+        attn_out[0:T, 0:D] = out_pad[0:T, 0:D]
 
     return attn_out
 
