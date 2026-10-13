@@ -70,6 +70,11 @@ Both capture generations are accepted: the current scheduler schema
 (`scheduler_tasks` + `scheduler_records.streams` with per-record metrics,
 `host_orchestrator_phases` on host-orchestrated runs) and the archived
 flat keys (`aicpu_tasks` / `aicpu_scheduler_phases`). Scheduler-phase
+records may omit `schema_version` and carry `run_epoch`; parsing follows
+the actual row shape. Levels 2-4 use the upstream converter's timestamps,
+metric merges, and scheduler-ID lane placement. One database run represents
+one execution: captures with multiple epochs or mixed stamped/unstamped
+AICore rows are rejected instead of merging repeated task IDs. Scheduler-phase
 rows store the acted-on task token (`scheduler_phase.task_id`, filled
 for `dummy_task` / `predicated_skip` / `graph_prepare` records) and the
 run's `runtime_cfg` records the `orchestrator_source` the capture

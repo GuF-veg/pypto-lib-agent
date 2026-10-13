@@ -20,8 +20,8 @@ at zero tolerance.
 Two record schemas are accepted (simpler unified the scheduler streams in
 its 2026-09 "scheduler schema" change):
 
-- current: ``scheduler_tasks{schema_version, producer, records}`` and
-  ``scheduler_records{schema_version, streams[]}`` (metrics separated);
+- current: ``scheduler_tasks{producer, records}`` and
+  ``scheduler_records{streams[]}`` (metrics separated, optional run_epoch);
 - archived: top-level ``aicpu_tasks`` and ``aicpu_scheduler_phases``.
 
 Host-orchestrated captures (``metadata.orchestrator_source == "host"``)
@@ -59,7 +59,7 @@ def scheduler_task_rows(records: dict[str, Any]) -> list[Any]:
     """Scheduler dispatch/finish timing rows in either schema: current
     ``scheduler_tasks.records`` or the archived top-level
     ``aicpu_tasks``. Rows stay positional
-    ``[core_id, reg_task_id, dispatch_cycles, finish_cycles]``."""
+    ``[core_id, reg_task_id, dispatch_cycles, finish_cycles, run_epoch?]``."""
     section = records.get("scheduler_tasks")
     if isinstance(section, dict):
         return list(section.get("records") or [])
@@ -171,12 +171,11 @@ def to_us(cycles: int, base: int, clock_freq_hz: int, host_offset_us: float = 0.
 def aicore_row_us(
     row: list[int], base: int, clock_freq_hz: int, host_offset_us: float = 0.0
 ) -> dict[str, Any]:
-    """Convert one raw v2/v3 aicore row to its us-domain fields.
+    """Convert one raw aicore row to its us-domain fields.
 
     Row layout: [core_id, task_token_raw, reg_task_id, start_cycles,
-    end_cycles, receive_to_start_cycles?]. The trailing column is the
-    AICore-side receive delta on v3 shape records and absent on archived
-    v2 rows.
+    end_cycles, receive_to_start_cycles?, run_epoch?]. Archived rows carry
+    five or six columns; identity-stamped rows carry seven.
     """
     start_c = int(row[3])
     r2s = int(row[5]) if len(row) > 5 else 0

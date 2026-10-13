@@ -200,7 +200,9 @@ flag 暴露与否是**入口相关**的（`--help` 确认）；未暴露时可�
 | `../report/perf_hints.log` | 可选 | 在采集目录的父级 `report/` 下自动发现 |
 | `merged_swimlane_*.json` | 可选 | 登记为工件，不解析 |
 
-**新旧两代调度 schema 都支持**：现行格式（顶层 `scheduler_tasks{schema_version,producer,records}` + `scheduler_records{schema_version,streams[]}`，metrics 按 `record_index` 对齐）与归档格式（顶层 `aicpu_tasks` + 扁平 `aicpu_scheduler_phases`）自动识别，host 编排（`host_orchestrator_phases`，ns 时间戳）亦支持；两种编排时钟域同时出现会被拒绝。
+**新旧两代调度 schema 都支持**：现行格式（顶层 `scheduler_tasks{producer,records}` + `scheduler_records{streams[]}`，metrics 按 `record_index` 对齐）与归档格式（顶层 `aicpu_tasks` + 扁平 `aicpu_scheduler_phases`）自动识别。现行格式不要求 `schema_version`，支持携带 `run_epoch` 的七列 AICore／五列 scheduler task 行；读取依据实际行宽和字段集合。level 2–4 直接复用上游转换器的时间戳、metrics 合并与 `scheduler_id` 泳道位置，缺省泳道保留为空槽。host 编排（`host_orchestrator_phases`，ns 时间戳）亦支持；两种编排时钟域同时出现会被拒绝。
+
+一个数据库 run 对应一次执行。含多个 `run_epoch`，或混合带 epoch 与不带 epoch 的 AICore 行，会被拒绝；应分别摄取单次执行的完整采集，避免重复 task ID 被拼成错误的关键路径。
 
 ---
 

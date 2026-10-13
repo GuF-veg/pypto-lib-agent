@@ -245,6 +245,7 @@ def chip_records(level: int = 1, *, schema: str = "legacy") -> dict[str, Any]:
         raise ValueError(f"unknown capture schema: {schema!r}")
     rows = _aicore_rows()
     metadata: dict[str, Any] = {
+        "runtime": "tensormap_and_ringbuffer",
         "clock_freq_hz": CLOCK_FREQ_HZ,
         "num_cores": NUM_CORES,
         "core_types": CORE_TYPES,

@@ -429,8 +429,116 @@ def test_scheduler_stream_metrics_merge_and_validation(tmp_path: Path) -> None:
 
     section = json.loads(json.dumps(doc["scheduler_records"]))
     section["schema_version"] = 2
-    with pytest.raises(IngestError, match="schema_version"):
+    assert _merge_scheduler_streams(section) == lanes
+
+    section.pop("schema_version")
+    for record in section["streams"][0]["records"]:
+        record["run_epoch"] = 7
+    assert all(record["run_epoch"] == 7 for record in _merge_scheduler_streams(section)[0])
+    section["streams"][0]["metrics"][0]["run_epoch"] = 8
+    with pytest.raises(IngestError, match="overwrites"):
         _merge_scheduler_streams(section)
+    section["streams"][0]["metrics"][0].pop("run_epoch")
+    section["streams"][0]["records"][1].pop("run_epoch")
+    with pytest.raises(IngestError, match="exactly"):
+        _merge_scheduler_streams(section)
+
+
+@pytest.mark.parametrize("level", [1, 4])
+@pytest.mark.parametrize("schema", ["device", "host"])
+@pytest.mark.skipif(not _SIMPLER_AVAILABLE, reason="requires the upstream converter")
+def test_epoch_capture_matches_converter(tmp_path: Path, db_file: Path, level: int, schema: str) -> None:
+    """Unversioned epoch records retain task timing, metrics, and scheduler lane IDs."""
+    from simpler_setup.tools.swimlane_converter import read_perf_data
+
+    source = synth_artifacts.generate(tmp_path / "cap", level=level, schema=schema)
+    path = source / "chip_swimlane_records.json"
+    doc = json.loads(path.read_text())
+    for row in doc["aicore_tasks"]:
+        row.append(7)
+    doc["scheduler_tasks"].pop("schema_version")
+    for row in doc["scheduler_tasks"]["records"]:
+        row.append(7)
+    doc["scheduler_records"].pop("schema_version")
+    for stream in doc["scheduler_records"]["streams"]:
+        stream["scheduler_id"] = 2
+        for phase in stream["records"]:
+            phase["run_epoch"] = 7
+    for lane in doc.get("aicpu_orchestrator_phases", []):
+        for phase in lane:
+            phase["run_epoch"] = 7
+    path.write_text(json.dumps(doc))
+    original = path.read_bytes()
+    joined = read_perf_data(str(path))
+
+    with ProfileDB(db_file) as db:
+        report = ingest_capture(db, source)
+        assert report["task_rows"] == len(joined["tasks"]) == 4
+        stored = db.connection.execute(
+            "SELECT task_id, core_index, start_us, end_us, dispatch_us, receive_us, finish_us "
+            "FROM task_row ORDER BY task_id, core_index"
+        ).fetchall()
+        reference = sorted(
+            (str(row["task_id"]), row["core_id"], row["start_time_us"], row["end_time_us"],
+             row.get("dispatch_time_us", 0.0), row["receive_time_us"], row.get("finish_time_us", 0.0))
+            for row in joined["tasks"]
+        )
+        assert stored == reference
+        phases = db.connection.execute(
+            "SELECT lane, kind, t0_us, t1_us, pop_hit, pop_miss FROM scheduler_phase ORDER BY phase_id"
+        ).fetchall()
+        assert phases == [
+            (lane, phase["phase"], phase["start_time_us"], phase["end_time_us"],
+             phase.get("pop_hit"), phase.get("pop_miss"))
+            for lane, records in enumerate(joined.get("aicpu_scheduler_phases", []))
+            for phase in records
+        ]
+        orch = db.connection.execute(
+            "SELECT lane, task_id, t0_us, t1_us FROM orch_phase ORDER BY lane, submit_idx"
+        ).fetchall()
+        assert orch == [
+            (lane, str(phase["task_id"]), phase["start_time_us"], phase["end_time_us"])
+            for lane, records in enumerate(joined.get("aicpu_orchestrator_phases", []))
+            for phase in records
+        ]
+        assert ingest_capture(db, source)["run_id"] == report["run_id"]
+        assert _count(db.connection, "task_row", report["run_id"]) == 4
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("epochs", [(1, 2), (None, 1)])
+def test_ingest_rejects_multiple_or_mixed_execution_epochs(tmp_path: Path, db_file: Path, epochs) -> None:
+    """Repeated task IDs from different executions must not form a single path."""
+    source = synth_artifacts.generate(tmp_path / "cap", level=1)
+    path = source / "chip_swimlane_records.json"
+    doc = json.loads(path.read_text())
+    for index, row in enumerate(doc["aicore_tasks"]):
+        epoch = epochs[index % 2]
+        if epoch is not None:
+            row.append(epoch)
+    path.write_text(json.dumps(doc))
+    with ProfileDB(db_file) as db:
+        with pytest.raises(IngestError, match="run_epoch"):
+            ingest_capture(db, source)
+        assert db.connection.execute("SELECT COUNT(*) FROM run").fetchone()[0] == 0
+
+
+@pytest.mark.skipif(not _SIMPLER_AVAILABLE, reason="requires the upstream converter")
+def test_ingest_rejects_phase_from_another_epoch(tmp_path: Path, db_file: Path) -> None:
+    source = synth_artifacts.generate(tmp_path / "cap", level=4, schema="device")
+    path = source / "chip_swimlane_records.json"
+    doc = json.loads(path.read_text())
+    for row in doc["aicore_tasks"]:
+        row.append(1)
+    for row in doc["scheduler_tasks"]["records"]:
+        row.append(1)
+    for phase in doc["scheduler_records"]["streams"][0]["records"]:
+        phase["run_epoch"] = 2
+    path.write_text(json.dumps(doc))
+    with ProfileDB(db_file) as db:
+        with pytest.raises(IngestError, match="run_epoch"):
+            ingest_capture(db, source)
+        assert db.connection.execute("SELECT COUNT(*) FROM run").fetchone()[0] == 0
 
 
 def test_base_time_tracks_scheduler_schema_streams() -> None:
