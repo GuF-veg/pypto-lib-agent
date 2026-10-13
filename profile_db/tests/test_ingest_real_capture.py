@@ -19,7 +19,9 @@ and only the parity tests run.
 
 from __future__ import annotations
 
+import json
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -217,7 +219,7 @@ def test_real_capture_reingest_is_idempotent(db_file: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_derived_cpm_parity_with_upstream(db_file: Path) -> None:
+def test_derived_cpm_parity_with_upstream(db_file: Path, tmp_path: Path) -> None:
     """Both path sequences, every gap kind, and the per-task compute/stall
     segments must match the upstream runtime analyzer exactly."""
     pytest.importorskip("simpler_setup")
@@ -225,7 +227,21 @@ def test_derived_cpm_parity_with_upstream(db_file: Path) -> None:
 
     from profile_db.db import ProfileDB
 
-    graph = upstream.build_graph(_CAPTURE, _CAPTURE, 2)
+    # The pinned upstream parser expects six columns; epoch identity does
+    # not affect the reference algorithm for a single-execution capture.
+    reference_dir = tmp_path / "upstream-reference"
+    reference_dir.mkdir()
+    for pattern in ("deps.json", "name_map*.json"):
+        for path in _CAPTURE.glob(pattern):
+            shutil.copyfile(path, reference_dir / path.name)
+    records_path = _CAPTURE / "chip_swimlane_records.json"
+    original = records_path.read_bytes()
+    records = json.loads(original)
+    epochs = {row[6] if len(row) == 7 else None for row in records["aicore_tasks"]}
+    assert len(epochs) == 1
+    records["aicore_tasks"] = [(row + [0])[:6] for row in records["aicore_tasks"]]
+    (reference_dir / records_path.name).write_text(json.dumps(records))
+    graph = upstream.build_graph(reference_dir, reference_dir, 2)
     reference = upstream.analyze_rank(graph, 2)
     assert reference.freq > 0
 
@@ -259,6 +275,7 @@ def test_derived_cpm_parity_with_upstream(db_file: Path) -> None:
         # run.cpm_us = static CPM duration in µs
         cpm_us = conn.execute("SELECT cpm_us FROM run WHERE run_id = 1").fetchone()[0]
         assert cpm_us == pytest.approx(reference.cpm_len * tick_us, abs=1e-6)
+        assert records_path.read_bytes() == original
     finally:
         db.close()
 
