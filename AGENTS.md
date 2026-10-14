@@ -131,3 +131,19 @@ pool assigned), exposed as logical device 0.
 - `docs/`: coding style, compile/runtime workflow, performance tuning,
   validation, examples, models, precision tuning, and debugging references
 - `.claude/skills/`: task-specific execution workflows that reference `docs/`
+
+## Agent skills
+
+Matt Pocock engineering skills use the following repo configuration.
+
+### Issue tracker
+
+Track issues and specs in GitHub Issues for `GuF-veg/pypto-lib-agent`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the five default triage labels. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Use a single-context layout: root `GLOSSARY.md` and `docs/adr/`. See `docs/agents/domain.md`.
