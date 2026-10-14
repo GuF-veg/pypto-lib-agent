@@ -14,17 +14,19 @@
 `qwen3_14b` 四个模型。每道题目是一个自包含的 `.py` 文件：
 
 - 文件中标有 `EXAM` 的函数是待实现部分：其函数体已被替换为占位 stub，
-  但装饰器、签名与前后接口保持不变，是题目文件内唯一允许改动的目标；
+  但装饰器、签名与前后接口保持不变；将题目复制到指定实现输出文件夹后，
+  仅允许修改副本中的该函数体，原始题目文件保持只读；
 - 同一文件内保留了该算子的 PyTorch golden 参考实现（`golden_*` 函数）
   和测试入口（`__main__`）；
 - `manifest.csv` 列出了全部题目及各自的模型、算子名与 golden 函数名。
 
 运行方式与仓库其它脚本一致（在 `pypto` conda 环境中，每道题均为单卡）。
 本机 8 个 NPU 由 `npu-run` 统一池化调度（已安装在 PATH），所有真机运行
-都必须用它包裹：
+都必须用它包裹。以下命令仅展示运行方式，`<script-path>.py` 应替换为
+实际脚本路径，例如评测组织者指定输出文件夹中的实现脚本：
 
 ```bash
-npu-run python benchmarks/basic_operator/<model>/<op>.py -p a2a3 -d 0
+npu-run python <script-path>.py -p a2a3 -d 0
 ```
 
 `-p` **固定为 `a2a3`**，不要选用其它平台。`-d` **固定写 `0`**：`npu-run`
@@ -37,12 +39,15 @@ golden 验证；该题的默认 case 与所有增强测试 case 均通过才算�
 
 ## 硬性约束（参评 agent 必须遵守）
 
-1. **目录白名单**。只允许访问以下四个目录：
+1. **目录白名单与权限**。只允许按以下权限访问这四个目录：
 
-   - `benchmarks/basic_operator/`（题目本体）
-   - `docs/pypto-language/`（PyPTO 语言文档）
-   - `examples/`（示例代码）
-   - `build_output/`（编译与运行产物）
+   - `benchmarks/basic_operator/`（题目本体，只读）
+   - `docs/pypto-language/`（PyPTO 语言文档，只读）
+   - `examples/`（示例代码，只读）
+   - `build_output/`（编译与运行产物，可读写）
+
+   前三个目录及其内容均为只读，不允许新增、修改、删除或移动文件。
+   实现代码与辅助测试脚本必须写入评测组织者指定的输出文件夹。
 
    仓库其余所有目录与文件——包括 `models/`、`golden/`、`tests/`、
    `docs/` 的其它子目录、`.claude/`、`benchmarks/implementation/` 等——一律不得读取、浏览或搜索。
@@ -57,9 +62,9 @@ golden 验证；该题的默认 case 与所有增强测试 case 均通过才算�
    设施，属于允许执行的工具，不视为越权访问。
 
    **实现代码的存放位置由评测组织者为每个参评 agent 单独指定**（见下文
-   "任务提交要求"）。该输出文件夹随任务一并授权，授权后视作该 agent
-   白名单的一部分；在获得明确指定之前，不要向白名单之外的任何路径写入
-   或修改文件。
+   "任务提交要求"）。该输出文件夹随任务一并授予读写权限，授权后视作该
+   agent 白名单的一部分；在获得明确指定之前，不要向白名单之外的任何
+   路径写入或修改文件。
 
 2. **禁止使用 git 历史**。不得执行任何查看历史提交的命令（`git log`、
    `git show`、`git blame`、对历史版本的 `git diff` 等）。历史提交中
@@ -76,13 +81,14 @@ golden 验证；该题的默认 case 与所有增强测试 case 均通过才算�
    题目的测试入口或 `--help`，确认其提供的增强测试选项，并逐项运行验证，
    不得仅以默认 case 通过作为完成依据。例如，
    `benchmarks/basic_operator/deepseek_v4_flash_mtp/decode_sparse_attn_swa.py`
-   除默认运行外，还必须分别启用 `--causal-regression-fixture` 和
-   `--short-window-fixture`，通过对应的 golden 验证：
+   复制到指定输出文件夹 `<output-dir>/` 并完成实现后，除默认运行外，还
+   必须分别启用 `--causal-regression-fixture` 和 `--short-window-fixture`，
+   通过对应的 golden 验证：
 
    ```bash
-   npu-run python benchmarks/basic_operator/deepseek_v4_flash_mtp/decode_sparse_attn_swa.py \
+   npu-run python <output-dir>/decode_sparse_attn_swa.py \
      -p a2a3 -d 0 --causal-regression-fixture
-   npu-run python benchmarks/basic_operator/deepseek_v4_flash_mtp/decode_sparse_attn_swa.py \
+   npu-run python <output-dir>/decode_sparse_attn_swa.py \
      -p a2a3 -d 0 --short-window-fixture
    ```
 
@@ -101,7 +107,7 @@ golden 验证；该题的默认 case 与所有增强测试 case 均通过才算�
    - 该 agent 负责开发的算子是哪一个（题目文件路径，或 `manifest.csv`
      中对应的条目）；
    - 该 agent 的实现输出放到哪个文件夹。这个输出文件夹随任务一并授予
-     该 agent 访问权限，视作其白名单的一部分。
+     该 agent 读写权限，视作其白名单的一部分。
 
    如果任务指令缺少以上任何一项，参评 agent 应当先提醒用户补充说明，
    不要自行猜测算子或输出位置后开工。
