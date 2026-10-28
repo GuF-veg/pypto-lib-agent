@@ -107,6 +107,9 @@ budget is the query's default: **32768** for `pmu` and `critical_path`,
 When the budget cuts the stream it ends with
 `TRUNCATED first_dropped_index=… remaining=… limit=… hint="retry --budget N"`.
 Follow `hint=`; do not interpret a truncated `pmu` stream as "no vec_busy".
+MCP exposes the same control as `budget_bytes`: retry the same selectors with
+the hinted larger value and replace the previous response. Recovery is a new
+read, so offsets from an earlier response are not persistent cursors.
 
 `pfdb list` returns every run with its rank label and, when a trial is
 bound, `trial_id`. Run-scoped queries accept optional `--rank <label>`.
@@ -115,7 +118,8 @@ bound, `trial_id`. Run-scoped queries accept optional `--rank <label>`.
 
 - `pfdb list` — the runs in the working set.
 - `pfdb query overview --run-id <id>` — top-line metrics, topology, graph size.
-  Check `level=` here before using Z4 queries.
+  Includes declared block counts and physical rows/distinct cores per engine;
+  these are whole-capture counts, not utilization. Check `level=` before Z4.
 - `pfdb query inventory --run-id <id>` — which artifacts were ingested, how stored.
 
 **Z1 — macro density** (where the timeline is dense or empty):
@@ -159,16 +163,17 @@ capture does not carry FIN/dispatch, not "this task had no wait"):
 - `pfdb query why_late --run-id <id> --task-id <t>` — end→FIN→dispatch→receive→start.
   Separate data_ready_us from observed_ready_us and preserve signed
   observed_to_dispatch_us; segment definitions live in the runtime contract.
-- `pfdb query why_long --run-id <id> --task-id <t>` — busy time vs its family.
+- `pfdb query why_long --run-id <id> --task-id <t>` — task envelope vs family
+  and row extrema; read its `METRIC_DEFINITION` before interpreting the timings.
 - `pfdb query rows --run-id <id> --task-id <t>` — physical row-level timings.
 - `pfdb query scheduler --run-id <id> --task-id <t>` — scheduler/orchestrator
   phases (level-4 for full phase data).
 - `pfdb query early_dispatch --run-id <id> --task-id <t>` —
   `full/partial/none/unavailable`.
-- `pfdb query pmu --run-id <id> --task-id <t> [--samples]` — which pipe is
-  close to saturation. First-class, not an afterthought: cube vs mte2 vs
-  scalar is the question that decides "algorithmic gather" vs "weight
-  traffic". Only available when the capture includes `pmu.csv`. Without a
+- `pfdb query pmu --run-id <id> --task-id <t> [--samples]` — captured pipe
+  counters and total-cycle ratios, with sample/core/event identities. Use
+  these observations to formulate a controlled mechanism test. Only available
+  when the capture includes `pmu.csv`. Without a
   `*total*cycle*` column the `ratio` field is absent and an `EVIDENCE` line
   with `metric="ratio"`, a `reason`, and `evidence=unavailable` says so.
 
@@ -213,6 +218,17 @@ per modality, plus whether it was `requested`.
 
 ## Trials without a profile run
 
+For compile-only, bench-only or changed candidates, read
+[candidate evidence](../../../docs/debug-and-tune/pfdb-candidate-evidence.md).
+Import the external producer's existing manifest with `pfdb attach <manifest>
+--trial-id <id>`, then `pfdb trial list --trial-id <id>` to check identity,
+scope and missing artifacts. Use source/scope SHA guards for an exact candidate;
+unfiltered history identities are unchecked. Import does not collect or certify
+correctness. A changed manifest uses a child trial.
+
+For a compile failure, use the same selected trial with `--view diagnostics --source-sha256 <expected-sha> --budget 32768` to read verified registered text.
+See the candidate evidence guide above for content limits and trust boundaries.
+
 `bind` still requires an ingested run. Verdicts do not.
 
 - Compile failed (never ran): `register` then
@@ -245,7 +261,7 @@ Use MCP only when a `pfdb` namespace is actually connected in this session
 tool; then use the CLI with `PFDB_PATH` set.
 
 Pass `--writable` only for trial / baseline / note mutations. Without it the
-server is read-only. The database is single-writer: never run `ingest` (or
+server is database-read-only and omits mutation tools from its catalog. The database is single-writer: never run `ingest` (or
 `--writable` MCP) in parallel with another writer. A `LockError` means wait
 or kill the other process — not "delete `.pfdb`".
 
@@ -253,6 +269,7 @@ or kill the other process — not "delete `.pfdb`".
 
 - `pfdb prune --keep N` — delete runs outside the working set (latest N +
   baseline/active-trial references). Automatic after ingest with `--keep 3`.
+  Completed trials keep compact benchmark summaries; raw traces still expire.
 - `pfdb note <run> "<text>"` — free-text note on a run.
 - `pfdb compare <run_a> <run_b> [--family [name]] [--bootstrap …]` —
   run-level deltas always; `--family` (bare) adds per-family busy / wall /
@@ -278,7 +295,8 @@ JSON-encoded. Evidence is exactly one of:
 - `unavailable` — the artifact or field is absent.
 
 A missing run/task/band returns an `unavailable` fact, never a guess.
-Multi-rank databases refuse deterministic queries until you pass `--rank`.
+Each run ID identifies one capture. Optional `--rank` checks that identity;
+use rank labels when choosing captures from a multi-rank database.
 
 ## Navigation suggestions (not rules)
 
@@ -296,8 +314,11 @@ Follow the question, not a fixed zoom order:
   (then `render window` if the text neighborhood is still unclear).
 - "Did the algorithm move a family?" → `compare --family` (and
   `baseline diff` for wall-clock). Do not read makespan DELTA as speedup.
-- "Did my change help overall?" → unprofiled `bench_mean_us` CI, then
-  `trial verdict`.
+- "Did my change help overall?" → independent validation and the declared
+  complete unprofiled latency objective, then record the caller's `trial verdict`.
+  `compare` checks capture/analysis compatibility; workload and validation remain
+  unchecked. Its bootstrap estimates mean speedup; median confirmation stays
+  with the external evaluator. See the public manual's lifecycle contract.
 
 ## Troubleshooting
 

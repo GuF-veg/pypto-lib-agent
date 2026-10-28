@@ -1,0 +1,91 @@
+{
+  "package": "0.8.0",
+  "mcp_schema": "7",
+  "database_schema": 9,
+  "analysis_adapter": "pfdb/0.4.0",
+  "readonly_tools": 33,
+  "writable_tools": 41,
+  "hidden_readonly_tools": [
+    "pfdb.attach",
+    "pfdb.refresh",
+    "pfdb.baseline_add",
+    "pfdb.register_trial",
+    "pfdb.bind_trial",
+    "pfdb.attach_bench",
+    "pfdb.set_verdict",
+    "pfdb.note"
+  ],
+  "descriptor_bytes": {
+    "False": 35195,
+    "True": 39689
+  },
+  "final_tests": {
+    "passed": 471,
+    "skipped": 11,
+    "log_sha256": "2eabde18b0d934035653e1c5665ad40b3b4005b790bcfe9818ea5dbd9740ace9"
+  },
+  "native_smoke": {
+    "passed": true,
+    "answer": {
+      "capture_aiv_cores": 40,
+      "observed_aiv_cores": 6,
+      "resource_scope": "capture_declared_topology",
+      "tool_schema_version": "7",
+      "write_tool_available": false
+    },
+    "database_unchanged": true,
+    "stdout_sha256": "6268e34056ccb41ba248e81a8c971dd81667176fb5dc92195404ea544ee29eec",
+    "scope": "one integration check, not efficacy"
+  },
+  "prototype_parity": {
+    "comparisons": 6,
+    "all_matching": true,
+    "scope": "0.8 production overview bytes equal observed scoped prototype responses from the frozen 0.7 study"
+  },
+  "invariants": {
+    "protected_files": 293,
+    "changed": [],
+    "upstream": {
+      "pypto": {
+        "head": "ee49fceaa3290cf90257a22eab867c04245b499d",
+        "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "unchanged": true
+      },
+      "runtime": {
+        "head": "6e383fc57c12a8bd4dce045289b8b4f5d55a15f1",
+        "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "unchanged": true
+      }
+    }
+  },
+  "package_archives": {
+    "catalog-native-v1": {
+      "files": 69,
+      "all_preregistered_hashes_match": true,
+      "created_after_study": true,
+      "reconstructed_files": [
+        "profile_db/src/profile_db/_version.py",
+        "profile_db/src/profile_db/mcp_server.py",
+        "profile_db/src/profile_db/query/handlers_z0.py"
+      ],
+      "method": "Small 0.8 changes reversed only in the archive; each byte sequence verified against preregistered SHA. Active sources untouched."
+    },
+    "resource-scope-native-v1": {
+      "files": 69,
+      "all_preregistered_hashes_match": true,
+      "created_after_study": true,
+      "reconstructed_files": [
+        "profile_db/src/profile_db/_version.py",
+        "profile_db/src/profile_db/mcp_server.py",
+        "profile_db/src/profile_db/query/handlers_z0.py"
+      ],
+      "method": "Small 0.8 changes reversed only in the archive; each byte sequence verified against preregistered SHA. Active sources untouched."
+    }
+  },
+  "post_suite_research_tests": {
+    "passed": 12,
+    "overlaps_full_suite": true,
+    "log_sha256": "984567cd00f71f0571114778e31bd45a2b86bf20a38a904ef417e1bbe824b957",
+    "scope": "includes mocked cancellation of only the owned timed-out OpenCode session"
+  }
+}

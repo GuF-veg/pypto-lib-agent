@@ -94,6 +94,170 @@ def test_active_trial_protects_its_run(tmp_path: Path) -> None:
         db.close()
 
 
+def test_completed_trial_keeps_its_bound_bench_after_prune() -> None:
+    with ProfileDB.memory() as db:
+        _load_run(db, 1, bench_mean_us=100.0)
+        db.connection.execute(
+            "UPDATE run SET bench_min_us=90,bench_median_us=99,bench_max_us=110,bench_rounds=20"
+        )
+        trial = db.register_trial("median latency", "tile change")
+        db.bind_trial(trial, 1)
+        db.set_verdict(trial, "neutral", evidence_refs=["synthetic-validation-unknown"])
+        before = db.list_trials()
+        assert before.facts[0].fields["bench_median_us"] == 99
+        assert before.facts[0].fields["bench_rounds"] == 20
+        assert db.prune(keep=0)["pruned"] == [1]
+        assert db.list_trials() == before
+        assert db.connection.execute("SELECT count(*) FROM task").fetchone()[0] == 0
+
+
+def test_capture_compatibility_does_not_certify_workload_or_validation() -> None:
+    with ProfileDB.memory() as db:
+        _load_run(db, 1, bench_mean_us=100.0)
+        _load_run(db, 2, bench_mean_us=50.0)
+        db.connection.execute("UPDATE run SET tags=CAST(? AS JSON) WHERE run_id=1", ['["tokens=512"]'])
+        db.connection.execute("UPDATE run SET tags=CAST(? AS JSON) WHERE run_id=2", ['["tokens=8192"]'])
+        header = db.compare(1, 2).facts[0].fields
+        assert header["compatible"] is True
+        assert header["workload_validation_checked"] is False
+        assert header["compatibility_scope"] == "capture_configuration_and_profile_analysis"
+
+
+def test_level1_family_comparison_never_reports_placeholder_wall_time(tmp_path: Path) -> None:
+    with ProfileDB.memory() as db:
+        for i in range(2):
+            db.ingest(_distinct_capture(tmp_path / f"capture{i}", i * 1000), prune_after=False)
+        result = db.compare(1, 2, family="*")
+        assert result.facts[0].fields["unavailable_metrics"] == ["family_wall_us"]
+        metrics = {f.fields.get("metric") for f in result.facts if f.rec == "DELTA"}
+        assert "family_wall_us" not in metrics
+        assert {"family_busy_us", "family_tasks"} <= metrics
+
+
+def test_all_untimed_family_totals_are_unavailable_without_hiding_known_families() -> None:
+    from profile_db.ingest.writer import insert_tasks
+
+    with ProfileDB.memory() as db:
+        for run_id in (1, 2):
+            _load_run(db, run_id)
+            insert_tasks(db.connection, run_id, [task("2", engine="aic", name="unobserved", family="unobserved")])
+        result = db.compare(1, 2, family="*")
+        unavailable = result.facts[0].fields["unavailable_metrics"]
+        assert {d["metric"] for d in unavailable} == {"family_busy_us", "family_wall_us"}
+        assert all(d["family"] == "unobserved" and d["unavailable_before"] and d["unavailable_after"] for d in unavailable)
+        assert json.loads(format_result(result, "json"))[0]["unavailable_metrics"] == unavailable
+        unknown = [f.fields for f in result.facts if f.rec == "DELTA" and f.fields.get("family") == "unobserved"]
+        assert len(unknown) == 1 and unknown[0]["metric"] == "family_tasks"
+        assert unknown[0]["before"] == unknown[0]["after"] == 1
+        known = [f.fields for f in result.facts if f.rec == "DELTA" and f.fields.get("family") == "rmsnorm"]
+        assert {d["metric"] for d in known} == {"family_busy_us", "family_wall_us", "family_tasks"}
+        assert all(d["before"] == d["after"] == 10 for d in known if d["metric"] != "family_tasks")
+        db.connection.execute("DELETE FROM task WHERE run_id=2 AND family='unobserved'")
+        absent = db.compare(1, 2, family="unobserved")
+        count = next(f.fields for f in absent.facts if f.rec == "DELTA" and f.fields.get("family") == "unobserved")
+        assert count["metric"] == "family_tasks" and count["before"] == 1 and count["after"] == 0
+        assert all(d["unavailable_before"] and not d["unavailable_after"] for d in absent.facts[0].fields["unavailable_metrics"])
+
+
+@pytest.mark.parametrize("missing", [("busy_us",), ("wall_us",), ("busy_us", "wall_us")])
+def test_any_untimed_task_prevents_an_incomplete_family_timing_delta(missing) -> None:
+    from profile_db.ingest.writer import insert_tasks
+
+    with ProfileDB.memory() as db:
+        for run_id in (1, 2):
+            _load_run(db, run_id)
+        extra = task("2", engine="aic", name="partial", family="rmsnorm", busy_us=5.0, wall_us=11.0)
+        for metric in missing:
+            extra[metric] = None
+        insert_tasks(db.connection, 2, [extra])
+        result = db.compare(1, 2, family="rmsnorm")
+        unavailable = result.facts[0].fields["unavailable_metrics"]
+        assert {d["metric"] for d in unavailable} == {f"family_{m}" for m in missing}
+        assert all(not d["unavailable_before"] and d["unavailable_after"] for d in unavailable)
+        reverse = db.compare(2, 1, family="rmsnorm").facts[0].fields["unavailable_metrics"]
+        assert all(d["unavailable_before"] and not d["unavailable_after"] for d in reverse)
+        deltas = {f.fields["metric"]: f.fields for f in result.facts if f.rec == "DELTA" and f.fields.get("family") == "rmsnorm"}
+        assert all(f"family_{m}" not in deltas for m in missing)
+        assert deltas["family_tasks"]["before"] == 1 and deltas["family_tasks"]["after"] == 2
+        for metric, after in (("busy_us", 15.0), ("wall_us", 21.0)):
+            if metric not in missing:
+                assert deltas[f"family_{metric}"]["before"] == 10
+                assert deltas[f"family_{metric}"]["after"] == after
+
+
+def test_absent_family_remains_zero_work_with_measured_count_and_timing_deltas() -> None:
+    with ProfileDB.memory() as db:
+        for run_id in (1, 2):
+            _load_run(db, run_id)
+        db.connection.execute("UPDATE task SET family='replacement',busy_us=25,wall_us=30 WHERE run_id=2")
+        result = db.compare(1, 2, family="*")
+        assert not result.facts[0].fields.get("unavailable_metrics")
+        deltas = {(f.fields.get("family"), f.fields["metric"]): f.fields for f in result.facts if f.rec == "DELTA" and f.fields.get("family")}
+        for metric in ("family_busy_us", "family_wall_us", "family_tasks"):
+            assert deltas[("rmsnorm", metric)]["after"] == 0
+            assert deltas[("replacement", metric)]["before"] == 0
+        assert deltas[("rmsnorm", "family_tasks")]["before"] == 1
+        assert deltas[("replacement", "family_tasks")]["after"] == 1
+
+
+def test_explicit_partial_trial_bench_is_not_mixed_with_bound_run() -> None:
+    with ProfileDB.memory() as db:
+        _load_run(db, 1, bench_mean_us=100.0)
+        trial = db.register_trial("goal", "hypothesis")
+        db.bind_trial(trial, 1)
+        db.attach_bench(trial, {"median": 50.0})
+        db.set_verdict(trial, "neutral")
+        before = db.list_trials()
+        assert before.facts[0].fields["bench_median_us"] == 50
+        assert "bench_mean_us" not in before.facts[0].fields
+        db.prune(keep=0)
+        assert db.list_trials() == before
+
+
+def test_trial_cannot_reassign_a_retained_summary_to_a_new_run() -> None:
+    with ProfileDB.memory() as db:
+        _load_run(db, 1, bench_mean_us=100.0)
+        trial = db.register_trial("goal", "hypothesis")
+        db.bind_trial(trial, 1)
+        db.bind_trial(trial, 1)
+        db.set_verdict(trial, "neutral")
+        db.prune(keep=0)
+        _load_run(db, 2, bench_mean_us=50.0)
+        with pytest.raises(LifecycleError, match="already bound.*parent_trial_id"):
+            db.bind_trial(trial, 2)
+        retained = db.list_trials().facts[0].fields
+        assert retained["run_id"] == 1 and retained["bench_mean_us"] == 100
+
+
+def test_ingest_never_reuses_a_run_id_still_referenced_by_trial(tmp_path: Path) -> None:
+    with ProfileDB.memory() as db:
+        first = db.ingest(_distinct_capture(tmp_path / "first", 0), bench_mean_us=100, prune_after=False)
+        trial = db.register_trial("goal", "hypothesis")
+        db.bind_trial(trial, first["run_id"])
+        db.set_verdict(trial, "neutral")
+        db.prune(keep=0)
+        second = db.ingest(_distinct_capture(tmp_path / "second", 1000), bench_mean_us=50, prune_after=False)
+        assert second["run_id"] > first["run_id"]
+        retained = db.list_trials().facts[0].fields
+        assert retained["run_id"] == first["run_id"] and retained["bench_mean_us"] == 100
+
+
+def test_trial_summary_snapshot_rolls_back_with_failed_prune(monkeypatch) -> None:
+    import duckdb
+    import profile_db.lifecycle.prune as prune
+
+    with ProfileDB.memory() as db:
+        _load_run(db, 1, bench_mean_us=100.0)
+        trial = db.register_trial("goal", "hypothesis")
+        db.bind_trial(trial, 1)
+        db.set_verdict(trial, "neutral")
+        monkeypatch.setattr(prune, "_RUN_TABLES", (*prune._RUN_TABLES, "missing_injected_table"))
+        with pytest.raises(duckdb.CatalogException):
+            db.prune(keep=0)
+        assert db.connection.execute("SELECT bench_mean_us FROM trial").fetchone()[0] is None
+        assert _run_ids(db) == [1]
+
+
 def test_prune_link_mode_touches_no_files(tmp_path: Path) -> None:
     source = synth_artifacts.generate(tmp_path / "cap")
     records = source / "chip_swimlane_records.json"

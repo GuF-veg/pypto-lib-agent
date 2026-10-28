@@ -40,6 +40,48 @@ from profile_db.runtime_adapter import (
 from profile_db.runtime_adapter.storage import read_snapshot
 
 
+@pytest.mark.parametrize("counters", [[], [dict(name="oh_aic_idle", ts=97.32, args={"oh_aic_idle": 0})]])
+def test_counter_window_marks_absent_tracks_unavailable_without_inventing_zero(monkeypatch, counters):
+    from profile_db.query import runtime
+    from profile_db.facts import Fact
+
+    header = Fact("ANALYSIS", dict(status="ok"), Evidence.PROVEN)
+    monkeypatch.setattr(runtime, "analysis", lambda *args: (dict(counters=counters, window_us=[97.32,118.18]), [header]))
+    facts = runtime.counter_window(None, 1, 97.32, 118.18, "aiv")
+    missing = next(f for f in facts if f.rec == "OVERHEAD_WINDOW")
+    assert missing.evidence == Evidence.UNAVAILABLE
+    assert missing.fields["reason"] == "no matching runtime counter tracks"
+    assert missing.fields["engine"] == "aiv"
+    assert not any(k.startswith("integral") or k == "peak" for k in missing.fields)
+
+
+def test_counter_window_retains_a_measured_zero_when_the_track_exists(monkeypatch):
+    from profile_db.query import runtime
+
+    event = dict(name="oh_aiv_ready", ts=97.32, args={"oh_aiv_ready": 0})
+    monkeypatch.setattr(runtime, "analysis", lambda *args: (dict(counters=[event], window_us=[97.32,118.18]), []))
+    fact = runtime.counter_window(None, 1, 97.32, 118.18, "aiv")[0]
+    assert fact.evidence == Evidence.MEASURED
+    assert fact.fields["integral_task_us"] == 0 and fact.fields["peak"] == 0
+
+
+@pytest.mark.parametrize("kind", ["observed", "static"])
+def test_critical_path_supplies_metric_scope_without_changing_path_values(kind):
+    from golden_qa.scenario import build
+
+    with ProfileDB.memory() as db:
+        build(db)
+        result = db.query("critical_path", run_id=1, kind=kind)
+        definition = result.facts[0]
+        assert definition.rec == "METRIC_DEFINITION" and definition.evidence == Evidence.PROVEN
+        assert definition.fields["kind"] == kind
+        assert "zero path stall does not exclude waits inside a task" in definition.fields["pipe_activity_measurement"]
+        path = [f for f in result.facts if f.rec == "PATH"]
+        assert path and path[0].fields["busy_us"] == 10
+        assert path[0].fields["compute_us"] == 10
+        assert path[0].fields.get("stall_us") == (0 if kind == "observed" else None)
+
+
 @pytest.fixture
 def capture(tmp_path):
     path = tmp_path / "capture"
@@ -271,7 +313,7 @@ def test_schema7_migration_preserves_observations_and_marks_analysis_stale(tmp_p
     conn.execute("INSERT INTO trial (trial_id,goal,status) VALUES (1,'goal','running')")
     conn.close()
     with ProfileDB(dbpath) as db:
-        assert db.schema_version() == 8
+        assert db.schema_version() == 9
         assert db.connection.execute("SELECT notes,bench_mean_us,cpm_us FROM run").fetchone() == (
             "keep",
             10,

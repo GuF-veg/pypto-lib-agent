@@ -7,4 +7,4 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 
-__version__ = "0.4.0"
+__version__ = "0.8.1"

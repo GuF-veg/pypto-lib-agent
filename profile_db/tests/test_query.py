@@ -110,6 +110,61 @@ def test_execute_returns_query_output(db_file: Path) -> None:
         db.close()
 
 
+def test_task_timing_definitions_keep_lower_median_and_level1_unknown_wall(db_file: Path) -> None:
+    with _db(db_file) as db:
+        db.connection.execute("UPDATE task SET family='same'")
+        db.connection.execute("UPDATE task SET busy_us=20 WHERE task_id='2'")
+        result = query.execute(db.connection, "why_long", {"run_id": 1, "task_id": "2"})
+        long = next(f for f in result.facts if f.rec == "LONG")
+        definition = next(f for f in result.facts if f.rec == "METRIC_DEFINITION")
+        assert long.fields["family_median_us"] == 10
+        assert long.fields["family_rank"] == 2
+        assert definition.fields["family_median_method"] == "lower_middle_order_statistic"
+        assert definition.fields["row_scope"] == "kernel lifecycle interval including possible synchronization and waits"
+        db.connection.execute("UPDATE run SET swimlane_level=1")
+        result = query.execute(db.connection, "why_long", {"run_id": 1, "task_id": "2"})
+        assert "wall_us" not in result.facts[0].fields
+        assert result.facts[1].fields["wall_us_available"] is False
+
+
+def test_untimed_task_has_no_fabricated_family_rank(db_file: Path) -> None:
+    with _db(db_file) as db:
+        db.connection.execute("UPDATE task SET family='same'")
+        db.connection.execute("UPDATE task SET busy_us=NULL,wall_us=NULL WHERE task_id='2'")
+        db.connection.execute("DELETE FROM task_row WHERE task_id='2'")
+        result = query.execute(db.connection, "why_long", {"run_id": 1, "task_id": "2"})
+        fields = result.facts[0].fields
+        assert "busy_us" not in fields and "family_rank" not in fields
+        assert fields["family_median_us"] == 10
+        assert result.facts[1].fields["wall_us_available"] is False
+
+
+def test_level1_placeholders_are_masked_across_task_row_and_path_views(tmp_path: Path) -> None:
+    from fixtures import synth_artifacts
+    from profile_db.api import ProfileDB as API
+
+    source = synth_artifacts.generate(tmp_path / "level1", level=1)
+    with API.memory() as db:
+        db.ingest(source, prune_after=False)
+        raw = db.connection.execute("SELECT min_dispatch_us,max_finish_us FROM task ORDER BY task_id").fetchall()
+        selectors = [
+            ("task", dict(task_id="4294967297")), ("tasks", dict(family="rmsnorm")),
+            ("rows", dict(task_id="4294967297")), ("core", dict(core=0)),
+            ("region", dict(t0_us=0, t1_us=90)), ("critical_path", {}),
+        ]
+        for name, params in selectors:
+            facts = db.query(name, run_id=1, **params).facts
+            assert any(f.rec == "EVIDENCE" and f.fields.get("metric") == "dispatch_receive_fin" for f in facts), name
+            for f in facts:
+                if f.rec == "TASK":
+                    assert not {"wall_us", "min_dispatch_us", "min_receive_us", "max_finish_us"}.intersection(f.fields)
+                if f.rec == "ROW":
+                    assert not {"dispatch_us", "receive_us", "finish_us"}.intersection(f.fields)
+                if f.rec == "PATH":
+                    assert "wall_us" not in f.fields and "gap_us" not in f.fields
+        assert db.connection.execute("SELECT min_dispatch_us,max_finish_us FROM task ORDER BY task_id").fetchall() == raw
+
+
 def test_idle_window_measures_named_engine(db_file: Path) -> None:
     db = _db(db_file)
     try:

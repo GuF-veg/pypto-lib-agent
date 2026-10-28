@@ -18,6 +18,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
@@ -52,12 +54,12 @@ def _server_env(db_path: Path) -> dict[str, str]:
     return env
 
 
-async def _session(db_path: Path, calls: list[tuple[str, dict]]):
+async def _session(db_path: Path, calls: list[tuple[str, dict]], writable: bool = False):
     """One stdio session: initialize, list tools, run ``calls`` in order.
     Returns ``(tool_names, results)``."""
     params = StdioServerParameters(
         command=sys.executable,
-        args=["-m", "profile_db", "serve", "--mcp"],
+        args=["-m", "profile_db", "serve", "--mcp"] + (["--writable"] if writable else []),
         env=_server_env(db_path),
     )
     async with stdio_client(params) as (read, write):
@@ -91,7 +93,7 @@ def test_tools_are_registry_driven_and_dispatch_queries(tmp_path: Path) -> None:
     from profile_db.mcp_server import _LIFECYCLE_TOOLS
     assert "pfdb.overview" in names and "pfdb.list_runs" in names
     assert "pfdb.render" in names and "pfdb.version" in names
-    assert len(names) == len(list_queries()) + len(_LIFECYCLE_TOOLS) + 2
+    assert len(names) == len(list_queries()) + sum(not v[2] for v in _LIFECYCLE_TOOLS.values()) + 2
 
     overview = _text_blocks(results[0])[0]
     assert overview.startswith("RUN ") and "METRIC" in overview
@@ -99,6 +101,33 @@ def test_tools_are_registry_driven_and_dispatch_queries(tmp_path: Path) -> None:
 
     version = _text_blocks(results[2])[0]
     assert version.startswith("tool_schema_version=")
+
+
+def test_readonly_catalog_hides_writes_without_removing_capabilities_or_guards(tmp_path):
+    import anyio
+    from profile_db.api import ProfileDB
+    from profile_db.errors import QueryError
+    from profile_db.mcp_server import _LIFECYCLE_TOOLS, _lifecycle_result, build_tools
+    from profile_db.runtime_adapter import digest
+
+    path = tmp_path / "mode.duckdb"
+    with ProfileDB(path):
+        pass
+    writes = {"pfdb." + name for name, value in _LIFECYCLE_TOOLS.items() if value[2]}
+    before = digest(path)
+    readonly, denied = anyio.run(_session, path, [(name, {}) for name in sorted(writes)])
+    assert len(readonly) == 33 and not writes.intersection(readonly)
+    assert digest(path) == before
+    assert all(result.isError or "requires pfdb serve --writable" in "".join(_text_blocks(result)) for result in denied)
+    with ProfileDB(path, read_only=True) as db:
+        for name in writes:
+            with pytest.raises(QueryError, match="requires pfdb serve --writable"):
+                _lifecycle_result(db, name.removeprefix("pfdb."), {})
+    writable, registered = anyio.run(_session, path, [("pfdb.register_trial", dict(goal="mode", hypothesis="write enabled"))], True)
+    assert len(writable) == 41 and set(writable) - set(readonly) == writes
+    assert "TRIAL trial_id=" in "".join(_text_blocks(registered[0]))
+    assert {t.name for t in build_tools(writable=False)} == set(readonly)
+    assert len(build_tools()) == 41
 
 
 def test_render_tool_returns_image_content(tmp_path: Path) -> None:

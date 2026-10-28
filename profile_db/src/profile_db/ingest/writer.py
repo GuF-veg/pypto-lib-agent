@@ -31,7 +31,14 @@ from profile_db.task_ids import normalize_task_id
 
 
 def next_id(conn: duckdb.DuckDBPyConnection, table: str, column: str) -> int:
-    row = conn.execute(f"SELECT COALESCE(MAX({column}), 0) FROM {table}").fetchone()
+    if (table, column) == ("run", "run_id"):
+        # Pruned run IDs remain evidence locators in compact lifecycle memory.
+        row = conn.execute(
+            "SELECT COALESCE(MAX(run_id), 0) FROM (SELECT run_id FROM run "
+            "UNION ALL SELECT run_id FROM trial UNION ALL SELECT run_id FROM baseline)"
+        ).fetchone()
+    else:
+        row = conn.execute(f"SELECT COALESCE(MAX({column}), 0) FROM {table}").fetchone()
     return int(row[0]) + 1
 
 

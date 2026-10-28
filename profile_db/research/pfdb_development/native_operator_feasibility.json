@@ -1,0 +1,160 @@
+{
+  "status": "feasibility only; no efficacy comparison",
+  "phases": [
+    {
+      "phase": "native-operator-v1",
+      "sessions": 7,
+      "completed_proposals": 3,
+      "compile_attempts": 1,
+      "numerical_passes": 0,
+      "usage": {
+        "status": "ok",
+        "input": 350667,
+        "output": 3589,
+        "reasoning": 5134,
+        "cost": 0.058659065999999996
+      },
+      "usage_sha256": "ae8620fa7cd4b3c642bb09c7be80e60cb3db46d1c0c028e9c9d181366b861fed"
+    },
+    {
+      "phase": "native-operator-v2",
+      "sessions": 12,
+      "completed_proposals": 8,
+      "compile_attempts": 3,
+      "numerical_passes": 0,
+      "usage": {
+        "status": "ok",
+        "input": 774855,
+        "output": 19518,
+        "reasoning": 96171,
+        "cost": 0.186744114
+      },
+      "usage_sha256": "c8acd967cfece4dfcc0388bc03f83c97a747c287878a6358d18b7a26eea833a7"
+    },
+    {
+      "phase": "native-read-permission-calibration",
+      "sessions": 1,
+      "completed_proposals": 0,
+      "compile_attempts": 0,
+      "numerical_passes": 0,
+      "usage": {
+        "status": "ok",
+        "input": 11335,
+        "output": 73,
+        "reasoning": 1596,
+        "cost": 0.002703186
+      },
+      "usage_sha256": "561e911c3a1ba5da589d30734d0b1f74ca6ae6c939d16c0f4d8676e6f0d6c294"
+    }
+  ],
+  "protected_files_unchanged": 293,
+  "upstream_unchanged": true,
+  "tests": {
+    "full_passed": 497,
+    "skipped": 11,
+    "targeted_passed": 84,
+    "scope": "CPU pfdb and research contract tests; paid generation and real-device runs separate"
+  },
+  "limitations": [
+    "v1 permission failure",
+    "v2 client step ceiling overrides JSON",
+    "v3 service failure and v4 ENOSPC interruption prevent efficacy comparison; individual sources have separate independent confirmations."
+  ],
+  "budget_calibration": {
+    "status": "complete",
+    "sessions": 4,
+    "attempts": [
+      {
+        "condition": "native_file",
+        "index": 0,
+        "source_sha256": "341dd003ae9e051ce9c24b12c6abdc7fee169add8ba1e8a22913b58ab5489783",
+        "process": {
+          "returncode": 0,
+          "timed_out": false,
+          "wall_s": 113.053
+        },
+        "steps": 3,
+        "json_proposal_accepted": true,
+        "candidate_evaluated": true,
+        "numerical_passed": false,
+        "tool_calls": 3,
+        "record_sha256": "fbd143d05f209d336a7ab8af5583b9059bd617873af9b3064c6669ed47ca5677"
+      },
+      {
+        "condition": "native_file",
+        "index": 1,
+        "source_sha256": "50b31087f309a82400c006e142c758c5168a498647a9b87e5f911b95f966d63f",
+        "process": {
+          "returncode": 0,
+          "timed_out": false,
+          "wall_s": 549.036
+        },
+        "steps": 3,
+        "json_proposal_accepted": true,
+        "candidate_evaluated": true,
+        "numerical_passed": false,
+        "tool_calls": 5,
+        "record_sha256": "c4403086637f608cb185ff64f61cf99dd06fcef64d33ff9b2fde1dc98bb7bef7"
+      },
+      {
+        "condition": "pfdb_diagnostic",
+        "index": 0,
+        "source_sha256": "e64e8fafa014bf4a52d6d96ce972b2906f3c160484e9e3608dfe7464bf449be7",
+        "process": {
+          "returncode": 0,
+          "timed_out": false,
+          "wall_s": 81.84
+        },
+        "steps": 3,
+        "json_proposal_accepted": true,
+        "candidate_evaluated": true,
+        "numerical_passed": false,
+        "tool_calls": 4,
+        "record_sha256": "1a2cfd3f5baabf19836a413fa937b6004e1125d4f5a615bd38986ef2b33825bc"
+      },
+      {
+        "condition": "pfdb_diagnostic",
+        "index": 1,
+        "source_sha256": "2b781628336a04019140b8a3eb9c69e34a616f049f9f98220fe345e2e50202f6",
+        "process": {
+          "returncode": 0,
+          "timed_out": false,
+          "wall_s": 93.689
+        },
+        "steps": 3,
+        "json_proposal_accepted": true,
+        "candidate_evaluated": true,
+        "numerical_passed": false,
+        "tool_calls": 4,
+        "record_sha256": "51aca5334b1696ecfb1eb4126463d85fceabc1f317acd66cb25bfcc40a857c80"
+      }
+    ],
+    "usage": {
+      "status": "ok",
+      "input": 342389,
+      "output": 6262,
+      "reasoning": 37655,
+      "cost": 0.07795392599999998
+    },
+    "result_sha256": "8900a3e02f47c213988f075ac5ebd0f5f765443cd58703a09db098a7f176f67a"
+  },
+  "formal_study": {
+    "id": "native-operator-v3",
+    "status": "execution_complete_with_service_errors",
+    "max_proposals": 64,
+    "protocol_sha256": "8d6d9352a7f9513f5464ad3730c68f2d73c0c3f9cad818dfbfcef3fdc6ef3df5",
+    "provider_failed_attempts": 46,
+    "summary": "native_operator_summary.json"
+  },
+  "reconnected_study": {
+    "id": "native-operator-v4",
+    "status": "interrupted_by_storage",
+    "max_proposals": 64,
+    "protocol_sha256": "7fa960ad080e448a314edd16a30902107fd6ba168ed52e4d74e1c05847a1368e",
+    "observed_sessions": 58,
+    "completed_attempts": 54,
+    "completed_trajectories": 12,
+    "summary": "native_operator_v4_summary.json"
+  },
+  "implemented_version": "0.8.1"
+}

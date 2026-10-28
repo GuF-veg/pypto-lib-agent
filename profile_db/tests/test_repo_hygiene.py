@@ -108,6 +108,7 @@ LAYERS: dict[str, int] = {
     "profile_db.lifecycle.working_set": 4,
     "profile_db.lifecycle.prune": 4,
     "profile_db.lifecycle.trial": 4,
+    "profile_db.lifecycle.candidate": 4,
     "profile_db.lifecycle.baseline": 4,
     "profile_db.lifecycle.compare": 4,
     "profile_db.lifecycle.ids": 4,

@@ -1,0 +1,319 @@
+{
+  "model": "opencode-go/deepseek-v4.1-flash",
+  "model_sessions_planned": 12,
+  "immutable_model_revision": "unavailable",
+  "registration_sha256": "022ca440948e02467d603ab7da7ddc2b944ecb06b602120bf5d56f3fc4e8505f",
+  "hypothesis": "Separate question ambiguity from missing fact scope; neither adds measured capacity.",
+  "database_unchanged": true,
+  "package_unchanged": true,
+  "groups": {
+    "original/current": {
+      "attempts": 3,
+      "strict_passed": 2,
+      "tool_calls": 9,
+      "response_bytes": 12558,
+      "input": 15378
+    },
+    "original/scoped": {
+      "attempts": 3,
+      "strict_passed": 3,
+      "tool_calls": 6,
+      "response_bytes": 8116,
+      "input": 11438
+    },
+    "defined/current": {
+      "attempts": 3,
+      "strict_passed": 3,
+      "tool_calls": 6,
+      "response_bytes": 7788,
+      "input": 9963
+    },
+    "defined/scoped": {
+      "attempts": 3,
+      "strict_passed": 3,
+      "tool_calls": 5,
+      "response_bytes": 6066,
+      "input": 8835
+    }
+  },
+  "results": [
+    {
+      "question": "original",
+      "payload": "current",
+      "replicate": 0,
+      "strict_passed": false,
+      "answer_matches": false,
+      "field_failures": [
+        "topology_aiv_cores"
+      ],
+      "tool_errors": 0,
+      "tool_calls": 3,
+      "backend_calls": 3,
+      "response_bytes": 4646,
+      "usage": {
+        "status": "ok",
+        "input": 5714,
+        "output": 449,
+        "reasoning": 442,
+        "cost": 0.0014051399999999998
+      },
+      "wall_s": 22.997,
+      "process_completed": true,
+      "stdout_sha256": "6897c4ac64b0db6dea42c3fe4533a4f637245b34547b66efbeaad910a5aa782b",
+      "result_sha256": "54e5b8daebbbd5104aac3d42d319995739b00736360a9fb531ef9a400c2eb7c0"
+    },
+    {
+      "question": "original",
+      "payload": "scoped",
+      "replicate": 0,
+      "strict_passed": true,
+      "answer_matches": true,
+      "field_failures": [],
+      "tool_errors": 0,
+      "tool_calls": 2,
+      "backend_calls": 2,
+      "response_bytes": 2664,
+      "usage": {
+        "status": "ok",
+        "input": 4344,
+        "output": 414,
+        "reasoning": 263,
+        "cost": 0.001059336
+      },
+      "wall_s": 10.681,
+      "process_completed": true,
+      "stdout_sha256": "e34f950226389ea9d483a0acc0d87cf08498de2299af5711d6f20b0852aa9d58",
+      "result_sha256": "39e238bd2578bb9472dd2da364970b1d13816f1e490c2db3a5b19454c33a0c35"
+    },
+    {
+      "question": "defined",
+      "payload": "current",
+      "replicate": 0,
+      "strict_passed": true,
+      "answer_matches": true,
+      "field_failures": [],
+      "tool_errors": 0,
+      "tool_calls": 2,
+      "backend_calls": 2,
+      "response_bytes": 2596,
+      "usage": {
+        "status": "ok",
+        "input": 3303,
+        "output": 384,
+        "reasoning": 361,
+        "cost": 0.0009474419999999999
+      },
+      "wall_s": 10.13,
+      "process_completed": true,
+      "stdout_sha256": "b9de4f60b25ed6c2b5876cc2e503041e800af03ffe79575dadf3b4d90a2c2ff5",
+      "result_sha256": "8aef440f4ec0cfa926b55842591669d9dbe8cfe46a78f7e79a5c59080c1e9f03"
+    },
+    {
+      "question": "defined",
+      "payload": "scoped",
+      "replicate": 0,
+      "strict_passed": true,
+      "answer_matches": true,
+      "field_failures": [],
+      "tool_errors": 0,
+      "tool_calls": 1,
+      "backend_calls": 1,
+      "response_bytes": 738,
+      "usage": {
+        "status": "ok",
+        "input": 2690,
+        "output": 339,
+        "reasoning": 263,
+        "cost": 0.0007696919999999999
+      },
+      "wall_s": 15.537,
+      "process_completed": true,
+      "stdout_sha256": "608af6cfe31b90eb31a23b2e6293db469d31081b26355ba5863a2db241ed9985",
+      "result_sha256": "2d36f536d65f057fab88ad53bc09f7dcf45bd86f9660a9ce104fcb7c03589186"
+    },
+    {
+      "question": "original",
+      "payload": "scoped",
+      "replicate": 1,
+      "strict_passed": true,
+      "answer_matches": true,
+      "field_failures": [],
+      "tool_errors": 0,
+      "tool_calls": 1,
+      "backend_calls": 1,
+      "response_bytes": 738,
+      "usage": {
+        "status": "ok",
+        "input": 3704,
+        "output": 341,
+        "reasoning": 234,
+        "cost": 0.000902136
+      },
+      "wall_s": 24.599,
+      "process_completed": true,
+      "stdout_sha256": "5cd9ef4479232e3e851d8545447488640be5233588e8323d96881244b4d2c221",
+      "result_sha256": "42f94864bd49177ead22eac6eb8588356f95f2e46f817b5565327a38eb7fc6af"
+    },
+    {
+      "question": "defined",
+      "payload": "current",
+      "replicate": 1,
+      "strict_passed": true,
+      "answer_matches": true,
+      "field_failures": [],
+      "tool_errors": 0,
+      "tool_calls": 2,
+      "backend_calls": 2,
+      "response_bytes": 2596,
+      "usage": {
+        "status": "ok",
+        "input": 3356,
+        "output": 311,
+        "reasoning": 700,
+        "cost": 0.001114992
+      },
+      "wall_s": 13.887,
+      "process_completed": true,
+      "stdout_sha256": "95a471658b03a91d8be9a357f84857c695dbd5e7f31e20da30ef4dd98db07f86",
+      "result_sha256": "d84dd8161b2fe867a17093bd9248d2605a7163928c5bac6204cf8c42cfc80d3e"
+    },
+    {
+      "question": "defined",
+      "payload": "scoped",
+      "replicate": 1,
+      "strict_passed": true,
+      "answer_matches": true,
+      "field_failures": [],
+      "tool_errors": 0,
+      "tool_calls": 2,
+      "backend_calls": 2,
+      "response_bytes": 2664,
+      "usage": {
+        "status": "ok",
+        "input": 3327,
+        "output": 472,
+        "reasoning": 408,
+        "cost": 0.001032042
+      },
+      "wall_s": 14.138,
+      "process_completed": true,
+      "stdout_sha256": "a32cdfea649b2a03cbb26b25e67ee8057a25538b17c886ce9aa7071cecc38599",
+      "result_sha256": "e1eada42f497cf037f279b2cc49b748b4737b4173a3677e7177fd9cef7af924d"
+    },
+    {
+      "question": "original",
+      "payload": "current",
+      "replicate": 1,
+      "strict_passed": true,
+      "answer_matches": true,
+      "field_failures": [],
+      "tool_errors": 0,
+      "tool_calls": 4,
+      "backend_calls": 4,
+      "response_bytes": 5316,
+      "usage": {
+        "status": "ok",
+        "input": 6497,
+        "output": 581,
+        "reasoning": 423,
+        "cost": 0.001583478
+      },
+      "wall_s": 43.229,
+      "process_completed": true,
+      "stdout_sha256": "c3867a118cc038d3b38a9986b9c5559cfb8cb2438970ff1e231728649569d018",
+      "result_sha256": "0da54c0d877415625a98b7ead5e1686d5c0ee4277564c4057182bc4178393418"
+    },
+    {
+      "question": "defined",
+      "payload": "current",
+      "replicate": 2,
+      "strict_passed": true,
+      "answer_matches": true,
+      "field_failures": [],
+      "tool_errors": 0,
+      "tool_calls": 2,
+      "backend_calls": 2,
+      "response_bytes": 2596,
+      "usage": {
+        "status": "ok",
+        "input": 3304,
+        "output": 427,
+        "reasoning": 302,
+        "cost": 0.000937992
+      },
+      "wall_s": 14.285,
+      "process_completed": true,
+      "stdout_sha256": "e3ca02ecdc44145fba7f35ec2f227232c9e76eb6e46998ce82bb4e3ae2f581aa",
+      "result_sha256": "46a5c9c1b10e4b4434ccf1f5d7fe8c5cef343cda69065373603cb6ab4ae93a1f"
+    },
+    {
+      "question": "defined",
+      "payload": "scoped",
+      "replicate": 2,
+      "strict_passed": true,
+      "answer_matches": true,
+      "field_failures": [],
+      "tool_errors": 0,
+      "tool_calls": 2,
+      "backend_calls": 2,
+      "response_bytes": 2664,
+      "usage": {
+        "status": "ok",
+        "input": 2818,
+        "output": 464,
+        "reasoning": 240,
+        "cost": 0.000851628
+      },
+      "wall_s": 22.696,
+      "process_completed": true,
+      "stdout_sha256": "d17c8fa47109e0a3847c9c85f15a1f6d6d2be3bb70b5c7c6c9aecd2154814945",
+      "result_sha256": "7e017114c24939067228e42a50ec65b7921753354b8681bc13b46d7f52353879"
+    },
+    {
+      "question": "original",
+      "payload": "current",
+      "replicate": 2,
+      "strict_passed": true,
+      "answer_matches": true,
+      "field_failures": [],
+      "tool_errors": 0,
+      "tool_calls": 2,
+      "backend_calls": 2,
+      "response_bytes": 2596,
+      "usage": {
+        "status": "ok",
+        "input": 3167,
+        "output": 441,
+        "reasoning": 443,
+        "cost": 0.001010442
+      },
+      "wall_s": 13.084,
+      "process_completed": true,
+      "stdout_sha256": "89295c4253eee8eb170a08ef4f72a31d4f9922b2aa840966ff51519c3b6bf6da",
+      "result_sha256": "28c954b8b84bb92a4a56a4a3a0ea2243f865eb9670f4a99c07a82f490d076600"
+    },
+    {
+      "question": "original",
+      "payload": "scoped",
+      "replicate": 2,
+      "strict_passed": true,
+      "answer_matches": true,
+      "field_failures": [],
+      "tool_errors": 0,
+      "tool_calls": 3,
+      "backend_calls": 3,
+      "response_bytes": 4714,
+      "usage": {
+        "status": "ok",
+        "input": 3390,
+        "output": 530,
+        "reasoning": 309,
+        "cost": 0.001026876
+      },
+      "wall_s": 16.189,
+      "process_completed": true,
+      "stdout_sha256": "089e84dfc8fd48f58a1faee7af237df53d6901c39dbfacfdbcf0b66524ecdc4d",
+      "result_sha256": "354b79db607f969f4af368b6507f33b6ae285fbe3141d18f7a5f00ff654560fe"
+    }
+  ]
+}

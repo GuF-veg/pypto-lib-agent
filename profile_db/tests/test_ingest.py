@@ -37,6 +37,38 @@ def _count(conn, table: str, run_id: int) -> int:
     return int(row[0])
 
 
+@pytest.mark.parametrize("level", [1, 4])
+def test_independent_tasks_need_no_dependency_edges(tmp_path: Path, level: int) -> None:
+    from profile_db.api import ProfileDB as API
+
+    source = synth_artifacts.generate(tmp_path / "independent", level=level)
+    deps_path = source / "deps.json"
+    doc = json.loads(deps_path.read_text())
+    doc["edges"] = []
+    deps_path.write_text(json.dumps(doc))
+    original = deps_path.read_bytes()
+    with API.memory() as db:
+        report = db.ingest(source, prune_after=False)
+        assert report["tasks"] == 3 and report["edges"] == 0
+        assert db.query("overview", run_id=1).facts
+        assert db.query("critical_path", run_id=1).facts
+        assert _count(db.connection, "dep_edge", 1) == 0
+    assert deps_path.read_bytes() == original
+
+
+@pytest.mark.parametrize("bad", [None, {}, "", 0])
+def test_dependency_edges_must_still_be_a_list(tmp_path: Path, bad) -> None:
+    from profile_db.ingest.deps import load_deps
+
+    source = synth_artifacts.generate(tmp_path / "invalid")
+    path = source / "deps.json"
+    doc = json.loads(path.read_text())
+    doc["edges"] = bad
+    path.write_text(json.dumps(doc))
+    with pytest.raises(IngestError, match="'edges' must be a list"):
+        load_deps(path, {})
+
+
 def test_level1_ingest_counts_and_artifacts(tmp_path: Path, db_file: Path) -> None:
     source = synth_artifacts.generate(tmp_path / "cap")
     db = ProfileDB(db_file)

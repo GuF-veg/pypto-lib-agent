@@ -71,6 +71,16 @@ def prune_runs(conn, db_path: Path | None, keep: int) -> dict[str, Any]:
                     f"UPDATE run SET retained = TRUE WHERE run_id IN ({placeholders})",
                     list(retained),
                 )
+            # Keep one coherent summary; never fill an explicit benchmark from another run.
+            conn.execute(
+                "UPDATE trial SET bench_min_us = run.bench_min_us, "
+                "bench_median_us = run.bench_median_us, bench_mean_us = run.bench_mean_us, "
+                "bench_max_us = run.bench_max_us, bench_rounds = run.bench_rounds "
+                "FROM run WHERE trial.run_id = run.run_id AND run.retained = FALSE "
+                "AND trial.bench_min_us IS NULL AND trial.bench_median_us IS NULL "
+                "AND trial.bench_mean_us IS NULL AND trial.bench_max_us IS NULL "
+                "AND trial.bench_rounds IS NULL"
+            )
             for table in _RUN_TABLES:
                 conn.execute(
                     f"DELETE FROM {table} WHERE run_id IN "

@@ -96,6 +96,9 @@ def overview(conn, params: OverviewParams) -> list[Fact]:
     if row is None:
         return common.run_missing("RUN", run_id)
     counts = _run_counts(conn, run_id)
+    blocks, missing_blocks = common.one(conn,
+        "SELECT COALESCE(SUM(CASE WHEN block_num>=0 THEN block_num ELSE 0 END),0), "
+        "COUNT(*) FILTER (WHERE block_num IS NULL OR block_num<0) FROM task WHERE run_id=?", [run_id])
     facts: list[Fact] = [
         Fact(
             "RUN",
@@ -129,6 +132,8 @@ def overview(conn, params: OverviewParams) -> list[Fact]:
                 bench_rounds=row[16],
                 tasks=counts["tasks"],
                 task_rows=counts["rows"],
+                declared_blocks_sum=int(blocks),
+                block_counts_missing=int(missing_blocks),
                 edges=counts["edges"],
                 artifacts=counts["artifacts"],
                 time_bands=counts["time_bands"],
@@ -137,15 +142,37 @@ def overview(conn, params: OverviewParams) -> list[Fact]:
             Evidence.MEASURED,
         ),
     ]
+    t0, t1 = common.one(conn,
+        "SELECT MIN(start_us), MAX(end_us) FROM task_row WHERE run_id=? AND end_us>start_us", [run_id])
+    # Window selectors use capture coordinates, not latency measured from zero.
+    facts.append(Fact("TIMELINE", common.fields(
+        run_id=run_id, scope="captured_execution_rows", coordinates="capture_timestamp_us",
+        t0_us=common.us(t0), t1_us=common.us(t1),
+        reason="no positive-duration execution rows" if t0 is None else None,
+    ), Evidence.MEASURED if t0 is not None else Evidence.UNAVAILABLE))
     cores_by_engine = common.engine_cores(conn, run_id)
     for engine in sorted(cores_by_engine):
         facts.append(
             Fact(
                 "RESOURCE",
-                common.fields(run_id=run_id, engine=engine, cores=cores_by_engine[engine]),
+                common.fields(run_id=run_id, engine=engine, cores=cores_by_engine[engine], scope="capture_declared_topology"),
                 Evidence.MEASURED,
             )
         )
+    execution = common.q(conn,
+        "WITH rows AS (SELECT COALESCE(engine,'unknown') engine, core_index, task_id, "
+        "COUNT(*) OVER (PARTITION BY COALESCE(engine,'unknown'),core_index) per_core "
+        "FROM task_row WHERE run_id=?) "
+        "SELECT engine,COUNT(*),COUNT(DISTINCT core_index),COUNT(DISTINCT task_id),MAX(per_core) "
+        "FROM rows GROUP BY engine ORDER BY engine", [run_id])
+    for engine, physical_rows, distinct_cores, tasks_with_rows, max_rows_per_core in execution:
+        facts.append(Fact("EXECUTION", dict(
+            run_id=run_id, engine=engine, physical_rows=physical_rows, distinct_cores=distinct_cores,
+            tasks_with_rows=tasks_with_rows, max_rows_per_core=max_rows_per_core,
+            scope="whole_capture_counts_not_utilization",
+        ), Evidence.MEASURED))
+    if not execution:
+        facts.append(Fact("EXECUTION", dict(run_id=run_id, reason="no captured physical rows"), Evidence.UNAVAILABLE))
     # A metric the capture level cannot supply is named explicitly rather
     # than just missing from METRIC: makespan needs the AICPU
     # dispatch/FIN stream, which level-1 captures do not carry.

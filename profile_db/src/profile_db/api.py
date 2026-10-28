@@ -93,7 +93,16 @@ class ProfileDB(_ProfileDB):
 
         return ingest_incore(self, source, run_id=run_id)
 
-    def attach(self, source, *, run_id: int, copy: bool = False):
+    def attach(self, source, *, run_id: int | None = None, trial_id: int | None = None, copy: bool = False):
+        if (run_id is None) == (trial_id is None):
+            raise QueryError("attach requires exactly one of run_id or trial_id")
+        if trial_id is not None:
+            from profile_db.lifecycle.candidate import attach as attach_candidate
+
+            if copy:
+                raise QueryError("trial evidence uses immutable metadata and linked files; copy is for run artifacts")
+            with self._writing() as conn:
+                return attach_candidate(conn, source, trial_id)
         from profile_db.ingest.analysis import attach
 
         return attach(self, source, run_id=run_id, copy=copy)
@@ -103,12 +112,17 @@ class ProfileDB(_ProfileDB):
 
         return refresh(self, run_id=run_id, source=source)
 
-    def query(self, name: str, *, budget_bytes: int | None = None, **params: Any) -> Result:
+    def query(self, query_name: str | None = None, *, budget_bytes: int | None = None, **params: Any) -> Result:
         """Run a registered query and return its Result envelope.
 
         ``budget_bytes=None`` uses the query's registered default.
         """
-        output = execute_query(self.connection, name, params, budget_bytes=budget_bytes)
+        if query_name is None:
+            # Preserve the original keyword spelling without consuming a task filter.
+            query_name = params.pop("name", None)
+        if not isinstance(query_name, str) or not query_name:
+            raise QueryError("query_name is required")
+        output = execute_query(self.connection, query_name, params, budget_bytes=budget_bytes)
         return Result(facts=tuple(output.facts), images=(), truncated=output.truncated)
 
     def render(
@@ -308,8 +322,29 @@ class ProfileDB(_ProfileDB):
         with self._writing() as conn:
             _set_verdict(conn, trial_id, verdict, evidence_refs)
 
-    def list_trials(self, *, active_only: bool = False) -> Result:
+    def list_trials(self, *, active_only: bool = False, trial_id: int | None = None,
+                    source_sha256: str | None = None, scope_sha256: str | None = None,
+                    view: str = "summary") -> Result:
         from profile_db.lifecycle import list_trials as _list_trials
+        from profile_db.lifecycle.candidate import facts as candidate_facts, summary as candidate_summary
+
+        if view not in ("summary", "diagnostics"):
+            raise QueryError("trial view must be summary or diagnostics")
+        if view == "diagnostics" and trial_id is None:
+            raise QueryError("diagnostics view requires trial_id")
+        if view == "diagnostics" and source_sha256 is None:
+            raise QueryError("diagnostics view requires the expected source_sha256")
+        if trial_id is None and (source_sha256 is not None or scope_sha256 is not None):
+            raise QueryError("candidate identity guards require trial_id")
+        rows = _list_trials(self.connection, active_only=active_only, trial_id=trial_id)
+        if trial_id is not None and not rows:
+            return Result((Fact("TRIAL", dict(trial_id=trial_id, reason="trial missing or excluded by active_only"), Evidence.UNAVAILABLE),), (), False)
+        details, usable = candidate_facts(self.connection, trial_id, source_sha256=source_sha256, scope_sha256=scope_sha256, view=view) if trial_id is not None else ([], True)
+        if view == "diagnostics":
+            return Result(tuple(details), (), False)
+        # A failed identity check must not return a neighboring candidate's benchmark.
+        if not usable and (source_sha256 is not None or scope_sha256 is not None or (details and details[0].fields.get("state") == "stale")):
+            return Result(tuple(details), (), False)
 
         facts = tuple(
             Fact(
@@ -326,16 +361,20 @@ class ProfileDB(_ProfileDB):
                         "status": t["status"],
                         "verdict": t["verdict"],
                         "evidence_refs": t["evidence_refs"],
+                        "bench_min_us": t.get("bench_min_us"),
+                        "bench_median_us": t.get("bench_median_us"),
                         "bench_mean_us": t.get("bench_mean_us"),
+                        "bench_max_us": t.get("bench_max_us"),
                         "bench_rounds": t.get("bench_rounds"),
+                        **candidate_summary(self.connection, t["trial_id"]),
                     }.items()
                     if v is not None
                 },
                 Evidence.MEASURED,
             )
-            for t in _list_trials(self.connection, active_only=active_only)
+            for t in rows
         )
-        return Result(facts=facts, images=(), truncated=False)
+        return Result(facts=facts + tuple(details), images=(), truncated=False)
 
     def baseline_add(
         self,
@@ -502,11 +541,15 @@ def _compare_result(comparison: Mapping[str, Any]) -> Result:
         "program": comparison.get("program"),
         "compatible": comparison.get("compatible", True),
         "profile_compatible": comparison.get("profile_compatible", True),
+        "compatibility_scope": comparison.get("compatibility_scope", "capture_configuration_and_profile_analysis"),
+        "workload_validation_checked": comparison.get("workload_validation_checked", False),
         "reasons": comparison.get("reasons", []),
     }
     for key in ("baseline", "baseline_run_id"):
         if key in comparison:
             header_fields[key] = comparison[key]
+    if comparison.get("unavailable_metrics"):
+        header_fields["unavailable_metrics"] = comparison["unavailable_metrics"]
     facts: list[Fact] = [
         Fact("COMPARE", {k: v for k, v in header_fields.items() if v is not None}, Evidence.MEASURED),
         Fact(

@@ -1,8 +1,9 @@
 # 面向 Agent 的 Profiling 与 Feedback 数据库系统 · 顶层设计
 
-> Current 0.4.0 behavior is anchored by the canonical
+> Historical design and milestone archive. Current behavior is anchored by the canonical
 > [runtime integration and compatibility ledger](../docs/debug-and-tune/pfdb-runtime-integration.md)
-> (schema 8, MCP schema 4). Earlier milestone descriptions below retain
+> and [public manual](../docs/debug-and-tune/profile-db.md)
+> (schema 9, MCP schema 7). Earlier milestone descriptions below retain
 > historical contracts; copied algorithms, FIN-based idle classifications and
 > unregistered binary payloads have been superseded.
 
@@ -351,7 +352,13 @@ band / core` 坐标）。
 纵向过滤轴（可叠加于任意层）：`--family`、`--engine`、`--core`、`--t0/--t1`、
 `--rank`（多 rank 库）。层级之间靠坐标导航，而不是让 agent 重新扫描。
 
-### 6.3 `why` 查询与确定性推导规则
+### 6.3 `why` 查询与确定性推导规则（已被 runtime 口径取代）
+
+以下规则保留作历史设计记录，**不用于解释当前输出**。当前 `why_sparse`
+返回 runtime 的 ready/idle/overhead 计数积分；`why_late` 分开 data-ready、
+FIN、dispatch、receive、start，并保留带符号的早派发差值。
+`why_long` 提供 task envelope、row 极值与明确指标定义。权威公式、单位、
+兼容项和升级条件统一见上方 runtime 台账；不重新实现本节旧分类算法。
 
 `why` 查询只输出**可证明**的解释；证明规则固化在衍生层并写入测试：
 

@@ -1,0 +1,2644 @@
+{
+  "version": 1,
+  "model": "opencode-go/deepseek-v4.1-flash",
+  "sources": {
+    "pilot/protocol.json": "ec20c0aacf37d213230881a898dd07560e553fc9dad4d808a32c4226a8081424",
+    "pilot/results.json": "c2985e6c869605bbc3d81591ed631d5c8ba9806326e4a09e84be964f284458d1",
+    "pilot/usage.json": "8fbfafdd8e99f929f6b43db67cf84f7b8b889e1776e74d55d9ce59f3c872e9d9",
+    "confirmation/protocol.json": "1ab5d72300c82b1ed43413db86d9355b3da3f9b347a2231f8b5a553c48bf9e08",
+    "confirmation/results.json": "410737333e61c839a810bf0aed368dd3944ab708a52da1b130378972dbe0f90c",
+    "confirmation/measurements.json": "d998c317907ee60151e32042e12b2ce7d917084275c9f82c85a0f43a9519f1de",
+    "confirmation/jobs.json": "d599de4b6fa372d716adc9dcf073f00216fa4e9b3b1853b65d4d16a87d48e47c"
+  },
+  "input_integrity": {
+    "pilot_unchanged": true,
+    "confirmation_unchanged": true
+  },
+  "aggregate": {
+    "sessions": 24,
+    "final_validation_failures": 0,
+    "selected_validation_failures": 0,
+    "selected_missing_measurements": 0,
+    "missing_measurements": 0,
+    "search_failure_attempts": 10,
+    "fallback_sessions": 1,
+    "confirmed_win_sessions": 12,
+    "pairs": [
+      {
+        "start_id": "c4_agent",
+        "replicate": 0,
+        "valid": true,
+        "paired_log_speedup": 0.039469191226370055
+      },
+      {
+        "start_id": "c4_agent",
+        "replicate": 1,
+        "valid": true,
+        "paired_log_speedup": 0.0
+      },
+      {
+        "start_id": "c4_agent",
+        "replicate": 2,
+        "valid": true,
+        "paired_log_speedup": 0.0
+      },
+      {
+        "start_id": "c4_manual",
+        "replicate": 0,
+        "valid": true,
+        "paired_log_speedup": 0.0
+      },
+      {
+        "start_id": "c4_manual",
+        "replicate": 1,
+        "valid": true,
+        "paired_log_speedup": -0.21845785103697454
+      },
+      {
+        "start_id": "c4_manual",
+        "replicate": 2,
+        "valid": true,
+        "paired_log_speedup": 0.0
+      },
+      {
+        "start_id": "swa_agent",
+        "replicate": 0,
+        "valid": true,
+        "paired_log_speedup": 0.0
+      },
+      {
+        "start_id": "swa_agent",
+        "replicate": 1,
+        "valid": true,
+        "paired_log_speedup": 0.0
+      },
+      {
+        "start_id": "swa_agent",
+        "replicate": 2,
+        "valid": true,
+        "paired_log_speedup": 0.10743503966042534
+      },
+      {
+        "start_id": "swa_manual",
+        "replicate": 0,
+        "valid": true,
+        "paired_log_speedup": 0.0
+      },
+      {
+        "start_id": "swa_manual",
+        "replicate": 1,
+        "valid": true,
+        "paired_log_speedup": 0.0
+      },
+      {
+        "start_id": "swa_manual",
+        "replicate": 2,
+        "valid": true,
+        "paired_log_speedup": 0.0
+      }
+    ],
+    "per_start": {
+      "c4_agent": {
+        "valid_pairs": 3,
+        "mean_paired_log_speedup": 0.013156397075456685
+      },
+      "c4_manual": {
+        "valid_pairs": 3,
+        "mean_paired_log_speedup": -0.07281928367899151
+      },
+      "swa_agent": {
+        "valid_pairs": 3,
+        "mean_paired_log_speedup": 0.035811679886808445
+      },
+      "swa_manual": {
+        "valid_pairs": 3,
+        "mean_paired_log_speedup": 0.0
+      }
+    },
+    "four_start_equal_weight_ratio": 0.9940549405407888,
+    "scope": "conditional on jointly measured pairs; failure/missing counts retained; shared measurement clusters are not independent replications"
+  },
+  "costs": {
+    "baseline": {
+      "sessions": 12,
+      "attempts": 22,
+      "status_counts": {
+        "failed": 6,
+        "search_validated": 14,
+        "agent_stopped": 2
+      },
+      "confirmed_fixture_gains": 5,
+      "model_wall_s": 1742.88,
+      "external_wall_s": 380.80800000000005,
+      "reported_native_cost": 0.291109737,
+      "usage_unavailable": 0
+    },
+    "semantic_contract": {
+      "sessions": 12,
+      "attempts": 22,
+      "status_counts": {
+        "failed": 4,
+        "search_validated": 16,
+        "agent_stopped": 2
+      },
+      "confirmed_fixture_gains": 7,
+      "model_wall_s": 1345.2640000000004,
+      "external_wall_s": 452.239,
+      "reported_native_cost": 0.28396521799999996,
+      "usage_unavailable": 0
+    }
+  },
+  "confirmation_cost": {
+    "unique_implementations": 11,
+    "heldout_invocations": 11,
+    "timed_invocations": 33,
+    "external_wall_s": 856.405
+  },
+  "unique_measurements": {
+    "50bdad938d43cb7474a6b2102efadceb93589628cb593bdd7100b59d15fbb83e": {
+      "source_sha256": "0ed4e4bac3be06bd8b0b08b66ca49594435e6553180ff5cba3da9546200ff89b",
+      "shared_by": [
+        "baseline:swa_agent",
+        "swa_agent-0-baseline",
+        "swa_agent-0-semantic_contract",
+        "swa_agent-1-semantic_contract",
+        "swa_agent-1-baseline",
+        "swa_agent-2-baseline"
+      ],
+      "baseline_for": [
+        "swa_agent"
+      ],
+      "heldout_status": "passed",
+      "heldout_wall_s": 22.102,
+      "strata": [
+        {
+          "status": "passed",
+          "median_us": 278.7,
+          "rounds": 100,
+          "warmup": 5,
+          "wall_s": 13.887
+        },
+        {
+          "status": "passed",
+          "median_us": 278.9,
+          "rounds": 100,
+          "warmup": 5,
+          "wall_s": 14.137
+        },
+        {
+          "status": "passed",
+          "median_us": 279.4,
+          "rounds": 100,
+          "warmup": 5,
+          "wall_s": 13.887
+        }
+      ]
+    },
+    "ec6da362a7d5081433664223cf543f289ee1e383c48aa0d0c56df75671babef0": {
+      "source_sha256": "a787836fb363c4b560dcb60a625f94df3a6dd5280a298a915135ef3ac1620946",
+      "shared_by": [
+        "baseline:swa_manual",
+        "swa_manual-0-semantic_contract",
+        "swa_manual-0-baseline",
+        "swa_manual-1-baseline",
+        "swa_manual-2-semantic_contract",
+        "swa_manual-2-baseline"
+      ],
+      "baseline_for": [
+        "swa_manual"
+      ],
+      "heldout_status": "passed",
+      "heldout_wall_s": 20.943,
+      "strata": [
+        {
+          "status": "passed",
+          "median_us": 198.35000000000002,
+          "rounds": 100,
+          "warmup": 5,
+          "wall_s": 13.887
+        },
+        {
+          "status": "passed",
+          "median_us": 199.2,
+          "rounds": 100,
+          "warmup": 5,
+          "wall_s": 14.038
+        },
+        {
+          "status": "passed",
+          "median_us": 199.55,
+          "rounds": 100,
+          "warmup": 5,
+          "wall_s": 14.087
+        }
+      ]
+    },
+    "834afe89578513cae6874257a5da14034c9c6b3a65cce1b350f3aab900e95bd3": {
+      "source_sha256": "4c7151590d7406116601949bc0604aaac4ee519c078a5c905b89f709a08196ba",
+      "shared_by": [
+        "baseline:c4_agent",
+        "c4_agent-0-baseline"
+      ],
+      "baseline_for": [
+        "c4_agent"
+      ],
+      "heldout_status": "passed",
+      "heldout_wall_s": 29.063,
+      "strata": [
+        {
+          "status": "passed",
+          "median_us": 208.75,
+          "rounds": 100,
+          "warmup": 5,
+          "wall_s": 20.098
+        },
+        {
+          "status": "passed",
+          "median_us": 210.14999999999998,
+          "rounds": 100,
+          "warmup": 5,
+          "wall_s": 20.098
+        },
+        {
+          "status": "passed",
+          "median_us": 209.25,
+          "rounds": 100,
+          "warmup": 5,
+          "wall_s": 20.098
+        }
+      ]
+    },
+    "594970a7ede292d9854460dd62bea3e8df3b99744040322548028a1639de0a10": {
+      "source_sha256": "d2cca4d12fac58b50a61262cd8104f04435eb6cdcaf56ea63e101174afafafd2",
+      "shared_by": [
+        "baseline:c4_manual"
+      ],
+      "baseline_for": [
+        "c4_manual"
+      ],
+      "heldout_status": "passed",
+      "heldout_wall_s": 22.846,
+      "strata": [
+        {
+          "status": "passed",
+          "median_us": 244.4,
+          "rounds": 100,
+          "warmup": 5,
+          "wall_s": 20.098
+        },
+        {
+          "status": "passed",
+          "median_us": 245.8,
+          "rounds": 100,
+          "warmup": 5,
+          "wall_s": 19.948
+        },
+        {
+          "status": "passed",
+          "median_us": 244.64999999999998,
+          "rounds": 100,
+          "warmup": 5,
+          "wall_s": 19.998
+        }
+      ]
+    },
+    "bbe1ca9a1c698f847b476d78037b8fe6eb8173a818ae770112261bf97a0df3ce": {
+      "source_sha256": "7ca32700e716ffbbe8de090bc21928cb96eaaf5f186b0cd4816bb69fa8841d16",
+      "shared_by": [
+        "swa_agent-2-semantic_contract"
+      ],
+      "baseline_for": [],
+      "heldout_status": "passed",
+      "heldout_wall_s": 22.101,
+      "strata": [
+        {
+          "status": "passed",
+          "median_us": 250.45,
+          "rounds": 100,
+          "warmup": 5,
+          "wall_s": 14.088
+        },
+        {
+          "status": "passed",
+          "median_us": 250.35000000000002,
+          "rounds": 100,
+          "warmup": 5,
+          "wall_s": 13.887
+        },
+        {
+          "status": "passed",
+          "median_us": 250.4,
+          "rounds": 100,
+          "warmup": 5,
+          "wall_s": 13.887
+        }
+      ]
+    },
+    "778d313b6930cd0ded711414962cf16732633d4bbc75a2d521855262c2defb31": {
+      "source_sha256": "c6e217bec89e36f7ca9147c7320b305eff5b1e9b4563bfa92f2d9d7ceab80e51",
+      "shared_by": [
+        "swa_manual-1-semantic_contract"
+      ],
+      "baseline_for": [],
+      "heldout_status": "passed",
+      "heldout_wall_s": 21.15,
+      "strata": [
+        {
+          "status": "passed",
+          "median_us": 201.0,
+          "rounds": 100,
+          "warmup": 5,
+          "wall_s": 13.887
+        },
+        {
+          "status": "passed",
+          "median_us": 198.25,
+          "rounds": 100,
+          "warmup": 5,
+          "wall_s": 13.887
+        },
+        {
+          "status": "passed",
+          "median_us": 200.8,
+          "rounds": 100,
+          "warmup": 5,
+          "wall_s": 13.887
+        }
+      ]
+    },
+    "1ab3a7c24b9927bec40a334f78b8d053b8f11dc0c6b3639ac1aed8cdb056d629": {
+      "source_sha256": "525d0eee57cf2886667b2c2092cb37b59d50e190c34f6252193b646c62b2cab2",
+      "shared_by": [
+        "c4_agent-0-semantic_contract"
+      ],
+      "baseline_for": [],
+      "heldout_status": "passed",
+      "heldout_wall_s": 29.864,
+      "strata": [
+        {
+          "status": "passed",
+          "median_us": 201.9,
+          "rounds": 100,
+          "warmup": 5,
+          "wall_s": 19.949
+        },
+        {
+          "status": "passed",
+          "median_us": 200.35000000000002,
+          "rounds": 100,
+          "warmup": 5,
+          "wall_s": 20.148
+        },
+        {
+          "status": "passed",
+          "median_us": 201.1,
+          "rounds": 100,
+          "warmup": 5,
+          "wall_s": 20.099
+        }
+      ]
+    },
+    "22817d10f980527e9ec4fb21496c474484ccff775431c0fe696a0a14ecadd2b4": {
+      "source_sha256": "d1bb37f8aa6305f78a2079e536117fb970284f251b41af60400be68ffbb5d2ff",
+      "shared_by": [
+        "c4_agent-1-semantic_contract",
+        "c4_agent-1-baseline",
+        "c4_agent-2-baseline",
+        "c4_agent-2-semantic_contract"
+      ],
+      "baseline_for": [],
+      "heldout_status": "passed",
+      "heldout_wall_s": 29.065,
+      "strata": [
+        {
+          "status": "passed",
+          "median_us": 207.2,
+          "rounds": 100,
+          "warmup": 5,
+          "wall_s": 19.898
+        },
+        {
+          "status": "passed",
+          "median_us": 208.6,
+          "rounds": 100,
+          "warmup": 5,
+          "wall_s": 19.947
+        },
+        {
+          "status": "passed",
+          "median_us": 206.5,
+          "rounds": 100,
+          "warmup": 5,
+          "wall_s": 19.997
+        }
+      ]
+    },
+    "e9b46d0605ea4efc9e79be3212717a19ca9d59f73da9454ef3927570724a5126": {
+      "source_sha256": "69a7f9d9581a1136c3a570327fa3768036aa1040635b6743005e120ea7cb8980",
+      "shared_by": [
+        "c4_manual-0-semantic_contract",
+        "c4_manual-0-baseline",
+        "c4_manual-1-semantic_contract"
+      ],
+      "baseline_for": [],
+      "heldout_status": "passed",
+      "heldout_wall_s": 24.057,
+      "strata": [
+        {
+          "status": "passed",
+          "median_us": 221.15,
+          "rounds": 100,
+          "warmup": 5,
+          "wall_s": 19.898
+        },
+        {
+          "status": "passed",
+          "median_us": 222.65,
+          "rounds": 100,
+          "warmup": 5,
+          "wall_s": 20.198
+        },
+        {
+          "status": "passed",
+          "median_us": 219.8,
+          "rounds": 100,
+          "warmup": 5,
+          "wall_s": 19.948
+        }
+      ]
+    },
+    "949c354b65cf79cfecbdf12a6fb93aaabc308dd5263f6f7f729e8ed170c73a89": {
+      "source_sha256": "6fded29273bcc107963a853cbcdefacb62d9e299866928388c55df891921db2e",
+      "shared_by": [
+        "c4_manual-1-baseline"
+      ],
+      "baseline_for": [],
+      "heldout_status": "passed",
+      "heldout_wall_s": 23.854,
+      "strata": [
+        {
+          "status": "passed",
+          "median_us": 177.4,
+          "rounds": 100,
+          "warmup": 5,
+          "wall_s": 19.948
+        },
+        {
+          "status": "passed",
+          "median_us": 177.6,
+          "rounds": 100,
+          "warmup": 5,
+          "wall_s": 19.949
+        },
+        {
+          "status": "passed",
+          "median_us": 177.9,
+          "rounds": 100,
+          "warmup": 5,
+          "wall_s": 19.999
+        }
+      ]
+    },
+    "2b7bbcf35e09019fc79d49d42a0544a735b25e8f260b3f7024e00cea14852963": {
+      "source_sha256": "c7ea6e9240a405e8d3ae1f011c2767d9bbc3515124c1da16ffd268619c01d20a",
+      "shared_by": [
+        "c4_manual-2-semantic_contract",
+        "c4_manual-2-baseline"
+      ],
+      "baseline_for": [],
+      "heldout_status": "passed",
+      "heldout_wall_s": 23.805,
+      "strata": [
+        {
+          "status": "passed",
+          "median_us": 234.85000000000002,
+          "rounds": 100,
+          "warmup": 5,
+          "wall_s": 20.098
+        },
+        {
+          "status": "passed",
+          "median_us": 232.1,
+          "rounds": 100,
+          "warmup": 5,
+          "wall_s": 19.797
+        },
+        {
+          "status": "passed",
+          "median_us": 231.35000000000002,
+          "rounds": 100,
+          "warmup": 5,
+          "wall_s": 19.898
+        }
+      ]
+    }
+  },
+  "sessions": [
+    {
+      "id": "swa_agent-0-baseline",
+      "start_id": "swa_agent",
+      "replicate": 0,
+      "condition": "baseline",
+      "selected_job": "50bdad938d43cb7474a6b2102efadceb93589628cb593bdd7100b59d15fbb83e",
+      "baseline_job": "50bdad938d43cb7474a6b2102efadceb93589628cb593bdd7100b59d15fbb83e",
+      "search_failures": 1,
+      "selected_heldout_passed": true,
+      "selected_measurement_available": true,
+      "measurement_available": true,
+      "final_validation_passed": true,
+      "final_job": "50bdad938d43cb7474a6b2102efadceb93589628cb593bdd7100b59d15fbb83e",
+      "speedup": 1.0,
+      "confirmed_win": false,
+      "fallback": false,
+      "final_median_us": 278.8,
+      "selected_confirmation": "original baseline selected",
+      "initial_search_median_us": 278.9,
+      "selected_search_median_us": 278.9,
+      "selected_source_sha256": "0ed4e4bac3be06bd8b0b08b66ca49594435e6553180ff5cba3da9546200ff89b",
+      "final_source_sha256": "0ed4e4bac3be06bd8b0b08b66ca49594435e6553180ff5cba3da9546200ff89b",
+      "attempts": [
+        {
+          "index": 0,
+          "status": "failed",
+          "source_sha256": null,
+          "search_median_us": null,
+          "provisional_improvement": null,
+          "model": {
+            "returncode": -9,
+            "timed_out": true,
+            "wall_s": 180.013
+          },
+          "external": null,
+          "prompt_bytes": 88985,
+          "prompt_sha256": "6ec7fc78c37b79f9eef9f4100fa5ffc5d937e5beeb8fe25ba286ab5d8fa6ab23"
+        }
+      ],
+      "usage": [
+        {
+          "status": "ok",
+          "cost": 0,
+          "tokens": {
+            "input": 0,
+            "output": 0,
+            "reasoning": 0,
+            "cache": {
+              "read": 0,
+              "write": 0
+            }
+          }
+        }
+      ],
+      "time_to_benefit": {
+        "retrospective_candidate_appearance_wall_s": null,
+        "no_confirmed_benefit_censored": true,
+        "observed_search_execution_wall_s": 180.013,
+        "maximum_model_external_slot_budget_s": 2160,
+        "basis": "sum of recorded model and external process wall; excludes setup/serialization and final confirmation; stopped/failed sessions can end early; no survival or successful-only mean estimate"
+      }
+    },
+    {
+      "id": "swa_agent-0-semantic_contract",
+      "start_id": "swa_agent",
+      "replicate": 0,
+      "condition": "semantic_contract",
+      "selected_job": "50bdad938d43cb7474a6b2102efadceb93589628cb593bdd7100b59d15fbb83e",
+      "baseline_job": "50bdad938d43cb7474a6b2102efadceb93589628cb593bdd7100b59d15fbb83e",
+      "search_failures": 1,
+      "selected_heldout_passed": true,
+      "selected_measurement_available": true,
+      "measurement_available": true,
+      "final_validation_passed": true,
+      "final_job": "50bdad938d43cb7474a6b2102efadceb93589628cb593bdd7100b59d15fbb83e",
+      "speedup": 1.0,
+      "confirmed_win": false,
+      "fallback": false,
+      "final_median_us": 278.8,
+      "selected_confirmation": "original baseline selected",
+      "initial_search_median_us": 278.9,
+      "selected_search_median_us": 278.9,
+      "selected_source_sha256": "0ed4e4bac3be06bd8b0b08b66ca49594435e6553180ff5cba3da9546200ff89b",
+      "final_source_sha256": "0ed4e4bac3be06bd8b0b08b66ca49594435e6553180ff5cba3da9546200ff89b",
+      "attempts": [
+        {
+          "index": 0,
+          "status": "failed",
+          "source_sha256": "b53369fa833e1f951e6097756d7c644624b69f401cc97346348ef53fcb724bf3",
+          "search_median_us": null,
+          "provisional_improvement": null,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 99.713
+          },
+          "external": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 22.711
+          },
+          "prompt_bytes": 90682,
+          "prompt_sha256": "c2b985e373fd9ae3cdd623147d16acf2292500fa36635dbc8e525058f20a1f51"
+        }
+      ],
+      "usage": [
+        {
+          "status": "ok",
+          "cost": 0.020261775,
+          "tokens": {
+            "input": 28403,
+            "output": 566,
+            "reasoning": 20553,
+            "cache": {
+              "read": 0,
+              "write": 26843
+            }
+          }
+        }
+      ],
+      "time_to_benefit": {
+        "retrospective_candidate_appearance_wall_s": null,
+        "no_confirmed_benefit_censored": true,
+        "observed_search_execution_wall_s": 122.424,
+        "maximum_model_external_slot_budget_s": 2160,
+        "basis": "sum of recorded model and external process wall; excludes setup/serialization and final confirmation; stopped/failed sessions can end early; no survival or successful-only mean estimate"
+      }
+    },
+    {
+      "id": "swa_agent-1-semantic_contract",
+      "start_id": "swa_agent",
+      "replicate": 1,
+      "condition": "semantic_contract",
+      "selected_job": "50bdad938d43cb7474a6b2102efadceb93589628cb593bdd7100b59d15fbb83e",
+      "baseline_job": "50bdad938d43cb7474a6b2102efadceb93589628cb593bdd7100b59d15fbb83e",
+      "search_failures": 1,
+      "selected_heldout_passed": true,
+      "selected_measurement_available": true,
+      "measurement_available": true,
+      "final_validation_passed": true,
+      "final_job": "50bdad938d43cb7474a6b2102efadceb93589628cb593bdd7100b59d15fbb83e",
+      "speedup": 1.0,
+      "confirmed_win": false,
+      "fallback": false,
+      "final_median_us": 278.8,
+      "selected_confirmation": "original baseline selected",
+      "initial_search_median_us": 278.9,
+      "selected_search_median_us": 278.9,
+      "selected_source_sha256": "0ed4e4bac3be06bd8b0b08b66ca49594435e6553180ff5cba3da9546200ff89b",
+      "final_source_sha256": "0ed4e4bac3be06bd8b0b08b66ca49594435e6553180ff5cba3da9546200ff89b",
+      "attempts": [
+        {
+          "index": 0,
+          "status": "failed",
+          "source_sha256": "5b171d106fc1f60f43a3137924b62d11846894e835f690352ec3df69da1ac14e",
+          "search_median_us": null,
+          "provisional_improvement": null,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 103.62
+          },
+          "external": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 11.789
+          },
+          "prompt_bytes": 90682,
+          "prompt_sha256": "c2b985e373fd9ae3cdd623147d16acf2292500fa36635dbc8e525058f20a1f51"
+        }
+      ],
+      "usage": [
+        {
+          "status": "ok",
+          "cost": 0.021552275,
+          "tokens": {
+            "input": 28403,
+            "output": 2510,
+            "reasoning": 20724,
+            "cache": {
+              "read": 0,
+              "write": 26843
+            }
+          }
+        }
+      ],
+      "time_to_benefit": {
+        "retrospective_candidate_appearance_wall_s": null,
+        "no_confirmed_benefit_censored": true,
+        "observed_search_execution_wall_s": 115.409,
+        "maximum_model_external_slot_budget_s": 2160,
+        "basis": "sum of recorded model and external process wall; excludes setup/serialization and final confirmation; stopped/failed sessions can end early; no survival or successful-only mean estimate"
+      }
+    },
+    {
+      "id": "swa_agent-1-baseline",
+      "start_id": "swa_agent",
+      "replicate": 1,
+      "condition": "baseline",
+      "selected_job": "50bdad938d43cb7474a6b2102efadceb93589628cb593bdd7100b59d15fbb83e",
+      "baseline_job": "50bdad938d43cb7474a6b2102efadceb93589628cb593bdd7100b59d15fbb83e",
+      "search_failures": 1,
+      "selected_heldout_passed": true,
+      "selected_measurement_available": true,
+      "measurement_available": true,
+      "final_validation_passed": true,
+      "final_job": "50bdad938d43cb7474a6b2102efadceb93589628cb593bdd7100b59d15fbb83e",
+      "speedup": 1.0,
+      "confirmed_win": false,
+      "fallback": false,
+      "final_median_us": 278.8,
+      "selected_confirmation": "original baseline selected",
+      "initial_search_median_us": 278.9,
+      "selected_search_median_us": 278.9,
+      "selected_source_sha256": "0ed4e4bac3be06bd8b0b08b66ca49594435e6553180ff5cba3da9546200ff89b",
+      "final_source_sha256": "0ed4e4bac3be06bd8b0b08b66ca49594435e6553180ff5cba3da9546200ff89b",
+      "attempts": [
+        {
+          "index": 0,
+          "status": "failed",
+          "source_sha256": null,
+          "search_median_us": null,
+          "provisional_improvement": null,
+          "model": {
+            "returncode": -9,
+            "timed_out": true,
+            "wall_s": 180.013
+          },
+          "external": null,
+          "prompt_bytes": 88985,
+          "prompt_sha256": "6ec7fc78c37b79f9eef9f4100fa5ffc5d937e5beeb8fe25ba286ab5d8fa6ab23"
+        }
+      ],
+      "usage": [
+        {
+          "status": "ok",
+          "cost": 0.003341175,
+          "tokens": {
+            "input": 3,
+            "output": 107,
+            "reasoning": 0,
+            "cache": {
+              "read": 0,
+              "write": 26299
+            }
+          }
+        }
+      ],
+      "time_to_benefit": {
+        "retrospective_candidate_appearance_wall_s": null,
+        "no_confirmed_benefit_censored": true,
+        "observed_search_execution_wall_s": 180.013,
+        "maximum_model_external_slot_budget_s": 2160,
+        "basis": "sum of recorded model and external process wall; excludes setup/serialization and final confirmation; stopped/failed sessions can end early; no survival or successful-only mean estimate"
+      }
+    },
+    {
+      "id": "swa_agent-2-baseline",
+      "start_id": "swa_agent",
+      "replicate": 2,
+      "condition": "baseline",
+      "selected_job": "50bdad938d43cb7474a6b2102efadceb93589628cb593bdd7100b59d15fbb83e",
+      "baseline_job": "50bdad938d43cb7474a6b2102efadceb93589628cb593bdd7100b59d15fbb83e",
+      "search_failures": 0,
+      "selected_heldout_passed": true,
+      "selected_measurement_available": true,
+      "measurement_available": true,
+      "final_validation_passed": true,
+      "final_job": "50bdad938d43cb7474a6b2102efadceb93589628cb593bdd7100b59d15fbb83e",
+      "speedup": 1.0,
+      "confirmed_win": false,
+      "fallback": false,
+      "final_median_us": 278.8,
+      "selected_confirmation": "original baseline selected",
+      "initial_search_median_us": 278.9,
+      "selected_search_median_us": 278.9,
+      "selected_source_sha256": "0ed4e4bac3be06bd8b0b08b66ca49594435e6553180ff5cba3da9546200ff89b",
+      "final_source_sha256": "0ed4e4bac3be06bd8b0b08b66ca49594435e6553180ff5cba3da9546200ff89b",
+      "attempts": [
+        {
+          "index": 0,
+          "status": "search_validated",
+          "source_sha256": "604efc5ba7b2c34350ddb4cb0709a05d8dd2b7bf6e6eb21aeef273486402d46c",
+          "search_median_us": 323.45000000000005,
+          "provisional_improvement": false,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 150.234
+          },
+          "external": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 23.111
+          },
+          "prompt_bytes": 88985,
+          "prompt_sha256": "6ec7fc78c37b79f9eef9f4100fa5ffc5d937e5beeb8fe25ba286ab5d8fa6ab23"
+        },
+        {
+          "index": 1,
+          "status": "search_validated",
+          "source_sha256": "8026083364ec5aa599b2a5d3c6666f7125e0c6a00ee74a3f074572d78e195702",
+          "search_median_us": 283.75,
+          "provisional_improvement": false,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 98.412
+          },
+          "external": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 22.311
+          },
+          "prompt_bytes": 33515,
+          "prompt_sha256": "6e3eba2f183cac5847b993cf4fa8b68009f8b37bf84415d0dfbdd3b1c05abbca"
+        }
+      ],
+      "usage": [
+        {
+          "status": "ok",
+          "cost": 0.040150153,
+          "tokens": {
+            "input": 38446,
+            "output": 1965,
+            "reasoning": 49753,
+            "cache": {
+              "read": 27776,
+              "write": 26299
+            }
+          }
+        }
+      ],
+      "time_to_benefit": {
+        "retrospective_candidate_appearance_wall_s": null,
+        "no_confirmed_benefit_censored": true,
+        "observed_search_execution_wall_s": 294.068,
+        "maximum_model_external_slot_budget_s": 2160,
+        "basis": "sum of recorded model and external process wall; excludes setup/serialization and final confirmation; stopped/failed sessions can end early; no survival or successful-only mean estimate"
+      }
+    },
+    {
+      "id": "swa_agent-2-semantic_contract",
+      "start_id": "swa_agent",
+      "replicate": 2,
+      "condition": "semantic_contract",
+      "selected_job": "bbe1ca9a1c698f847b476d78037b8fe6eb8173a818ae770112261bf97a0df3ce",
+      "baseline_job": "50bdad938d43cb7474a6b2102efadceb93589628cb593bdd7100b59d15fbb83e",
+      "search_failures": 0,
+      "selected_heldout_passed": true,
+      "selected_measurement_available": true,
+      "measurement_available": true,
+      "final_validation_passed": true,
+      "final_job": "bbe1ca9a1c698f847b476d78037b8fe6eb8173a818ae770112261bf97a0df3ce",
+      "speedup": 1.1134185303514377,
+      "confirmed_win": true,
+      "fallback": false,
+      "final_median_us": 250.4,
+      "comparison": {
+        "baseline_median_us": 278.8,
+        "candidate_median_us": 250.4,
+        "ratio": 1.1134185303514377,
+        "ci_low": 1.1121308858739025,
+        "ci_high": 1.1159536185525791,
+        "confidence": 0.95,
+        "resamples": 2000,
+        "seed": 20261021,
+        "method": "resample 100 rounds with replacement independently within each of three fixed strata; pooled median ratio; interpolated percentile interval",
+        "limitation": "conditional on these three processes; no between-process or agent-population uncertainty estimate"
+      },
+      "selected_confirmation": "confirmed_win",
+      "initial_search_median_us": 278.9,
+      "selected_search_median_us": 249.7,
+      "selected_source_sha256": "7ca32700e716ffbbe8de090bc21928cb96eaaf5f186b0cd4816bb69fa8841d16",
+      "final_source_sha256": "7ca32700e716ffbbe8de090bc21928cb96eaaf5f186b0cd4816bb69fa8841d16",
+      "attempts": [
+        {
+          "index": 0,
+          "status": "search_validated",
+          "source_sha256": "604efc5ba7b2c34350ddb4cb0709a05d8dd2b7bf6e6eb21aeef273486402d46c",
+          "search_median_us": 323.75,
+          "provisional_improvement": false,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 27.711
+          },
+          "external": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 22.158
+          },
+          "prompt_bytes": 90682,
+          "prompt_sha256": "c2b985e373fd9ae3cdd623147d16acf2292500fa36635dbc8e525058f20a1f51"
+        },
+        {
+          "index": 1,
+          "status": "search_validated",
+          "source_sha256": "7ca32700e716ffbbe8de090bc21928cb96eaaf5f186b0cd4816bb69fa8841d16",
+          "search_median_us": 249.7,
+          "provisional_improvement": true,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 81.634
+          },
+          "external": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 23.261
+          },
+          "prompt_bytes": 33378,
+          "prompt_sha256": "f4a25dcb78e8c418bd11ab0b596b7ecfbc7ee6752bb66456e5fe3fc8de09e9a7"
+        }
+      ],
+      "usage": [
+        {
+          "status": "ok",
+          "cost": 0.022900689,
+          "tokens": {
+            "input": 39000,
+            "output": 3230,
+            "reasoning": 19461,
+            "cache": {
+              "read": 28288,
+              "write": 26843
+            }
+          }
+        }
+      ],
+      "time_to_benefit": {
+        "retrospective_candidate_appearance_wall_s": 154.764,
+        "no_confirmed_benefit_censored": false,
+        "observed_search_execution_wall_s": 154.764,
+        "maximum_model_external_slot_budget_s": 2160,
+        "basis": "sum of recorded model and external process wall; excludes setup/serialization and final confirmation; stopped/failed sessions can end early; no survival or successful-only mean estimate"
+      }
+    },
+    {
+      "id": "swa_manual-0-semantic_contract",
+      "start_id": "swa_manual",
+      "replicate": 0,
+      "condition": "semantic_contract",
+      "selected_job": "ec6da362a7d5081433664223cf543f289ee1e383c48aa0d0c56df75671babef0",
+      "baseline_job": "ec6da362a7d5081433664223cf543f289ee1e383c48aa0d0c56df75671babef0",
+      "search_failures": 0,
+      "selected_heldout_passed": true,
+      "selected_measurement_available": true,
+      "measurement_available": true,
+      "final_validation_passed": true,
+      "final_job": "ec6da362a7d5081433664223cf543f289ee1e383c48aa0d0c56df75671babef0",
+      "speedup": 1.0,
+      "confirmed_win": false,
+      "fallback": false,
+      "final_median_us": 199.1,
+      "selected_confirmation": "original baseline selected",
+      "initial_search_median_us": 195.7,
+      "selected_search_median_us": 195.7,
+      "selected_source_sha256": "a787836fb363c4b560dcb60a625f94df3a6dd5280a298a915135ef3ac1620946",
+      "final_source_sha256": "a787836fb363c4b560dcb60a625f94df3a6dd5280a298a915135ef3ac1620946",
+      "attempts": [
+        {
+          "index": 0,
+          "status": "search_validated",
+          "source_sha256": "a1c2f04c2529604940a67dee4b15da26a105fda00e4faced35ab13c0d8c04165",
+          "search_median_us": 201.0,
+          "provisional_improvement": false,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 85.141
+          },
+          "external": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 21.708
+          },
+          "prompt_bytes": 105761,
+          "prompt_sha256": "46edcca8f547990c5018778267b7477cbedb4a1b3faed3560d5b952be8b69c12"
+        },
+        {
+          "index": 1,
+          "status": "search_validated",
+          "source_sha256": "8c6a66dc1d334f696eaba881ea643b485964e4f881901b22e1d05ad12c959030",
+          "search_median_us": 199.05,
+          "provisional_improvement": false,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 25.357
+          },
+          "external": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 21.308
+          },
+          "prompt_bytes": 38091,
+          "prompt_sha256": "8f2a3c514b0191c1b6051874acd6a6ad5c1a293bc447502a1b3ead3527c8fd4d"
+        }
+      ],
+      "usage": [
+        {
+          "status": "ok",
+          "cost": 0.024345021,
+          "tokens": {
+            "input": 47516,
+            "output": 915,
+            "reasoning": 20883,
+            "cache": {
+              "read": 34432,
+              "write": 32391
+            }
+          }
+        }
+      ],
+      "time_to_benefit": {
+        "retrospective_candidate_appearance_wall_s": null,
+        "no_confirmed_benefit_censored": true,
+        "observed_search_execution_wall_s": 153.514,
+        "maximum_model_external_slot_budget_s": 2160,
+        "basis": "sum of recorded model and external process wall; excludes setup/serialization and final confirmation; stopped/failed sessions can end early; no survival or successful-only mean estimate"
+      }
+    },
+    {
+      "id": "swa_manual-0-baseline",
+      "start_id": "swa_manual",
+      "replicate": 0,
+      "condition": "baseline",
+      "selected_job": "ec6da362a7d5081433664223cf543f289ee1e383c48aa0d0c56df75671babef0",
+      "baseline_job": "ec6da362a7d5081433664223cf543f289ee1e383c48aa0d0c56df75671babef0",
+      "search_failures": 1,
+      "selected_heldout_passed": true,
+      "selected_measurement_available": true,
+      "measurement_available": true,
+      "final_validation_passed": true,
+      "final_job": "ec6da362a7d5081433664223cf543f289ee1e383c48aa0d0c56df75671babef0",
+      "speedup": 1.0,
+      "confirmed_win": false,
+      "fallback": false,
+      "final_median_us": 199.1,
+      "selected_confirmation": "original baseline selected",
+      "initial_search_median_us": 195.7,
+      "selected_search_median_us": 195.7,
+      "selected_source_sha256": "a787836fb363c4b560dcb60a625f94df3a6dd5280a298a915135ef3ac1620946",
+      "final_source_sha256": "a787836fb363c4b560dcb60a625f94df3a6dd5280a298a915135ef3ac1620946",
+      "attempts": [
+        {
+          "index": 0,
+          "status": "search_validated",
+          "source_sha256": "c6e217bec89e36f7ca9147c7320b305eff5b1e9b4563bfa92f2d9d7ceab80e51",
+          "search_median_us": 199.7,
+          "provisional_improvement": false,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 35.873
+          },
+          "external": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 20.907
+          },
+          "prompt_bytes": 104064,
+          "prompt_sha256": "0ce1da2e8555857bd2dbda663b1ae20d94e0285d1f0bd94a96277e39ac86cc01"
+        },
+        {
+          "index": 1,
+          "status": "failed",
+          "source_sha256": "8de5fb6d360e786cc7148bed2c09c53d6bc5e61fba76e54cd72da0a6603d04dd",
+          "search_median_us": null,
+          "provisional_improvement": null,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 78.58
+          },
+          "external": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 12.133
+          },
+          "prompt_bytes": 38174,
+          "prompt_sha256": "1adfebedd2d20918ae5c8cbe12e6f1e9479559825059db2aca0762370f8f20c3"
+        }
+      ],
+      "usage": [
+        {
+          "status": "ok",
+          "cost": 0.024439935,
+          "tokens": {
+            "input": 46857,
+            "output": 1119,
+            "reasoning": 21120,
+            "cache": {
+              "read": 33920,
+              "write": 31843
+            }
+          }
+        }
+      ],
+      "time_to_benefit": {
+        "retrospective_candidate_appearance_wall_s": null,
+        "no_confirmed_benefit_censored": true,
+        "observed_search_execution_wall_s": 147.493,
+        "maximum_model_external_slot_budget_s": 2160,
+        "basis": "sum of recorded model and external process wall; excludes setup/serialization and final confirmation; stopped/failed sessions can end early; no survival or successful-only mean estimate"
+      }
+    },
+    {
+      "id": "swa_manual-1-baseline",
+      "start_id": "swa_manual",
+      "replicate": 1,
+      "condition": "baseline",
+      "selected_job": "ec6da362a7d5081433664223cf543f289ee1e383c48aa0d0c56df75671babef0",
+      "baseline_job": "ec6da362a7d5081433664223cf543f289ee1e383c48aa0d0c56df75671babef0",
+      "search_failures": 0,
+      "selected_heldout_passed": true,
+      "selected_measurement_available": true,
+      "measurement_available": true,
+      "final_validation_passed": true,
+      "final_job": "ec6da362a7d5081433664223cf543f289ee1e383c48aa0d0c56df75671babef0",
+      "speedup": 1.0,
+      "confirmed_win": false,
+      "fallback": false,
+      "final_median_us": 199.1,
+      "selected_confirmation": "original baseline selected",
+      "initial_search_median_us": 195.7,
+      "selected_search_median_us": 195.7,
+      "selected_source_sha256": "a787836fb363c4b560dcb60a625f94df3a6dd5280a298a915135ef3ac1620946",
+      "final_source_sha256": "a787836fb363c4b560dcb60a625f94df3a6dd5280a298a915135ef3ac1620946",
+      "attempts": [
+        {
+          "index": 0,
+          "status": "search_validated",
+          "source_sha256": "c6e217bec89e36f7ca9147c7320b305eff5b1e9b4563bfa92f2d9d7ceab80e51",
+          "search_median_us": 200.55,
+          "provisional_improvement": false,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 62.457
+          },
+          "external": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 21.507
+          },
+          "prompt_bytes": 104064,
+          "prompt_sha256": "0ce1da2e8555857bd2dbda663b1ae20d94e0285d1f0bd94a96277e39ac86cc01"
+        },
+        {
+          "index": 1,
+          "status": "search_validated",
+          "source_sha256": "a1c2f04c2529604940a67dee4b15da26a105fda00e4faced35ab13c0d8c04165",
+          "search_median_us": 198.85000000000002,
+          "provisional_improvement": false,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 43.931
+          },
+          "external": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 20.906
+          },
+          "prompt_bytes": 38154,
+          "prompt_sha256": "914a43c4cc8067c159bf547c21005f99dfe2755101c8fa8dd36194874cc98931"
+        }
+      ],
+      "usage": [
+        {
+          "status": "ok",
+          "cost": 0.023779934999999995,
+          "tokens": {
+            "input": 46857,
+            "output": 1205,
+            "reasoning": 19962,
+            "cache": {
+              "read": 33920,
+              "write": 31843
+            }
+          }
+        }
+      ],
+      "time_to_benefit": {
+        "retrospective_candidate_appearance_wall_s": null,
+        "no_confirmed_benefit_censored": true,
+        "observed_search_execution_wall_s": 148.801,
+        "maximum_model_external_slot_budget_s": 2160,
+        "basis": "sum of recorded model and external process wall; excludes setup/serialization and final confirmation; stopped/failed sessions can end early; no survival or successful-only mean estimate"
+      }
+    },
+    {
+      "id": "swa_manual-1-semantic_contract",
+      "start_id": "swa_manual",
+      "replicate": 1,
+      "condition": "semantic_contract",
+      "selected_job": "778d313b6930cd0ded711414962cf16732633d4bbc75a2d521855262c2defb31",
+      "baseline_job": "ec6da362a7d5081433664223cf543f289ee1e383c48aa0d0c56df75671babef0",
+      "search_failures": 0,
+      "selected_heldout_passed": true,
+      "selected_measurement_available": true,
+      "measurement_available": true,
+      "final_validation_passed": true,
+      "final_job": "ec6da362a7d5081433664223cf543f289ee1e383c48aa0d0c56df75671babef0",
+      "speedup": 1.0,
+      "confirmed_win": false,
+      "fallback": true,
+      "final_median_us": 199.1,
+      "comparison": {
+        "baseline_median_us": 199.1,
+        "candidate_median_us": 200.25,
+        "ratio": 0.9942571785268414,
+        "ci_low": 0.9925187032418953,
+        "ci_high": 0.9957510887770311,
+        "confidence": 0.95,
+        "resamples": 2000,
+        "seed": 20261021,
+        "method": "resample 100 rounds with replacement independently within each of three fixed strata; pooled median ratio; interpolated percentile interval",
+        "limitation": "conditional on these three processes; no between-process or agent-population uncertainty estimate"
+      },
+      "selected_confirmation": "failed_or_inconclusive; original baseline fallback",
+      "initial_search_median_us": 195.7,
+      "selected_search_median_us": 194.7,
+      "selected_source_sha256": "c6e217bec89e36f7ca9147c7320b305eff5b1e9b4563bfa92f2d9d7ceab80e51",
+      "final_source_sha256": "a787836fb363c4b560dcb60a625f94df3a6dd5280a298a915135ef3ac1620946",
+      "attempts": [
+        {
+          "index": 0,
+          "status": "search_validated",
+          "source_sha256": "c6e217bec89e36f7ca9147c7320b305eff5b1e9b4563bfa92f2d9d7ceab80e51",
+          "search_median_us": 194.7,
+          "provisional_improvement": true,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 40.327
+          },
+          "external": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 21.357
+          },
+          "prompt_bytes": 105761,
+          "prompt_sha256": "46edcca8f547990c5018778267b7477cbedb4a1b3faed3560d5b952be8b69c12"
+        },
+        {
+          "index": 1,
+          "status": "search_validated",
+          "source_sha256": "bae21e6540a33836b8bdf0123f3f8731ffab7334f0e4a9d4077a7b938b90023c",
+          "search_median_us": 199.60000000000002,
+          "provisional_improvement": false,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 44.882
+          },
+          "external": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 20.856
+          },
+          "prompt_bytes": 38148,
+          "prompt_sha256": "e9294a301a78a2a753ad25cf9e43e28ac4af72e6c188029b6ca67751f7c17af5"
+        }
+      ],
+      "usage": [
+        {
+          "status": "ok",
+          "cost": 0.019728871000000002,
+          "tokens": {
+            "input": 47495,
+            "output": 867,
+            "reasoning": 13248,
+            "cache": {
+              "read": 34432,
+              "write": 32391
+            }
+          }
+        }
+      ],
+      "time_to_benefit": {
+        "retrospective_candidate_appearance_wall_s": null,
+        "no_confirmed_benefit_censored": true,
+        "observed_search_execution_wall_s": 127.422,
+        "maximum_model_external_slot_budget_s": 2160,
+        "basis": "sum of recorded model and external process wall; excludes setup/serialization and final confirmation; stopped/failed sessions can end early; no survival or successful-only mean estimate"
+      }
+    },
+    {
+      "id": "swa_manual-2-semantic_contract",
+      "start_id": "swa_manual",
+      "replicate": 2,
+      "condition": "semantic_contract",
+      "selected_job": "ec6da362a7d5081433664223cf543f289ee1e383c48aa0d0c56df75671babef0",
+      "baseline_job": "ec6da362a7d5081433664223cf543f289ee1e383c48aa0d0c56df75671babef0",
+      "search_failures": 1,
+      "selected_heldout_passed": true,
+      "selected_measurement_available": true,
+      "measurement_available": true,
+      "final_validation_passed": true,
+      "final_job": "ec6da362a7d5081433664223cf543f289ee1e383c48aa0d0c56df75671babef0",
+      "speedup": 1.0,
+      "confirmed_win": false,
+      "fallback": false,
+      "final_median_us": 199.1,
+      "selected_confirmation": "original baseline selected",
+      "initial_search_median_us": 195.7,
+      "selected_search_median_us": 195.7,
+      "selected_source_sha256": "a787836fb363c4b560dcb60a625f94df3a6dd5280a298a915135ef3ac1620946",
+      "final_source_sha256": "a787836fb363c4b560dcb60a625f94df3a6dd5280a298a915135ef3ac1620946",
+      "attempts": [
+        {
+          "index": 0,
+          "status": "search_validated",
+          "source_sha256": "add687219bd0e5a2cd804f429426cb7c99f2a96e733710d39509c37477fbf2a1",
+          "search_median_us": 200.05,
+          "provisional_improvement": false,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 84.194
+          },
+          "external": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 20.759
+          },
+          "prompt_bytes": 105761,
+          "prompt_sha256": "46edcca8f547990c5018778267b7477cbedb4a1b3faed3560d5b952be8b69c12"
+        },
+        {
+          "index": 1,
+          "status": "failed",
+          "source_sha256": "8de5fb6d360e786cc7148bed2c09c53d6bc5e61fba76e54cd72da0a6603d04dd",
+          "search_median_us": null,
+          "provisional_improvement": null,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 36.22
+          },
+          "external": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 11.882
+          },
+          "prompt_bytes": 38012,
+          "prompt_sha256": "153dfa478090bdba3fc626d6e6f352f5f9d225cfdf4aa8d1f7f5ea91ab4a9d7c"
+        }
+      ],
+      "usage": [
+        {
+          "status": "ok",
+          "cost": 0.025372271,
+          "tokens": {
+            "input": 47411,
+            "output": 948,
+            "reasoning": 22587,
+            "cache": {
+              "read": 34432,
+              "write": 32391
+            }
+          }
+        }
+      ],
+      "time_to_benefit": {
+        "retrospective_candidate_appearance_wall_s": null,
+        "no_confirmed_benefit_censored": true,
+        "observed_search_execution_wall_s": 153.055,
+        "maximum_model_external_slot_budget_s": 2160,
+        "basis": "sum of recorded model and external process wall; excludes setup/serialization and final confirmation; stopped/failed sessions can end early; no survival or successful-only mean estimate"
+      }
+    },
+    {
+      "id": "swa_manual-2-baseline",
+      "start_id": "swa_manual",
+      "replicate": 2,
+      "condition": "baseline",
+      "selected_job": "ec6da362a7d5081433664223cf543f289ee1e383c48aa0d0c56df75671babef0",
+      "baseline_job": "ec6da362a7d5081433664223cf543f289ee1e383c48aa0d0c56df75671babef0",
+      "search_failures": 0,
+      "selected_heldout_passed": true,
+      "selected_measurement_available": true,
+      "measurement_available": true,
+      "final_validation_passed": true,
+      "final_job": "ec6da362a7d5081433664223cf543f289ee1e383c48aa0d0c56df75671babef0",
+      "speedup": 1.0,
+      "confirmed_win": false,
+      "fallback": false,
+      "final_median_us": 199.1,
+      "selected_confirmation": "original baseline selected",
+      "initial_search_median_us": 195.7,
+      "selected_search_median_us": 195.7,
+      "selected_source_sha256": "a787836fb363c4b560dcb60a625f94df3a6dd5280a298a915135ef3ac1620946",
+      "final_source_sha256": "a787836fb363c4b560dcb60a625f94df3a6dd5280a298a915135ef3ac1620946",
+      "attempts": [
+        {
+          "index": 0,
+          "status": "search_validated",
+          "source_sha256": "c6e217bec89e36f7ca9147c7320b305eff5b1e9b4563bfa92f2d9d7ceab80e51",
+          "search_median_us": 200.2,
+          "provisional_improvement": false,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 98.009
+          },
+          "external": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 20.355
+          },
+          "prompt_bytes": 104064,
+          "prompt_sha256": "0ce1da2e8555857bd2dbda663b1ae20d94e0285d1f0bd94a96277e39ac86cc01"
+        },
+        {
+          "index": 1,
+          "status": "agent_stopped",
+          "source_sha256": null,
+          "search_median_us": null,
+          "provisional_improvement": null,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 8.63
+          },
+          "external": null,
+          "prompt_bytes": 38568,
+          "prompt_sha256": "31f9b29992363e690d20be116198b57dbb15baadc1ff230cfb9384567567c127"
+        }
+      ],
+      "usage": [
+        {
+          "status": "ok",
+          "cost": 0.014892425,
+          "tokens": {
+            "input": 26552,
+            "output": 798,
+            "reasoning": 10505,
+            "cache": {
+              "read": 54400,
+              "write": 31843
+            }
+          }
+        }
+      ],
+      "time_to_benefit": {
+        "retrospective_candidate_appearance_wall_s": null,
+        "no_confirmed_benefit_censored": true,
+        "observed_search_execution_wall_s": 126.994,
+        "maximum_model_external_slot_budget_s": 2160,
+        "basis": "sum of recorded model and external process wall; excludes setup/serialization and final confirmation; stopped/failed sessions can end early; no survival or successful-only mean estimate"
+      }
+    },
+    {
+      "id": "c4_agent-0-baseline",
+      "start_id": "c4_agent",
+      "replicate": 0,
+      "condition": "baseline",
+      "selected_job": "834afe89578513cae6874257a5da14034c9c6b3a65cce1b350f3aab900e95bd3",
+      "baseline_job": "834afe89578513cae6874257a5da14034c9c6b3a65cce1b350f3aab900e95bd3",
+      "search_failures": 1,
+      "selected_heldout_passed": true,
+      "selected_measurement_available": true,
+      "measurement_available": true,
+      "final_validation_passed": true,
+      "final_job": "834afe89578513cae6874257a5da14034c9c6b3a65cce1b350f3aab900e95bd3",
+      "speedup": 1.0,
+      "confirmed_win": false,
+      "fallback": false,
+      "final_median_us": 209.3,
+      "selected_confirmation": "original baseline selected",
+      "initial_search_median_us": 211.95,
+      "selected_search_median_us": 211.95,
+      "selected_source_sha256": "4c7151590d7406116601949bc0604aaac4ee519c078a5c905b89f709a08196ba",
+      "final_source_sha256": "4c7151590d7406116601949bc0604aaac4ee519c078a5c905b89f709a08196ba",
+      "attempts": [
+        {
+          "index": 0,
+          "status": "search_validated",
+          "source_sha256": "3a0e58406c0e016ca7eb0b9e16f99fdb46f21f739e559124aa41b7549adb8402",
+          "search_median_us": 245.9,
+          "provisional_improvement": false,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 110.779
+          },
+          "external": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 30.22
+          },
+          "prompt_bytes": 122087,
+          "prompt_sha256": "328c7c4b07558b55fac6f4bef0f5bd7a9a90ca8374f87a334f4636391e1ff646"
+        },
+        {
+          "index": 1,
+          "status": "failed",
+          "source_sha256": "5689a216c61e303056f8e71b55d55ddd34357a5d6c6975f5f1b510b96979e5ff",
+          "search_median_us": null,
+          "provisional_improvement": null,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 175.728
+          },
+          "external": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 14.24
+          },
+          "prompt_bytes": 52725,
+          "prompt_sha256": "6761c12fcac95743dffb04607d5068a1f5f2222cdf100b9302f1ba4c4c5f5d9f"
+        }
+      ],
+      "usage": [
+        {
+          "status": "ok",
+          "cost": 0.04397508,
+          "tokens": {
+            "input": 56370,
+            "output": 962,
+            "reasoning": 57435,
+            "cache": {
+              "read": 77289,
+              "write": 0
+            }
+          }
+        }
+      ],
+      "time_to_benefit": {
+        "retrospective_candidate_appearance_wall_s": null,
+        "no_confirmed_benefit_censored": true,
+        "observed_search_execution_wall_s": 330.967,
+        "maximum_model_external_slot_budget_s": 2160,
+        "basis": "sum of recorded model and external process wall; excludes setup/serialization and final confirmation; stopped/failed sessions can end early; no survival or successful-only mean estimate"
+      }
+    },
+    {
+      "id": "c4_agent-0-semantic_contract",
+      "start_id": "c4_agent",
+      "replicate": 0,
+      "condition": "semantic_contract",
+      "selected_job": "1ab3a7c24b9927bec40a334f78b8d053b8f11dc0c6b3639ac1aed8cdb056d629",
+      "baseline_job": "834afe89578513cae6874257a5da14034c9c6b3a65cce1b350f3aab900e95bd3",
+      "search_failures": 0,
+      "selected_heldout_passed": true,
+      "selected_measurement_available": true,
+      "measurement_available": true,
+      "final_validation_passed": true,
+      "final_job": "1ab3a7c24b9927bec40a334f78b8d053b8f11dc0c6b3639ac1aed8cdb056d629",
+      "speedup": 1.040258449304175,
+      "confirmed_win": true,
+      "fallback": false,
+      "final_median_us": 201.2,
+      "comparison": {
+        "baseline_median_us": 209.3,
+        "candidate_median_us": 201.2,
+        "ratio": 1.040258449304175,
+        "ci_low": 1.0379935435808292,
+        "ci_high": 1.0420400625016248,
+        "confidence": 0.95,
+        "resamples": 2000,
+        "seed": 20261021,
+        "method": "resample 100 rounds with replacement independently within each of three fixed strata; pooled median ratio; interpolated percentile interval",
+        "limitation": "conditional on these three processes; no between-process or agent-population uncertainty estimate"
+      },
+      "selected_confirmation": "confirmed_win",
+      "initial_search_median_us": 211.95,
+      "selected_search_median_us": 198.85000000000002,
+      "selected_source_sha256": "525d0eee57cf2886667b2c2092cb37b59d50e190c34f6252193b646c62b2cab2",
+      "final_source_sha256": "525d0eee57cf2886667b2c2092cb37b59d50e190c34f6252193b646c62b2cab2",
+      "attempts": [
+        {
+          "index": 0,
+          "status": "search_validated",
+          "source_sha256": "525d0eee57cf2886667b2c2092cb37b59d50e190c34f6252193b646c62b2cab2",
+          "search_median_us": 198.85000000000002,
+          "provisional_improvement": true,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 100.246
+          },
+          "external": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 31.224
+          },
+          "prompt_bytes": 123812,
+          "prompt_sha256": "760cc9f231d78143c493b5e2e68a128b2a8e1a0b8af37f2dbb08b1f2138028cf"
+        },
+        {
+          "index": 1,
+          "status": "agent_stopped",
+          "source_sha256": null,
+          "search_median_us": null,
+          "provisional_improvement": null,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 30.315
+          },
+          "external": null,
+          "prompt_bytes": 52763,
+          "prompt_sha256": "e252774104c398f8e7b3a8863364dee39815167282a879c73a7ed2b62c517f6b"
+        }
+      ],
+      "usage": [
+        {
+          "status": "ok",
+          "cost": 0.028784476,
+          "tokens": {
+            "input": 57055,
+            "output": 876,
+            "reasoning": 24690,
+            "cache": {
+              "read": 40192,
+              "write": 38164
+            }
+          }
+        }
+      ],
+      "time_to_benefit": {
+        "retrospective_candidate_appearance_wall_s": 131.47,
+        "no_confirmed_benefit_censored": false,
+        "observed_search_execution_wall_s": 161.785,
+        "maximum_model_external_slot_budget_s": 2160,
+        "basis": "sum of recorded model and external process wall; excludes setup/serialization and final confirmation; stopped/failed sessions can end early; no survival or successful-only mean estimate"
+      }
+    },
+    {
+      "id": "c4_agent-1-semantic_contract",
+      "start_id": "c4_agent",
+      "replicate": 1,
+      "condition": "semantic_contract",
+      "selected_job": "22817d10f980527e9ec4fb21496c474484ccff775431c0fe696a0a14ecadd2b4",
+      "baseline_job": "834afe89578513cae6874257a5da14034c9c6b3a65cce1b350f3aab900e95bd3",
+      "search_failures": 1,
+      "selected_heldout_passed": true,
+      "selected_measurement_available": true,
+      "measurement_available": true,
+      "final_validation_passed": true,
+      "final_job": "22817d10f980527e9ec4fb21496c474484ccff775431c0fe696a0a14ecadd2b4",
+      "speedup": 1.0084317032040473,
+      "confirmed_win": true,
+      "fallback": false,
+      "final_median_us": 207.55,
+      "comparison": {
+        "baseline_median_us": 209.3,
+        "candidate_median_us": 207.55,
+        "ratio": 1.0084317032040473,
+        "ci_low": 1.0062560153994224,
+        "ci_high": 1.0111058801437847,
+        "confidence": 0.95,
+        "resamples": 2000,
+        "seed": 20261021,
+        "method": "resample 100 rounds with replacement independently within each of three fixed strata; pooled median ratio; interpolated percentile interval",
+        "limitation": "conditional on these three processes; no between-process or agent-population uncertainty estimate"
+      },
+      "selected_confirmation": "confirmed_win",
+      "initial_search_median_us": 211.95,
+      "selected_search_median_us": 206.10000000000002,
+      "selected_source_sha256": "d1bb37f8aa6305f78a2079e536117fb970284f251b41af60400be68ffbb5d2ff",
+      "final_source_sha256": "d1bb37f8aa6305f78a2079e536117fb970284f251b41af60400be68ffbb5d2ff",
+      "attempts": [
+        {
+          "index": 0,
+          "status": "search_validated",
+          "source_sha256": "d1bb37f8aa6305f78a2079e536117fb970284f251b41af60400be68ffbb5d2ff",
+          "search_median_us": 206.10000000000002,
+          "provisional_improvement": true,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 24.504
+          },
+          "external": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 31.728
+          },
+          "prompt_bytes": 123812,
+          "prompt_sha256": "760cc9f231d78143c493b5e2e68a128b2a8e1a0b8af37f2dbb08b1f2138028cf"
+        },
+        {
+          "index": 1,
+          "status": "failed",
+          "source_sha256": "c3e80be7b2657b8df6bd9be08ca3a09bb9c53d1f4e0c6fb73521d29b6957b15c",
+          "search_median_us": null,
+          "provisional_improvement": null,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 65.162
+          },
+          "external": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 10.735
+          },
+          "prompt_bytes": 52453,
+          "prompt_sha256": "ecdb4396154390e2ec8c5361f50977b49f246172061bc69df88949727c23be78"
+        }
+      ],
+      "usage": [
+        {
+          "status": "ok",
+          "cost": 0.022106026,
+          "tokens": {
+            "input": 56844,
+            "output": 1272,
+            "reasoning": 13235,
+            "cache": {
+              "read": 40192,
+              "write": 38164
+            }
+          }
+        }
+      ],
+      "time_to_benefit": {
+        "retrospective_candidate_appearance_wall_s": 56.232,
+        "no_confirmed_benefit_censored": false,
+        "observed_search_execution_wall_s": 132.129,
+        "maximum_model_external_slot_budget_s": 2160,
+        "basis": "sum of recorded model and external process wall; excludes setup/serialization and final confirmation; stopped/failed sessions can end early; no survival or successful-only mean estimate"
+      }
+    },
+    {
+      "id": "c4_agent-1-baseline",
+      "start_id": "c4_agent",
+      "replicate": 1,
+      "condition": "baseline",
+      "selected_job": "22817d10f980527e9ec4fb21496c474484ccff775431c0fe696a0a14ecadd2b4",
+      "baseline_job": "834afe89578513cae6874257a5da14034c9c6b3a65cce1b350f3aab900e95bd3",
+      "search_failures": 1,
+      "selected_heldout_passed": true,
+      "selected_measurement_available": true,
+      "measurement_available": true,
+      "final_validation_passed": true,
+      "final_job": "22817d10f980527e9ec4fb21496c474484ccff775431c0fe696a0a14ecadd2b4",
+      "speedup": 1.0084317032040473,
+      "confirmed_win": true,
+      "fallback": false,
+      "final_median_us": 207.55,
+      "comparison": {
+        "baseline_median_us": 209.3,
+        "candidate_median_us": 207.55,
+        "ratio": 1.0084317032040473,
+        "ci_low": 1.0062560153994224,
+        "ci_high": 1.0111058801437847,
+        "confidence": 0.95,
+        "resamples": 2000,
+        "seed": 20261021,
+        "method": "resample 100 rounds with replacement independently within each of three fixed strata; pooled median ratio; interpolated percentile interval",
+        "limitation": "conditional on these three processes; no between-process or agent-population uncertainty estimate"
+      },
+      "selected_confirmation": "confirmed_win",
+      "initial_search_median_us": 211.95,
+      "selected_search_median_us": 206.55,
+      "selected_source_sha256": "d1bb37f8aa6305f78a2079e536117fb970284f251b41af60400be68ffbb5d2ff",
+      "final_source_sha256": "d1bb37f8aa6305f78a2079e536117fb970284f251b41af60400be68ffbb5d2ff",
+      "attempts": [
+        {
+          "index": 0,
+          "status": "search_validated",
+          "source_sha256": "d1bb37f8aa6305f78a2079e536117fb970284f251b41af60400be68ffbb5d2ff",
+          "search_median_us": 206.55,
+          "provisional_improvement": true,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 48.244
+          },
+          "external": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 29.269
+          },
+          "prompt_bytes": 122087,
+          "prompt_sha256": "328c7c4b07558b55fac6f4bef0f5bd7a9a90ca8374f87a334f4636391e1ff646"
+        },
+        {
+          "index": 1,
+          "status": "failed",
+          "source_sha256": "49b58e6b20fd730c65afedeabb091921f9993fcb358796786eed17f1f78c5e4a",
+          "search_median_us": null,
+          "provisional_improvement": null,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 67.577
+          },
+          "external": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 10.634
+          },
+          "prompt_bytes": 52752,
+          "prompt_sha256": "20bcfc5945396cc178afd05c35c37ee3e0ae2b9990f392adcff056f3700814eb"
+        }
+      ],
+      "usage": [
+        {
+          "status": "ok",
+          "cost": 0.027290715,
+          "tokens": {
+            "input": 56304,
+            "output": 1446,
+            "reasoning": 21954,
+            "cache": {
+              "read": 39680,
+              "write": 37609
+            }
+          }
+        }
+      ],
+      "time_to_benefit": {
+        "retrospective_candidate_appearance_wall_s": 77.513,
+        "no_confirmed_benefit_censored": false,
+        "observed_search_execution_wall_s": 155.724,
+        "maximum_model_external_slot_budget_s": 2160,
+        "basis": "sum of recorded model and external process wall; excludes setup/serialization and final confirmation; stopped/failed sessions can end early; no survival or successful-only mean estimate"
+      }
+    },
+    {
+      "id": "c4_agent-2-baseline",
+      "start_id": "c4_agent",
+      "replicate": 2,
+      "condition": "baseline",
+      "selected_job": "22817d10f980527e9ec4fb21496c474484ccff775431c0fe696a0a14ecadd2b4",
+      "baseline_job": "834afe89578513cae6874257a5da14034c9c6b3a65cce1b350f3aab900e95bd3",
+      "search_failures": 1,
+      "selected_heldout_passed": true,
+      "selected_measurement_available": true,
+      "measurement_available": true,
+      "final_validation_passed": true,
+      "final_job": "22817d10f980527e9ec4fb21496c474484ccff775431c0fe696a0a14ecadd2b4",
+      "speedup": 1.0084317032040473,
+      "confirmed_win": true,
+      "fallback": false,
+      "final_median_us": 207.55,
+      "comparison": {
+        "baseline_median_us": 209.3,
+        "candidate_median_us": 207.55,
+        "ratio": 1.0084317032040473,
+        "ci_low": 1.0062560153994224,
+        "ci_high": 1.0111058801437847,
+        "confidence": 0.95,
+        "resamples": 2000,
+        "seed": 20261021,
+        "method": "resample 100 rounds with replacement independently within each of three fixed strata; pooled median ratio; interpolated percentile interval",
+        "limitation": "conditional on these three processes; no between-process or agent-population uncertainty estimate"
+      },
+      "selected_confirmation": "confirmed_win",
+      "initial_search_median_us": 211.95,
+      "selected_search_median_us": 205.45,
+      "selected_source_sha256": "d1bb37f8aa6305f78a2079e536117fb970284f251b41af60400be68ffbb5d2ff",
+      "final_source_sha256": "d1bb37f8aa6305f78a2079e536117fb970284f251b41af60400be68ffbb5d2ff",
+      "attempts": [
+        {
+          "index": 0,
+          "status": "search_validated",
+          "source_sha256": "d1bb37f8aa6305f78a2079e536117fb970284f251b41af60400be68ffbb5d2ff",
+          "search_median_us": 205.45,
+          "provisional_improvement": true,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 40.63
+          },
+          "external": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 30.325
+          },
+          "prompt_bytes": 122087,
+          "prompt_sha256": "328c7c4b07558b55fac6f4bef0f5bd7a9a90ca8374f87a334f4636391e1ff646"
+        },
+        {
+          "index": 1,
+          "status": "failed",
+          "source_sha256": null,
+          "search_median_us": null,
+          "provisional_improvement": null,
+          "model": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 12.486
+          },
+          "external": null,
+          "prompt_bytes": 52860,
+          "prompt_sha256": "8d7b3a408d0b5be0165dce28de6a9793c5e7294e6d3c2cc520271066e6217eab"
+        }
+      ],
+      "usage": [
+        {
+          "status": "ok",
+          "cost": 0.014833275,
+          "tokens": {
+            "input": 39718,
+            "output": 485,
+            "reasoning": 6489,
+            "cache": {
+              "read": 0,
+              "write": 37609
+            }
+          }
+        }
+      ],
+      "time_to_benefit": {
+        "retrospective_candidate_appearance_wall_s": 70.955,
+        "no_confirmed_benefit_censored": false,
+        "observed_search_execution_wall_s": 83.441,
+        "maximum_model_external_slot_budget_s": 2160,
+        "basis": "sum of recorded model and external process wall; excludes setup/serialization and final confirmation; stopped/failed sessions can end early; no survival or successful-only mean estimate"
+      }
+    },
+    {
+      "id": "c4_agent-2-semantic_contract",
+      "start_id": "c4_agent",
+      "replicate": 2,
+      "condition": "semantic_contract",
+      "selected_job": "22817d10f980527e9ec4fb21496c474484ccff775431c0fe696a0a14ecadd2b4",
+      "baseline_job": "834afe89578513cae6874257a5da14034c9c6b3a65cce1b350f3aab900e95bd3",
+      "search_failures": 0,
+      "selected_heldout_passed": true,
+      "selected_measurement_available": true,
+      "measurement_available": true,
+      "final_validation_passed": true,
+      "final_job": "22817d10f980527e9ec4fb21496c474484ccff775431c0fe696a0a14ecadd2b4",
+      "speedup": 1.0084317032040473,
+      "confirmed_win": true,
+      "fallback": false,
+      "final_median_us": 207.55,
+      "comparison": {
+        "baseline_median_us": 209.3,
+        "candidate_median_us": 207.55,
+        "ratio": 1.0084317032040473,
+        "ci_low": 1.0062560153994224,
+        "ci_high": 1.0111058801437847,
+        "confidence": 0.95,
+        "resamples": 2000,
+        "seed": 20261021,
+        "method": "resample 100 rounds with replacement independently within each of three fixed strata; pooled median ratio; interpolated percentile interval",
+        "limitation": "conditional on these three processes; no between-process or agent-population uncertainty estimate"
+      },
+      "selected_confirmation": "confirmed_win",
+      "initial_search_median_us": 211.95,
+      "selected_search_median_us": 207.35,
+      "selected_source_sha256": "d1bb37f8aa6305f78a2079e536117fb970284f251b41af60400be68ffbb5d2ff",
+      "final_source_sha256": "d1bb37f8aa6305f78a2079e536117fb970284f251b41af60400be68ffbb5d2ff",
+      "attempts": [
+        {
+          "index": 0,
+          "status": "search_validated",
+          "source_sha256": "d1bb37f8aa6305f78a2079e536117fb970284f251b41af60400be68ffbb5d2ff",
+          "search_median_us": 207.35,
+          "provisional_improvement": true,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 90.762
+          },
+          "external": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 30.575
+          },
+          "prompt_bytes": 123812,
+          "prompt_sha256": "760cc9f231d78143c493b5e2e68a128b2a8e1a0b8af37f2dbb08b1f2138028cf"
+        },
+        {
+          "index": 1,
+          "status": "agent_stopped",
+          "source_sha256": null,
+          "search_median_us": null,
+          "provisional_improvement": null,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 21.152
+          },
+          "external": null,
+          "prompt_bytes": 52385,
+          "prompt_sha256": "f39472c34b404edfb9cedb6af2df7c24be7c0ffb4437a3d65e2f669761d53ed8"
+        }
+      ],
+      "usage": [
+        {
+          "status": "ok",
+          "cost": 0.026467726,
+          "tokens": {
+            "input": 56820,
+            "output": 871,
+            "reasoning": 20928,
+            "cache": {
+              "read": 40192,
+              "write": 38164
+            }
+          }
+        }
+      ],
+      "time_to_benefit": {
+        "retrospective_candidate_appearance_wall_s": 121.337,
+        "no_confirmed_benefit_censored": false,
+        "observed_search_execution_wall_s": 142.489,
+        "maximum_model_external_slot_budget_s": 2160,
+        "basis": "sum of recorded model and external process wall; excludes setup/serialization and final confirmation; stopped/failed sessions can end early; no survival or successful-only mean estimate"
+      }
+    },
+    {
+      "id": "c4_manual-0-semantic_contract",
+      "start_id": "c4_manual",
+      "replicate": 0,
+      "condition": "semantic_contract",
+      "selected_job": "e9b46d0605ea4efc9e79be3212717a19ca9d59f73da9454ef3927570724a5126",
+      "baseline_job": "594970a7ede292d9854460dd62bea3e8df3b99744040322548028a1639de0a10",
+      "search_failures": 0,
+      "selected_heldout_passed": true,
+      "selected_measurement_available": true,
+      "measurement_available": true,
+      "final_validation_passed": true,
+      "final_job": "e9b46d0605ea4efc9e79be3212717a19ca9d59f73da9454ef3927570724a5126",
+      "speedup": 1.1095518334087822,
+      "confirmed_win": true,
+      "fallback": false,
+      "final_median_us": 220.9,
+      "comparison": {
+        "baseline_median_us": 245.1,
+        "candidate_median_us": 220.9,
+        "ratio": 1.1095518334087822,
+        "ci_low": 1.1023835117658383,
+        "ci_high": 1.1151046405823475,
+        "confidence": 0.95,
+        "resamples": 2000,
+        "seed": 20261021,
+        "method": "resample 100 rounds with replacement independently within each of three fixed strata; pooled median ratio; interpolated percentile interval",
+        "limitation": "conditional on these three processes; no between-process or agent-population uncertainty estimate"
+      },
+      "selected_confirmation": "confirmed_win",
+      "initial_search_median_us": 249.35,
+      "selected_search_median_us": 225.95,
+      "selected_source_sha256": "69a7f9d9581a1136c3a570327fa3768036aa1040635b6743005e120ea7cb8980",
+      "final_source_sha256": "69a7f9d9581a1136c3a570327fa3768036aa1040635b6743005e120ea7cb8980",
+      "attempts": [
+        {
+          "index": 0,
+          "status": "search_validated",
+          "source_sha256": "c7ea6e9240a405e8d3ae1f011c2767d9bbc3515124c1da16ffd268619c01d20a",
+          "search_median_us": 234.9,
+          "provisional_improvement": true,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 42.537
+          },
+          "external": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 24.861
+          },
+          "prompt_bytes": 154373,
+          "prompt_sha256": "a80f78d892690047e31dbb0a89c3ddcbbad23e4503ffbe3f7eb5deb70f99e373"
+        },
+        {
+          "index": 1,
+          "status": "search_validated",
+          "source_sha256": "69a7f9d9581a1136c3a570327fa3768036aa1040635b6743005e120ea7cb8980",
+          "search_median_us": 225.95,
+          "provisional_improvement": true,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 45.495
+          },
+          "external": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 25.507
+          },
+          "prompt_bytes": 45398,
+          "prompt_sha256": "b36f5c652ea548f77e2d4677111b224dad6fb5cc14475b43207534f0f1b44192"
+        }
+      ],
+      "usage": [
+        {
+          "status": "ok",
+          "cost": 0.03194705,
+          "tokens": {
+            "input": 117985,
+            "output": 1220,
+            "reasoning": 12159,
+            "cache": {
+              "read": 0,
+              "write": 49958
+            }
+          }
+        }
+      ],
+      "time_to_benefit": {
+        "retrospective_candidate_appearance_wall_s": 138.4,
+        "no_confirmed_benefit_censored": false,
+        "observed_search_execution_wall_s": 138.4,
+        "maximum_model_external_slot_budget_s": 2160,
+        "basis": "sum of recorded model and external process wall; excludes setup/serialization and final confirmation; stopped/failed sessions can end early; no survival or successful-only mean estimate"
+      }
+    },
+    {
+      "id": "c4_manual-0-baseline",
+      "start_id": "c4_manual",
+      "replicate": 0,
+      "condition": "baseline",
+      "selected_job": "e9b46d0605ea4efc9e79be3212717a19ca9d59f73da9454ef3927570724a5126",
+      "baseline_job": "594970a7ede292d9854460dd62bea3e8df3b99744040322548028a1639de0a10",
+      "search_failures": 0,
+      "selected_heldout_passed": true,
+      "selected_measurement_available": true,
+      "measurement_available": true,
+      "final_validation_passed": true,
+      "final_job": "e9b46d0605ea4efc9e79be3212717a19ca9d59f73da9454ef3927570724a5126",
+      "speedup": 1.1095518334087822,
+      "confirmed_win": true,
+      "fallback": false,
+      "final_median_us": 220.9,
+      "comparison": {
+        "baseline_median_us": 245.1,
+        "candidate_median_us": 220.9,
+        "ratio": 1.1095518334087822,
+        "ci_low": 1.1023835117658383,
+        "ci_high": 1.1151046405823475,
+        "confidence": 0.95,
+        "resamples": 2000,
+        "seed": 20261021,
+        "method": "resample 100 rounds with replacement independently within each of three fixed strata; pooled median ratio; interpolated percentile interval",
+        "limitation": "conditional on these three processes; no between-process or agent-population uncertainty estimate"
+      },
+      "selected_confirmation": "confirmed_win",
+      "initial_search_median_us": 249.35,
+      "selected_search_median_us": 224.45,
+      "selected_source_sha256": "69a7f9d9581a1136c3a570327fa3768036aa1040635b6743005e120ea7cb8980",
+      "final_source_sha256": "69a7f9d9581a1136c3a570327fa3768036aa1040635b6743005e120ea7cb8980",
+      "attempts": [
+        {
+          "index": 0,
+          "status": "search_validated",
+          "source_sha256": "c7ea6e9240a405e8d3ae1f011c2767d9bbc3515124c1da16ffd268619c01d20a",
+          "search_median_us": 238.85000000000002,
+          "provisional_improvement": true,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 61.007
+          },
+          "external": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 24.615
+          },
+          "prompt_bytes": 152648,
+          "prompt_sha256": "f55cc6d8c0f73c1d86a1dc633ddbb07682a0b92c7ef7ae6f3aeee6de5c9e8329"
+        },
+        {
+          "index": 1,
+          "status": "search_validated",
+          "source_sha256": "69a7f9d9581a1136c3a570327fa3768036aa1040635b6743005e120ea7cb8980",
+          "search_median_us": 224.45,
+          "provisional_improvement": true,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 44.785
+          },
+          "external": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 26.074
+          },
+          "prompt_bytes": 44939,
+          "prompt_sha256": "9bfe6ad2a6c37fad930f15d1f7a8aa3badb7c0180d85a83f430d1758783ea267"
+        }
+      ],
+      "usage": [
+        {
+          "status": "ok",
+          "cost": 0.028351427,
+          "tokens": {
+            "input": 64883,
+            "output": 902,
+            "reasoning": 19613,
+            "cache": {
+              "read": 51584,
+              "write": 49403
+            }
+          }
+        }
+      ],
+      "time_to_benefit": {
+        "retrospective_candidate_appearance_wall_s": 156.481,
+        "no_confirmed_benefit_censored": false,
+        "observed_search_execution_wall_s": 156.481,
+        "maximum_model_external_slot_budget_s": 2160,
+        "basis": "sum of recorded model and external process wall; excludes setup/serialization and final confirmation; stopped/failed sessions can end early; no survival or successful-only mean estimate"
+      }
+    },
+    {
+      "id": "c4_manual-1-baseline",
+      "start_id": "c4_manual",
+      "replicate": 1,
+      "condition": "baseline",
+      "selected_job": "949c354b65cf79cfecbdf12a6fb93aaabc308dd5263f6f7f729e8ed170c73a89",
+      "baseline_job": "594970a7ede292d9854460dd62bea3e8df3b99744040322548028a1639de0a10",
+      "search_failures": 0,
+      "selected_heldout_passed": true,
+      "selected_measurement_available": true,
+      "measurement_available": true,
+      "final_validation_passed": true,
+      "final_job": "949c354b65cf79cfecbdf12a6fb93aaabc308dd5263f6f7f729e8ed170c73a89",
+      "speedup": 1.3804562095184454,
+      "confirmed_win": true,
+      "fallback": false,
+      "final_median_us": 177.55,
+      "comparison": {
+        "baseline_median_us": 245.1,
+        "candidate_median_us": 177.55,
+        "ratio": 1.3804562095184454,
+        "ci_low": 1.374578177727784,
+        "ci_high": 1.3849184296123058,
+        "confidence": 0.95,
+        "resamples": 2000,
+        "seed": 20261021,
+        "method": "resample 100 rounds with replacement independently within each of three fixed strata; pooled median ratio; interpolated percentile interval",
+        "limitation": "conditional on these three processes; no between-process or agent-population uncertainty estimate"
+      },
+      "selected_confirmation": "confirmed_win",
+      "initial_search_median_us": 249.35,
+      "selected_search_median_us": 178.45,
+      "selected_source_sha256": "6fded29273bcc107963a853cbcdefacb62d9e299866928388c55df891921db2e",
+      "final_source_sha256": "6fded29273bcc107963a853cbcdefacb62d9e299866928388c55df891921db2e",
+      "attempts": [
+        {
+          "index": 0,
+          "status": "search_validated",
+          "source_sha256": "1bc7678c4d25a3a9a2f75379af3c3c0888e014be8a34ba4723e5dc21842df028",
+          "search_median_us": 186.05,
+          "provisional_improvement": true,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 111.396
+          },
+          "external": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 25.219
+          },
+          "prompt_bytes": 152648,
+          "prompt_sha256": "f55cc6d8c0f73c1d86a1dc633ddbb07682a0b92c7ef7ae6f3aeee6de5c9e8329"
+        },
+        {
+          "index": 1,
+          "status": "search_validated",
+          "source_sha256": "6fded29273bcc107963a853cbcdefacb62d9e299866928388c55df891921db2e",
+          "search_median_us": 178.45,
+          "provisional_improvement": true,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 36.222
+          },
+          "external": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 24.567
+          },
+          "prompt_bytes": 45916,
+          "prompt_sha256": "7198cd5ee773b4d7d7926a82abdd00f7685b72b23690e3c3bd05912182433d39"
+        }
+      ],
+      "usage": [
+        {
+          "status": "ok",
+          "cost": 0.044106702,
+          "tokens": {
+            "input": 117377,
+            "output": 1427,
+            "reasoning": 42482,
+            "cache": {
+              "read": 51584,
+              "write": 0
+            }
+          }
+        }
+      ],
+      "time_to_benefit": {
+        "retrospective_candidate_appearance_wall_s": 197.404,
+        "no_confirmed_benefit_censored": false,
+        "observed_search_execution_wall_s": 197.404,
+        "maximum_model_external_slot_budget_s": 2160,
+        "basis": "sum of recorded model and external process wall; excludes setup/serialization and final confirmation; stopped/failed sessions can end early; no survival or successful-only mean estimate"
+      }
+    },
+    {
+      "id": "c4_manual-1-semantic_contract",
+      "start_id": "c4_manual",
+      "replicate": 1,
+      "condition": "semantic_contract",
+      "selected_job": "e9b46d0605ea4efc9e79be3212717a19ca9d59f73da9454ef3927570724a5126",
+      "baseline_job": "594970a7ede292d9854460dd62bea3e8df3b99744040322548028a1639de0a10",
+      "search_failures": 0,
+      "selected_heldout_passed": true,
+      "selected_measurement_available": true,
+      "measurement_available": true,
+      "final_validation_passed": true,
+      "final_job": "e9b46d0605ea4efc9e79be3212717a19ca9d59f73da9454ef3927570724a5126",
+      "speedup": 1.1095518334087822,
+      "confirmed_win": true,
+      "fallback": false,
+      "final_median_us": 220.9,
+      "comparison": {
+        "baseline_median_us": 245.1,
+        "candidate_median_us": 220.9,
+        "ratio": 1.1095518334087822,
+        "ci_low": 1.1023835117658383,
+        "ci_high": 1.1151046405823475,
+        "confidence": 0.95,
+        "resamples": 2000,
+        "seed": 20261021,
+        "method": "resample 100 rounds with replacement independently within each of three fixed strata; pooled median ratio; interpolated percentile interval",
+        "limitation": "conditional on these three processes; no between-process or agent-population uncertainty estimate"
+      },
+      "selected_confirmation": "confirmed_win",
+      "initial_search_median_us": 249.35,
+      "selected_search_median_us": 220.55,
+      "selected_source_sha256": "69a7f9d9581a1136c3a570327fa3768036aa1040635b6743005e120ea7cb8980",
+      "final_source_sha256": "69a7f9d9581a1136c3a570327fa3768036aa1040635b6743005e120ea7cb8980",
+      "attempts": [
+        {
+          "index": 0,
+          "status": "search_validated",
+          "source_sha256": "c7ea6e9240a405e8d3ae1f011c2767d9bbc3515124c1da16ffd268619c01d20a",
+          "search_median_us": 237.45,
+          "provisional_improvement": true,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 134.757
+          },
+          "external": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 25.066
+          },
+          "prompt_bytes": 154373,
+          "prompt_sha256": "a80f78d892690047e31dbb0a89c3ddcbbad23e4503ffbe3f7eb5deb70f99e373"
+        },
+        {
+          "index": 1,
+          "status": "search_validated",
+          "source_sha256": "69a7f9d9581a1136c3a570327fa3768036aa1040635b6743005e120ea7cb8980",
+          "search_median_us": 220.55,
+          "provisional_improvement": true,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 41.276
+          },
+          "external": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 24.467
+          },
+          "prompt_bytes": 45348,
+          "prompt_sha256": "9a589f00170a1050aa755f78c267d1d9ef5e5ec0b567be82a0020049f23f156c"
+        }
+      ],
+      "usage": [
+        {
+          "status": "ok",
+          "cost": 0.022466594,
+          "tokens": {
+            "input": 13455,
+            "output": 1070,
+            "reasoning": 22103,
+            "cache": {
+              "read": 104448,
+              "write": 49958
+            }
+          }
+        }
+      ],
+      "time_to_benefit": {
+        "retrospective_candidate_appearance_wall_s": 225.566,
+        "no_confirmed_benefit_censored": false,
+        "observed_search_execution_wall_s": 225.566,
+        "maximum_model_external_slot_budget_s": 2160,
+        "basis": "sum of recorded model and external process wall; excludes setup/serialization and final confirmation; stopped/failed sessions can end early; no survival or successful-only mean estimate"
+      }
+    },
+    {
+      "id": "c4_manual-2-semantic_contract",
+      "start_id": "c4_manual",
+      "replicate": 2,
+      "condition": "semantic_contract",
+      "selected_job": "2b7bbcf35e09019fc79d49d42a0544a735b25e8f260b3f7024e00cea14852963",
+      "baseline_job": "594970a7ede292d9854460dd62bea3e8df3b99744040322548028a1639de0a10",
+      "search_failures": 0,
+      "selected_heldout_passed": true,
+      "selected_measurement_available": true,
+      "measurement_available": true,
+      "final_validation_passed": true,
+      "final_job": "2b7bbcf35e09019fc79d49d42a0544a735b25e8f260b3f7024e00cea14852963",
+      "speedup": 1.0541935483870968,
+      "confirmed_win": true,
+      "fallback": false,
+      "final_median_us": 232.5,
+      "comparison": {
+        "baseline_median_us": 245.1,
+        "candidate_median_us": 232.5,
+        "ratio": 1.0541935483870968,
+        "ci_low": 1.0489055246130718,
+        "ci_high": 1.0579869476133734,
+        "confidence": 0.95,
+        "resamples": 2000,
+        "seed": 20261021,
+        "method": "resample 100 rounds with replacement independently within each of three fixed strata; pooled median ratio; interpolated percentile interval",
+        "limitation": "conditional on these three processes; no between-process or agent-population uncertainty estimate"
+      },
+      "selected_confirmation": "confirmed_win",
+      "initial_search_median_us": 249.35,
+      "selected_search_median_us": 244.35,
+      "selected_source_sha256": "c7ea6e9240a405e8d3ae1f011c2767d9bbc3515124c1da16ffd268619c01d20a",
+      "final_source_sha256": "c7ea6e9240a405e8d3ae1f011c2767d9bbc3515124c1da16ffd268619c01d20a",
+      "attempts": [
+        {
+          "index": 0,
+          "status": "search_validated",
+          "source_sha256": "c7ea6e9240a405e8d3ae1f011c2767d9bbc3515124c1da16ffd268619c01d20a",
+          "search_median_us": 244.35,
+          "provisional_improvement": true,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 86.595
+          },
+          "external": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 25.216
+          },
+          "prompt_bytes": 154373,
+          "prompt_sha256": "a80f78d892690047e31dbb0a89c3ddcbbad23e4503ffbe3f7eb5deb70f99e373"
+        },
+        {
+          "index": 1,
+          "status": "search_validated",
+          "source_sha256": "df066b1608b0823ca98d8fea9118d108f91994e60338d4568046c2067ececa05",
+          "search_median_us": 263.6,
+          "provisional_improvement": false,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 33.664
+          },
+          "external": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 25.071
+          },
+          "prompt_bytes": 45012,
+          "prompt_sha256": "bc291bbb03f102ddf578ffb424b939e43a4189e5fb1e9faf2149cbf81fc42270"
+        }
+      ],
+      "usage": [
+        {
+          "status": "ok",
+          "cost": 0.018032443999999998,
+          "tokens": {
+            "input": 13244,
+            "output": 920,
+            "reasoning": 14925,
+            "cache": {
+              "read": 104448,
+              "write": 49958
+            }
+          }
+        }
+      ],
+      "time_to_benefit": {
+        "retrospective_candidate_appearance_wall_s": 111.811,
+        "no_confirmed_benefit_censored": false,
+        "observed_search_execution_wall_s": 170.546,
+        "maximum_model_external_slot_budget_s": 2160,
+        "basis": "sum of recorded model and external process wall; excludes setup/serialization and final confirmation; stopped/failed sessions can end early; no survival or successful-only mean estimate"
+      }
+    },
+    {
+      "id": "c4_manual-2-baseline",
+      "start_id": "c4_manual",
+      "replicate": 2,
+      "condition": "baseline",
+      "selected_job": "2b7bbcf35e09019fc79d49d42a0544a735b25e8f260b3f7024e00cea14852963",
+      "baseline_job": "594970a7ede292d9854460dd62bea3e8df3b99744040322548028a1639de0a10",
+      "search_failures": 0,
+      "selected_heldout_passed": true,
+      "selected_measurement_available": true,
+      "measurement_available": true,
+      "final_validation_passed": true,
+      "final_job": "2b7bbcf35e09019fc79d49d42a0544a735b25e8f260b3f7024e00cea14852963",
+      "speedup": 1.0541935483870968,
+      "confirmed_win": true,
+      "fallback": false,
+      "final_median_us": 232.5,
+      "comparison": {
+        "baseline_median_us": 245.1,
+        "candidate_median_us": 232.5,
+        "ratio": 1.0541935483870968,
+        "ci_low": 1.0489055246130718,
+        "ci_high": 1.0579869476133734,
+        "confidence": 0.95,
+        "resamples": 2000,
+        "seed": 20261021,
+        "method": "resample 100 rounds with replacement independently within each of three fixed strata; pooled median ratio; interpolated percentile interval",
+        "limitation": "conditional on these three processes; no between-process or agent-population uncertainty estimate"
+      },
+      "selected_confirmation": "confirmed_win",
+      "initial_search_median_us": 249.35,
+      "selected_search_median_us": 237.05,
+      "selected_source_sha256": "c7ea6e9240a405e8d3ae1f011c2767d9bbc3515124c1da16ffd268619c01d20a",
+      "final_source_sha256": "c7ea6e9240a405e8d3ae1f011c2767d9bbc3515124c1da16ffd268619c01d20a",
+      "attempts": [
+        {
+          "index": 0,
+          "status": "search_validated",
+          "source_sha256": "c7ea6e9240a405e8d3ae1f011c2767d9bbc3515124c1da16ffd268619c01d20a",
+          "search_median_us": 237.05,
+          "provisional_improvement": true,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 36.321
+          },
+          "external": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 24.415
+          },
+          "prompt_bytes": 152648,
+          "prompt_sha256": "f55cc6d8c0f73c1d86a1dc633ddbb07682a0b92c7ef7ae6f3aeee6de5c9e8329"
+        },
+        {
+          "index": 1,
+          "status": "agent_stopped",
+          "source_sha256": null,
+          "search_median_us": null,
+          "provisional_improvement": null,
+          "model": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 61.553
+          },
+          "external": null,
+          "prompt_bytes": 44949,
+          "prompt_sha256": "fdd704700e92651fcc99aaaef95b5c504361a6fa88770a6cd9ab27b91def6f24"
+        }
+      ],
+      "usage": [
+        {
+          "status": "ok",
+          "cost": 0.025948915,
+          "tokens": {
+            "input": 76839,
+            "output": 935,
+            "reasoning": 12658,
+            "cache": {
+              "read": 39680,
+              "write": 49403
+            }
+          }
+        }
+      ],
+      "time_to_benefit": {
+        "retrospective_candidate_appearance_wall_s": 60.736,
+        "no_confirmed_benefit_censored": false,
+        "observed_search_execution_wall_s": 122.289,
+        "maximum_model_external_slot_budget_s": 2160,
+        "basis": "sum of recorded model and external process wall; excludes setup/serialization and final confirmation; stopped/failed sessions can end early; no survival or successful-only mean estimate"
+      }
+    }
+  ],
+  "scope": "Fixed two operator families/four starts, two candidates maximum, three nonreproducible replicate labels; fresh processes confirm selected implementations on two declared fixtures, not agent-population superiority or general legal-domain correctness.",
+  "conditional_semantics": {
+    "session": "c4_manual-1-baseline",
+    "premise": "scan narrowing relies on position contiguity; both validated fixtures are contiguous; general premise unestablished; candidate not installed"
+  },
+  "limitations": [
+    "shared source confirmations are not independent agent measurements",
+    "within-stratum round bootstrap does not estimate between-process or serving/population uncertainty, round autocorrelation or multiple-comparison correction",
+    "provider cost units not independently verified; setup/calibration/acquisition costs excluded",
+    "one baseline provider.no-route retained; no retry",
+    "free-form review was not blind; no output-quality superiority score",
+    "fixed initial profiling packet; later feedback has benchmark and validation, no fresh hints/PMU/level4",
+    "no explicit independent token cap; identical profile/time/candidate limits with actual usage retained"
+  ]
+}

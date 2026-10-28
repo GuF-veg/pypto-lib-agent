@@ -87,8 +87,7 @@ def density(conn, params: DensityParams) -> list[Fact]:
 
 @register(
     "sparse_regions",
-    "Locate: which time bands collapse in occupancy, and what is each one "
-    "blocked on?",
+    "Locate: which stored time bands have the lowest core occupancy?",
     SparseRegionsParams,
 )
 def sparse_regions(conn, params: SparseRegionsParams) -> list[Fact]:

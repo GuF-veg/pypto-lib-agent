@@ -1,0 +1,52 @@
+{
+  "scope": "Investigator-authored reduced compiler semantic probe; not a Go proposal or operator-study win",
+  "platform": "a2a3",
+  "device": "pool assigned physical device, logical0 via npu-run",
+  "source_sha256": "821a0224c59fd50dd94279ae1d365c8da623841c3dc341ba72f1f55f5f32c03c",
+  "result_sha256": "0a40333905e73988d2777fd4c2facbaa220d5c01ad085987fa0924eb9970759c",
+  "generated_pto_sha256": "6c26b8650838e7efafdee97741b85f2f5bd5f7e2068369d1c590dce934b8831b",
+  "direct_fp32_i8": {
+    "mode": "rint",
+    "mismatches": 256,
+    "elements": 256,
+    "inputs": [
+      1.4999,
+      -1.4999,
+      2.5001,
+      -2.5001
+    ],
+    "actual": [
+      2,
+      -2,
+      2,
+      -2
+    ],
+    "expected": [
+      1,
+      -1,
+      3,
+      -3
+    ]
+  },
+  "integer_rounding_bridge": {
+    "passed": true,
+    "elements": 256,
+    "scope": "quantization bounded to[-127,127]"
+  },
+  "cpu_counterfactual": {
+    "scope": "CPU counterfactual replay of compiler-inserted FP16 hop; no candidate repair",
+    "mismatches": 11750,
+    "elements": 131072,
+    "max_abs_diff": 0.002461254596710205,
+    "reported_npu_mismatches": 11482,
+    "first_reported_points_checked": 10,
+    "max_abs_difference_from_reported_npu_values": 0.0007882120782775892
+  },
+  "limitations": [
+    "Reduced probe confirms compiler double rounding, not complete attribution of all MTP discrepancies.",
+    "No upstream/runtime change or human repair of main Go candidates.",
+    "Known-issues reproducer and full raw evidence are local, ignored files."
+  ],
+  "reusable_reproducer_sha256": "0f3b352008f9080484dc57ff7fe7a03612c41f61009aa7d2f4d9509d92b82ccd",
+  "reproducer_kernel_ast_matches_executed_probe": true
+}

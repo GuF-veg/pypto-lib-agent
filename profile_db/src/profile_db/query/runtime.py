@@ -139,6 +139,11 @@ def counter_window(conn, run_id, t0, t1, engine=None):
             or event["name"] in ("oh_all_overhead", "oh_has_overhead")
         ):
             by_name.setdefault(event["name"], []).append(event)
+    if not by_name:
+        return facts + [Fact("OVERHEAD_WINDOW", dict(
+            run_id=run_id, t0_us=t0, t1_us=t1, engine=engine,
+            reason="no matching runtime counter tracks",
+        ), Evidence.UNAVAILABLE)]
     for name, series in sorted(by_name.items()):
         area, peak = 0.0, 0
         for i, event in enumerate(series):

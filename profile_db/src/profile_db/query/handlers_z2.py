@@ -7,11 +7,7 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 
-"""Z2 handlers: explain a time window or a single core.
-
-``why_sparse`` reports the deterministic 6.3 classification of a density
-bucket straight from the derived idle-gap rows; ``region`` enumerates the
-activity and gaps inside a window; ``core`` walks one physical core."""
+"""Z2 handlers: runtime counters, activity and gaps in a window or on one core."""
 
 from __future__ import annotations
 
@@ -27,8 +23,7 @@ from profile_db.query.params import CoreParams, IdleWindowParams, RegionParams, 
 
 @register(
     "why_sparse",
-    "Attribute: is this empty window a dispatch stall (tasks ready but not "
-    "dispatched) or upstream starvation?",
+    "Inspect: what ready, idle and overhead counters did runtime record in this band?",
     WhySparseParams,
 )
 def why_sparse(conn, params: WhySparseParams) -> list[Fact]:
@@ -88,8 +83,7 @@ def why_sparse(conn, params: WhySparseParams) -> list[Fact]:
 
 @register(
     "region",
-    "Survey/attribute: what happened inside this time window, and why is this "
-    "stretch empty?",
+    "Survey: which tasks and idle gaps overlap this time window?",
     RegionParams,
 )
 def region(conn, params: RegionParams) -> list[Fact]:
@@ -151,7 +145,7 @@ def region(conn, params: RegionParams) -> list[Fact]:
 
 @register(
     "core",
-    "Attribute: what were the other cores doing while this one sat idle?",
+    "Inspect: what rows and idle gaps occurred on this physical core?",
     CoreParams,
 )
 def core(conn, params: CoreParams) -> list[Fact]:

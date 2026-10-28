@@ -53,6 +53,14 @@ def test_api_query_is_engine_byte_identical() -> None:
         db.close()
 
 
+def test_query_name_does_not_consume_task_name_filter() -> None:
+    with ProfileDB.memory() as db:
+        _load(db)
+        result = db.query("tasks", run_id=1, name="q_proj")
+        assert [fact.fields["task_id"] for fact in result.facts] == ["2"]
+        assert db.query(name="overview", run_id=1) == db.query("overview", run_id=1)
+
+
 def test_memory_mode_matches_disk_mode(tmp_path: Path) -> None:
     disk = ProfileDB(tmp_path / "disk.duckdb")
     mem = ProfileDB.memory()

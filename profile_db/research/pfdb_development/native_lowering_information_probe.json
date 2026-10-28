@@ -1,0 +1,44 @@
+{
+  "scope": "Posthoc targeted one-step information ablation; two tool-free Go proposals, not part of native campaign and not a population/latency claim",
+  "model": "opencode-go/deepseek-v4.1-flash",
+  "conditions": [
+    {
+      "condition": "diagnostic_only",
+      "source_sha256": "3ac67251bdcea08b508b10c39aee5f75a42f043683b9d1ca41c31f1c792616c9",
+      "parent_source_sha256": "bf1efd3d9ab61d892c07ed9718abac51e49699ba2622d496cd63836db548c833",
+      "numerical_passed": false,
+      "heldout_passed": null,
+      "record_sha256": "6c12094df28437db3c51b34fd280d7846f2bb48aa04fcbc56fdb699c8d0f520a",
+      "error_count": 11750,
+      "elements": 131072,
+      "change": "Newton refinements of reciprocal/rsqrt; direct FP32-to-INT8 cast retained"
+    },
+    {
+      "condition": "lowered_ir",
+      "source_sha256": "ad200be18f567cb6c37588e601422e36ceafe0630b057e5b2dd7303e7381e069",
+      "parent_source_sha256": "bf1efd3d9ab61d892c07ed9718abac51e49699ba2622d496cd63836db548c833",
+      "numerical_passed": true,
+      "heldout_passed": true,
+      "record_sha256": "b13b49a0c2889282581abe6e81a4fa85acaf5f637d6bbbbd8582b1ecd8297e20",
+      "change": "FP32 rounded to INT32 before the INT8 conversion; exact output-interface/oracle preserved",
+      "heldout": "existing T128/seed17 fixture; original numerical gate"
+    }
+  ],
+  "information": "same failed source, golden report and four coding guides; only one condition also receives three verbatim existing compiler-PTO lines, selected before calls; no handwritten solution or investigator bridge recipe",
+  "protocol_sha256": "eef92c2aba6bcee241f16c726c5da16f45b0f792a1c8c846c8373ff8f0daab49",
+  "runner_sha256": "10ba2f3d10ca1d0da8382961fa03919c7667671b3c799465c830be271ed77b09",
+  "results_sha256": "563d61fd2f2e23b8f262d6ef06b848d7c2f19e9b6be09c70d5f1889fbdd49387",
+  "usage": {
+    "status": "ok",
+    "input": 41249,
+    "output": 24694,
+    "reasoning": 85683,
+    "cost": 0.07563059999999999
+  },
+  "limitations": [
+    "One fixed source and one proposal per condition; no repeated estimate or route/usability test.",
+    "Investigator selected the relevant lowered-code lines; automated selection remains unvalidated.",
+    "Passing the declared numerical fixtures does not certify arbitrary shapes or full-model integration.",
+    "No latency acceptance or main-study success-rate revision."
+  ]
+}

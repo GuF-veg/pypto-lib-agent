@@ -41,9 +41,12 @@ GOLDEN: list[GoldenQuestion] = [
         "overview",
         {"run_id": 1},
         """RUN clock_freq_hz=50000000 device_id=0 level=4 num_cores=4 platform="a2a3" program="SynthDecode" rank="rank0" retained=true run_id=1 evidence=measured
-METRIC artifacts=3 bench_max_us=13.0 bench_mean_us=12.5 bench_median_us=12.4 bench_min_us=12.0 bench_rounds=100 cpm_us=40.0 edges=6 idle_gaps=3 makespan_us=0.0 raw_span_us=0.0 run_id=1 task_rows=8 tasks=8 time_bands=50 evidence=measured
-RESOURCE cores=2 engine="aic" run_id=1 evidence=measured
-RESOURCE cores=2 engine="aiv" run_id=1 evidence=measured""",
+METRIC artifacts=3 bench_max_us=13.0 bench_mean_us=12.5 bench_median_us=12.4 bench_min_us=12.0 bench_rounds=100 block_counts_missing=0 cpm_us=40.0 declared_blocks_sum=8 edges=6 idle_gaps=3 makespan_us=0.0 raw_span_us=0.0 run_id=1 task_rows=8 tasks=8 time_bands=50 evidence=measured
+TIMELINE coordinates="capture_timestamp_us" run_id=1 scope="captured_execution_rows" t0_us=0.0 t1_us=120.0 evidence=measured
+RESOURCE cores=2 engine="aic" run_id=1 scope="capture_declared_topology" evidence=measured
+RESOURCE cores=2 engine="aiv" run_id=1 scope="capture_declared_topology" evidence=measured
+EXECUTION distinct_cores=2 engine="aic" max_rows_per_core=5 physical_rows=6 run_id=1 scope="whole_capture_counts_not_utilization" tasks_with_rows=6 evidence=measured
+EXECUTION distinct_cores=1 engine="aiv" max_rows_per_core=2 physical_rows=2 run_id=1 scope="whole_capture_counts_not_utilization" tasks_with_rows=2 evidence=measured""",
     ),
     GoldenQuestion(
         "inventory",
@@ -183,7 +186,8 @@ DEP arg="0" consumer_dtype="" consumer_shape=[] consumer_start_offset="0" consum
         "why_long",
         "why_long",
         {"run_id": 1, "task_id": "8"},
-        """LONG busy_us=10.0 family="gemm" family_median_us=6.0 family_rank=2 family_tasks=2 max_row_us=10.0 min_row_us=10.0 name="gemm_1_aic" num_rows=1 run_id=1 task_id="8" wall_us=18.0 evidence=measured""",
+        """LONG busy_us=10.0 family="gemm" family_median_us=6.0 family_rank=2 family_tasks=2 max_row_us=10.0 min_row_us=10.0 name="gemm_1_aic" num_rows=1 run_id=1 task_id="8" wall_us=18.0 evidence=measured
+METRIC_DEFINITION family_median_method="lower_middle_order_statistic" pipe_activity_measurement="pipe counters or instruction trace; lifecycle endpoints only bracket execution" row_duration="row.end_us-row.start_us" row_scope="kernel lifecycle interval including possible synchronization and waits" run_id=1 task_busy="max(row.end_us)-min(row.start_us)" task_id="8" task_wall="max(row.finish_us)-min(row.dispatch_us)" unit="us" wall_us_available=true evidence=proven""",
     ),
     GoldenQuestion(
         "rows",
@@ -219,7 +223,8 @@ PMU counter="vec_ratio" ratio=0.0008 run_id=1 samples=1 task_id="3" total_cycles
         "critical_path_observed",
         "critical_path",
         {"run_id": 1, "kind": "observed"},
-        """PATH busy_us=10.0 compute_us=10.0 early_dispatch_proven="none" engine="aic" family="rmsnorm" gap_kind="front-gap" kind="observed" name="rmsnorm" run_id=1 seq=0 stall_us=0.0 task_id="1" wall_us=10.0 evidence=measured
+        """METRIC_DEFINITION kind="observed" latency_scope="profile capture, not unprofiled benchmark" path_compute="observed: non-overlapped task-envelope contribution; static: task envelope" path_stall="gap before task on observed path; unavailable on static path" pipe_activity_measurement="pipe counters or instruction trace; zero path stall does not exclude waits inside a task" row_scope="kernel lifecycle interval including possible synchronization and waits" run_id=1 task_busy="max(row.end_us)-min(row.start_us)" unit="us" evidence=proven
+PATH busy_us=10.0 compute_us=10.0 early_dispatch_proven="none" engine="aic" family="rmsnorm" gap_kind="front-gap" kind="observed" name="rmsnorm" run_id=1 seq=0 stall_us=0.0 task_id="1" wall_us=10.0 evidence=measured
 PATH busy_us=10.0 compute_us=10.0 early_dispatch_proven="none" engine="aic" family="q_proj" gap_kind="data-wait" gap_us=2.0 kind="observed" name="q_proj" run_id=1 seq=1 stall_us=2.0 task_id="2" wall_us=12.0 evidence=measured
 PATH busy_us=20.0 compute_us=20.0 early_dispatch_proven="none" engine="aic" family="kv_proj" gap_kind="data-wait" gap_us=7.0 kind="observed" name="kv_proj" run_id=1 seq=2 stall_us=8.0 task_id="3" wall_us=26.0 evidence=measured
 PATH busy_us=6.0 compute_us=6.0 early_dispatch_proven="full" engine="aic" family="gemm" gap_kind="core-wait" gap_us=-4.0 kind="observed" name="gemm_0_aic" run_id=1 seq=3 stall_us=52.0 task_id="7" wall_us=9.0 evidence=measured

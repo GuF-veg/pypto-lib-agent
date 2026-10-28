@@ -187,8 +187,31 @@ def execute(
         raise
     except Exception as exc:
         raise QueryError(f"query {name!r} failed: {type(exc).__name__}: {exc}") from exc
+    facts = _mask_missing_lifecycle(conn, model, facts)
     resolved = spec.default_budget_bytes if budget_bytes is None else budget_bytes
     return render(facts, resolved)
+
+
+def _mask_missing_lifecycle(conn, model, facts: list[Fact]) -> list[Fact]:
+    """Level-1 legacy zeros are storage placeholders, not observed endpoints."""
+    missing = {
+        "TASK": {"wall_us", "min_dispatch_us", "min_receive_us", "max_finish_us"},
+        "LONG": {"wall_us"},
+        "ROW": {"dispatch_us", "receive_us", "finish_us"},
+        "PATH": {"wall_us", "gap_us"},
+    }
+    if not hasattr(model, "run_id") or not any(missing.get(f.rec, set()).intersection(f.fields) for f in facts):
+        return facts
+    row = conn.execute("SELECT swimlane_level FROM run WHERE run_id = ?", [model.run_id]).fetchone()
+    if row is None or (row[0] is not None and row[0] >= 2):
+        return facts
+    from profile_db.facts import Evidence
+
+    return [
+        Fact(f.rec, {k: v for k, v in f.fields.items() if k not in missing.get(f.rec, set())}, f.evidence)
+        for f in facts
+    ] + [Fact("EVIDENCE", dict(run_id=model.run_id, metric="dispatch_receive_fin",
+                               reason="requires swimlane level >= 2; legacy zeros are placeholders"), Evidence.UNAVAILABLE)]
 
 
 def _validate_rank(conn, model: BaseModel) -> None:

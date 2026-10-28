@@ -86,41 +86,41 @@ def compat_reasons(a: Mapping[str, Any], b: Mapping[str, Any]) -> list[str]:
     return reasons
 
 
-def _family_stats(conn, run_id: int) -> dict[str, dict[str, float]]:
-    """family -> {count, busy_us, wall_us} for one run."""
+def _family_stats(conn, run_id: int) -> dict[str, dict[str, float | None]]:
+    """A family timing total is available only when every task is timed."""
     rows = conn.execute(
-        "SELECT family, COUNT(*), COALESCE(SUM(busy_us), 0), "
-        "COALESCE(SUM(wall_us), 0) FROM task "
+        "SELECT family, COUNT(*), CASE WHEN COUNT(busy_us) = COUNT(*) THEN SUM(busy_us) END, "
+        "CASE WHEN COUNT(wall_us) = COUNT(*) THEN SUM(wall_us) END FROM task "
         "WHERE run_id = ? AND family IS NOT NULL GROUP BY family",
         [run_id],
     ).fetchall()
     return {
         str(family): {
             "count": float(count),
-            "busy_us": float(busy),
-            "wall_us": float(wall),
+            "busy_us": float(busy) if busy is not None else None,
+            "wall_us": float(wall) if wall is not None else None,
         }
         for family, count, busy, wall in rows
     }
 
 
 def _family_deltas(
-    stats_a: Mapping[str, Mapping[str, float]],
-    stats_b: Mapping[str, Mapping[str, float]],
+    stats_a: Mapping[str, Mapping[str, float | None]],
+    stats_b: Mapping[str, Mapping[str, float | None]],
     family: str,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     names = set(stats_a) | set(stats_b)
     if family != "*":
         names = {family} if family in names else set()
-    ranked = sorted(
-        names,
-        key=lambda name: (
-            -abs(stats_b.get(name, {}).get("busy_us", 0.0) - stats_a.get(name, {}).get("busy_us", 0.0)),
-            name,
-        ),
-    )
-    deltas: list[dict[str, Any]] = []
     empty = {"count": 0.0, "busy_us": 0.0, "wall_us": 0.0}
+
+    def order(name):
+        b, a = stats_a.get(name, empty)["busy_us"], stats_b.get(name, empty)["busy_us"]
+        return (True, 0.0, name) if b is None or a is None else (False, -abs(a-b), name)
+
+    ranked = sorted(names, key=order)
+    deltas: list[dict[str, Any]] = []
+    unavailable: list[dict[str, Any]] = []
     for name in ranked:
         before = stats_a.get(name, empty)
         after = stats_b.get(name, empty)
@@ -130,6 +130,10 @@ def _family_deltas(
             ("family_tasks", "count"),
         ):
             b, a = before[key], after[key]
+            if b is None or a is None:
+                unavailable.append(dict(metric=metric, family=name, unavailable_before=b is None,
+                                        unavailable_after=a is None, reason="family total requires timing for every task"))
+                continue
             deltas.append(
                 {
                     "metric": metric,
@@ -140,7 +144,7 @@ def _family_deltas(
                     "ratio": (a / b) if b else None,
                 }
             )
-    return deltas
+    return deltas, unavailable
 
 
 def compare_runs(conn, run_a: int, run_b: int, *, family: str | None = None) -> dict[str, Any]:
@@ -220,14 +224,24 @@ def compare_runs(conn, run_a: int, run_b: int, *, family: str | None = None) -> 
                 "ratio": (after / before) if before else None,
             }
         )
+    unavailable_metrics: list[str | dict[str, Any]] = []
     if family is not None and not profile_reasons:
-        deltas.extend(_family_deltas(_family_stats(conn, run_a), _family_stats(conn, run_b), family))
+        family_deltas, family_unavailable = _family_deltas(_family_stats(conn, run_a), _family_stats(conn, run_b), family)
+        if (meta_a["swimlane_level"] or 0) < 2:
+            family_deltas = [d for d in family_deltas if d["metric"] != "family_wall_us"]
+            family_unavailable = [d for d in family_unavailable if d["metric"] != "family_wall_us"]
+            unavailable_metrics.append("family_wall_us")
+        unavailable_metrics.extend(family_unavailable)
+        deltas.extend(family_deltas)
     return {
         "run_a": run_a,
         "run_b": run_b,
         "program": meta_a["program"],
         "compatible": not profile_reasons,
         "profile_compatible": not profile_reasons,
+        "compatibility_scope": "capture_configuration_and_profile_analysis",
+        "workload_validation_checked": False,
+        "unavailable_metrics": unavailable_metrics,
         "reasons": profile_reasons,
         "deltas": deltas,
     }

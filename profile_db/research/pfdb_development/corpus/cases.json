@@ -1,0 +1,46 @@
+{
+  "version": 2,
+  "scope": "two-case calibration before the ten-task pilot; not a full optimization benchmark",
+  "provenance": {
+    "source_database_sha256": "400b421b188ebdeb22eaf8d88b941b3c7067dc213c879a3e3a90deea177d9f2e",
+    "source_run_fingerprints": {
+      "1": "5c6645a9fbaf96da6800335bda6bd13026e157823a5b28ab8ba2cb52155b5b4a",
+      "2": "62a9c1eac64f0b3586b1c7b609665c38dacc8b5727ee81dd14f835847f9e221b",
+      "6": "1962951b3e6b7ec996afce84bc2b6b31d574777ad71d52db740e24387da35373"
+    }
+  },
+  "cases": [
+    {
+      "id": "ranking",
+      "packet": "ranking.json",
+      "required_queries": [
+        "r1",
+        "r2",
+        "p1",
+        "p2"
+      ],
+      "question": "Compare the reported observations descriptively. Which run has the lower unprofiled full-program median? Which run has the shorter projection task busy_us span? Does the locally shorter projection alone establish which full program is faster? Return answer with lower_median_run (integer), shorter_projection_span_run (integer), local_projection_alone_determines_program (boolean). Do not assume general numerical equivalence beyond supplied evidence.",
+      "expected": {
+        "lower_median_run": 1,
+        "shorter_projection_span_run": 2,
+        "local_projection_alone_determines_program": false
+      }
+    },
+    {
+      "id": "span",
+      "packet": "span.json",
+      "required_queries": [
+        "l1",
+        "l2"
+      ],
+      "question": "Interpret this projection using both LONG and physical ROW records. Return answer with busy_us and wall_us (the two exact LONG numeric fields), max_row_us (number), busy_us_semantics (one of max_row_end_minus_min_row_start, sum_row_durations, pipe_active_time), timestamps_establish_pipe_active_time (boolean). In next_experiment explain what structure to inspect before blaming slow per-core arithmetic. Kernel-lifecycle row time may contain waits.",
+      "expected": {
+        "busy_us": 1086.8,
+        "wall_us": 1143.6,
+        "max_row_us": 109.08,
+        "busy_us_semantics": "max_row_end_minus_min_row_start",
+        "timestamps_establish_pipe_active_time": false
+      }
+    }
+  ]
+}

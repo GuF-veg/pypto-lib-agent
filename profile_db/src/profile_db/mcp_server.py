@@ -33,16 +33,16 @@ from typing import Any, Literal
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import ImageContent, TextContent, Tool
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
 
 from profile_db._version import __version__
 from profile_db.api import ProfileDB, format_result
-from profile_db.errors import PfdbError
+from profile_db.errors import PfdbError, QueryError
 from profile_db.query import get_query, list_queries
 
 # Bumped on any breaking change to the tool surface; published with the
 # release (semantic versioning guards the contract).
-TOOL_SCHEMA_VERSION = "4"
+TOOL_SCHEMA_VERSION = "7"
 
 # Query registry names -> MCP tool names (only ``runs_list`` is renamed).
 _TOOL_RENAMES = {"runs_list": "list_runs"}
@@ -153,6 +153,12 @@ class ListTrialsToolParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     active_only: bool = False
+    trial_id: int | None = None
+    source_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    scope_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    view: Literal["summary", "diagnostics"] = Field(
+        default="summary", description="diagnostics reads verified registered text; requires trial_id and expected source_sha256"
+    )
 
 
 class NoteToolParams(BaseModel):
@@ -165,7 +171,8 @@ class NoteToolParams(BaseModel):
 # tool suffix -> (params model, description, writes?)
 class AttachToolParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    run_id: int
+    run_id: int | None = None
+    trial_id: int | None = None
     source: str
     copy: bool = False
 
@@ -177,7 +184,7 @@ class RefreshToolParams(BaseModel):
 
 
 _LIFECYCLE_TOOLS: dict[str, tuple[type[BaseModel], str, bool]] = {
-    "attach": (AttachToolParams, "attach existing profiling artifacts to a run", True),
+    "attach": (AttachToolParams, "Attach existing artifacts: exactly one run_id (profiling) or trial_id (immutable candidate manifest; no copy)", True),
     "refresh": (RefreshToolParams, "explicitly refresh persisted runtime analyses", True),
     "compare": (
         CompareToolParams,
@@ -212,7 +219,7 @@ _LIFECYCLE_TOOLS: dict[str, tuple[type[BaseModel], str, bool]] = {
         "remember: close a trial with win / neutral / regression / compile_error",
         True,
     ),
-    "list_trials": (ListTrialsToolParams, "remember: the trial lineage and verdicts", False),
+    "list_trials": (ListTrialsToolParams, "Trial history; select trial_id for identity, scope and missing evidence. view=diagnostics reads existing registered text with mandatory expected source_sha256; increase budget_bytes if truncated", False),
     "note": (NoteToolParams, "remember: attach a free-text note to a run", True),
 }
 
@@ -232,10 +239,29 @@ def _query_tools() -> list[Tool]:
             Tool(
                 name=f"pfdb.{_tool_name(spec.name)}",
                 description=spec.owner_question,
-                inputSchema=spec.params.model_json_schema(),
+                inputSchema=_budget_model(spec.params).model_json_schema(),
             )
         )
     return tools
+
+
+def _budget_model(params: type[BaseModel]) -> type[BaseModel]:
+    """Add transport budget control without changing query selectors."""
+    return create_model(
+        f"{params.__name__}Tool",
+        __base__=params,
+        budget_bytes=(
+            int | None,
+            Field(
+                default=None,
+                ge=1,
+                strict=True,
+                description="Response byte budget (CLI --budget). On TRUNCATED, retry "
+                "the same tool with the larger budget from hint; replace the previous "
+                "response rather than appending it. Omit for the query default.",
+            ),
+        ),
+    )
 
 
 def _render_tool() -> Tool:
@@ -255,32 +281,44 @@ def _version_tool() -> Tool:
     )
 
 
-def _lifecycle_tools() -> list[Tool]:
+def _lifecycle_tools(*, writable: bool = True) -> list[Tool]:
     return [
         Tool(
             name=f"pfdb.{suffix}",
             description=description,
-            inputSchema=model.model_json_schema(),
+            inputSchema=(model if _writes else _budget_model(model)).model_json_schema(),
         )
         for suffix, (model, description, _writes) in _LIFECYCLE_TOOLS.items()
+        if writable or not _writes
     ]
 
 
-def build_tools() -> list[Tool]:
-    """The full, deterministic tool list (queries + lifecycle + render +
-    version)."""
-    return [*_query_tools(), *_lifecycle_tools(), _render_tool(), _version_tool()]
+def build_tools(*, writable: bool = True) -> list[Tool]:
+    """Deterministic capabilities, restricted to reads when writable=False."""
+    return [*_query_tools(), *_lifecycle_tools(writable=writable), _render_tool(), _version_tool()]
+
+
+def _database_writable(db: ProfileDB) -> bool:
+    return not db.connection.execute(
+        "SELECT readonly FROM duckdb_databases() WHERE database_name=current_database()"
+    ).fetchone()[0]
 
 
 def _lifecycle_result(db: ProfileDB, suffix: str, arguments: dict[str, Any]) -> str:
     """Run one lifecycle tool and render its answer as facts text."""
     model_cls, _description, _writes = _LIFECYCLE_TOOLS[suffix]
-    model = model_cls.model_validate(arguments)
+    if _writes and not _database_writable(db):
+        raise QueryError("this operation requires pfdb serve --writable")
+    try:
+        model = (model_cls if _writes else _budget_model(model_cls)).model_validate(arguments)
+    except ValidationError as exc:
+        raise QueryError(f"invalid parameters for {suffix!r}: {exc}") from exc
+    budget_override = getattr(model, "budget_bytes", None)
     if suffix in ("attach", "refresh"):
-        result = db.attach(model.source, run_id=model.run_id, copy=model.copy) if suffix == "attach" else db.refresh(run_id=model.run_id, source=model.source)
+        result = db.attach(model.source, run_id=model.run_id, trial_id=model.trial_id, copy=model.copy) if suffix == "attach" else db.refresh(run_id=model.run_id, source=model.source)
         return json.dumps(result, sort_keys=True)
     if suffix == "compare":
-        budget = 16384 if model.family is not None else 4096
+        budget = budget_override if budget_override is not None else 16384 if model.family is not None else 4096
         return format_result(
             db.compare(
                 model.run_a,
@@ -305,9 +343,10 @@ def _lifecycle_result(db: ProfileDB, suffix: str, arguments: dict[str, Any]) -> 
                 seed=model.seed,
             ),
             "facts",
+            budget_override if budget_override is not None else 4096,
         )
     if suffix == "baseline_list":
-        return format_result(db.baseline_list(), "facts")
+        return format_result(db.baseline_list(), "facts", budget_override if budget_override is not None else 4096)
     if suffix == "baseline_add":
         baseline_id = db.baseline_add(model.name, model.run_id, model.bench_mean_us)
         return f"BASELINE baseline_id={baseline_id} name={model.name!r} evidence=measured"
@@ -342,7 +381,9 @@ def _lifecycle_result(db: ProfileDB, suffix: str, arguments: dict[str, Any]) -> 
             "status=\"done\" evidence=measured"
         )
     if suffix == "list_trials":
-        return format_result(db.list_trials(active_only=model.active_only), "facts")
+        return format_result(db.list_trials(active_only=model.active_only, trial_id=model.trial_id,
+                                            source_sha256=model.source_sha256, scope_sha256=model.scope_sha256,
+                                            view=model.view), "facts", budget_override if budget_override is not None else 4096)
     db.note(model.run_id, model.text)
     return f"RUN run_id={model.run_id} note=set evidence=measured"
 
@@ -383,8 +424,14 @@ async def _dispatch(db: ProfileDB, name: str, arguments: dict[str, Any]):
             TextContent(type="text", text=_lifecycle_result(db, query_name, arguments))
         ]
     spec = get_query(query_name)  # raises QueryError for an unknown tool
-    result = db.query(query_name, budget_bytes=spec.default_budget_bytes, **arguments)
-    return [TextContent(type="text", text=format_result(result, "facts", spec.default_budget_bytes))]
+    try:
+        model = _budget_model(spec.params).model_validate(arguments)
+    except ValidationError as exc:
+        raise QueryError(f"invalid parameters for {query_name!r}: {exc}") from exc
+    budget = model.budget_bytes if model.budget_bytes is not None else spec.default_budget_bytes
+    params = model.model_dump(exclude={"budget_bytes"})
+    result = db.query(query_name, budget_bytes=budget, **params)
+    return [TextContent(type="text", text=format_result(result, "facts", budget))]
 
 
 def build_server(db: ProfileDB | None = None) -> Server:
@@ -392,6 +439,7 @@ def build_server(db: ProfileDB | None = None) -> Server:
     omitted). The server is stateless across start/stop: every call reads
     the database fresh and returns the same bytes for the same request."""
     handle = db if db is not None else ProfileDB(read_only=True)
+    writable = _database_writable(handle)
     server = Server(
         "pfdb",
         version=__version__,
@@ -405,7 +453,7 @@ def build_server(db: ProfileDB | None = None) -> Server:
 
     @server.list_tools()
     async def list_tools() -> list[Tool]:
-        return build_tools()
+        return build_tools(writable=writable)
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict[str, Any]):

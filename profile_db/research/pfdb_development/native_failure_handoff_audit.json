@@ -1,0 +1,29 @@
+{
+  "scope": "offline artifact handoff audit; no agent/device rerun or correctness certification",
+  "rows": [
+    {
+      "label": "baseline",
+      "trial_id": 1,
+      "source_sha256": "8d593b77dda60f1843699be529ba614cd3645e53b360499337fdfdacad8a4cb4",
+      "contains_mismatch_count": false,
+      "contains_first_failure": false,
+      "reported_validation": "not_run"
+    },
+    {
+      "label": "augmented",
+      "trial_id": 2,
+      "source_sha256": "8d593b77dda60f1843699be529ba614cd3645e53b360499337fdfdacad8a4cb4",
+      "contains_mismatch_count": true,
+      "contains_first_failure": true,
+      "reported_validation": "not_run"
+    }
+  ],
+  "wrong_source_refused": true,
+  "original_manifest_unchanged": true,
+  "original_manifest_sha256": "c866a66c18710a9286b5209b038d4ad97a58bf34c2f08396a936c94688468cd6",
+  "report_sha256": "0c8680d8e84e4a1268347ad7b1b02f005becd7d86b3932f35ef5e588c28e6fa3",
+  "original_stdout_bytes": 4952,
+  "original_stdout_contains_detail": false,
+  "validation_report_bytes": 2662,
+  "finding": "Existing registered-diagnostic API can expose the missing error when the producer supplies the existing report."
+}

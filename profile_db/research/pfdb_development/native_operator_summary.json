@@ -1,0 +1,2387 @@
+{
+  "scope": "native source proposal study; safety, heldout and confirmation remain separate external gates",
+  "status": "execution_complete_with_service_errors",
+  "expected_trajectories": 16,
+  "service_failed_attempts": 46,
+  "service_stopped_trajectories": 0,
+  "provider_error_types": {
+    "provider.auth": 3,
+    "provider.no-route": 43
+  },
+  "completed_trajectories": 16,
+  "completed_attempts": 64,
+  "observed_sessions": 64,
+  "failed_trajectories": 0,
+  "conditions": {
+    "native_file": {
+      "completed_attempts": 32,
+      "json_proposals": 7,
+      "provider_failed_attempts": 23,
+      "process_failed_attempts": 23,
+      "posthoc_extractable_only": 2,
+      "evaluated_candidates": 7,
+      "numerical_passes": 1,
+      "diagnostic_retrieved": 11,
+      "client_tool_calls": 56,
+      "backend_calls": 42,
+      "tool_errors": 3,
+      "budget_truncations": 3,
+      "tool_counts": {
+        "pfdb_pfdb_baseline_list": 2,
+        "pfdb_pfdb_bench": 3,
+        "pfdb_pfdb_compare": 1,
+        "pfdb_pfdb_critical_path": 3,
+        "pfdb_pfdb_density": 4,
+        "pfdb_pfdb_list_runs": 8,
+        "pfdb_pfdb_list_trials": 6,
+        "pfdb_pfdb_memory": 1,
+        "pfdb_pfdb_overview": 4,
+        "pfdb_pfdb_perf_hints": 2,
+        "pfdb_pfdb_rows": 3,
+        "pfdb_pfdb_task": 1,
+        "pfdb_pfdb_tasks": 1,
+        "pfdb_pfdb_version": 2,
+        "pfdb_pfdb_why_long": 1,
+        "read": 14
+      }
+    },
+    "pfdb_diagnostic": {
+      "completed_attempts": 32,
+      "json_proposals": 9,
+      "provider_failed_attempts": 23,
+      "process_failed_attempts": 23,
+      "posthoc_extractable_only": 0,
+      "evaluated_candidates": 9,
+      "numerical_passes": 1,
+      "diagnostic_retrieved": 10,
+      "client_tool_calls": 40,
+      "backend_calls": 40,
+      "tool_errors": 0,
+      "budget_truncations": 1,
+      "tool_counts": {
+        "pfdb_pfdb_baseline_list": 2,
+        "pfdb_pfdb_bench": 2,
+        "pfdb_pfdb_critical_path": 2,
+        "pfdb_pfdb_density": 2,
+        "pfdb_pfdb_incore": 1,
+        "pfdb_pfdb_list_runs": 8,
+        "pfdb_pfdb_list_trials": 16,
+        "pfdb_pfdb_overview": 2,
+        "pfdb_pfdb_pmu": 1,
+        "pfdb_pfdb_rows": 1,
+        "pfdb_pfdb_tasks": 2,
+        "pfdb_pfdb_why_long": 1
+      }
+    }
+  },
+  "trajectories": [
+    {
+      "task": "conv",
+      "condition": "native_file",
+      "replicate": 0,
+      "complete": true,
+      "attempts": [
+        {
+          "index": 0,
+          "current_source_sha256": "f60db9a492c093f825a6d495b03471ae5daef9afdc7ce1d4089b9142b50819eb",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 36.503
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.auth"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": true,
+          "steps": 2,
+          "tools": [
+            "read",
+            "pfdb_pfdb_overview",
+            "pfdb_pfdb_bench",
+            "pfdb_pfdb_density",
+            "pfdb_pfdb_critical_path",
+            "pfdb_pfdb_task",
+            "pfdb_pfdb_why_long",
+            "pfdb_pfdb_perf_hints"
+          ],
+          "tool_errors": 0,
+          "backend_calls": 7,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "d9c286cc9bb50d3efd592220a08b7b38cd02521cd76ae457f8f56682e782927a",
+          "events_sha256": "2790771170a875800163c983b2cd09d91d1bad1e5057e8debf61d149a80818af"
+        },
+        {
+          "index": 1,
+          "current_source_sha256": "f60db9a492c093f825a6d495b03471ae5daef9afdc7ce1d4089b9142b50819eb",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.471
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "8be3b0d0a95cb62d07f1794cb04b126f4a3764c1311671e6745f1d9c8f361844",
+          "events_sha256": "69114abd099d657492a283b1c3ad42f6c953b0d06c18c1bf9f3687c344ce625b"
+        },
+        {
+          "index": 2,
+          "current_source_sha256": "f60db9a492c093f825a6d495b03471ae5daef9afdc7ce1d4089b9142b50819eb",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.518
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "8822fc269a812a5ca0634e4142906cfdd8bc22244bac987a50bc1e92937ad3dc",
+          "events_sha256": "121f5e949b63de7c1fe6e2a86611bfacba1000cef5dc84b1b52ab64790a76f27"
+        },
+        {
+          "index": 3,
+          "current_source_sha256": "f60db9a492c093f825a6d495b03471ae5daef9afdc7ce1d4089b9142b50819eb",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.568
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "e9ef79fd1dbbfdc423551a87180c55e2e5002fcd1b185376626b55143814beaa",
+          "events_sha256": "9b85afda169aaaa6e68ceb381990c5463501b70564acb595a744576061e497a4"
+        }
+      ],
+      "stop_reason": null
+    },
+    {
+      "task": "conv",
+      "condition": "native_file",
+      "replicate": 1,
+      "complete": true,
+      "attempts": [
+        {
+          "index": 0,
+          "current_source_sha256": "f60db9a492c093f825a6d495b03471ae5daef9afdc7ce1d4089b9142b50819eb",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.868
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "f16997ea60b56e41b24e7d28818deeaa924a7e155db0b391e19b3c50e4fb9465",
+          "events_sha256": "65c034445127d1ccfe57fb46e64c9c96c101244bc98751e374f189894d76328a"
+        },
+        {
+          "index": 1,
+          "current_source_sha256": "f60db9a492c093f825a6d495b03471ae5daef9afdc7ce1d4089b9142b50819eb",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.468
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "5d1498f5f85d41a6ee7b1048c8b19456bb8651bfab3a9e8dad3721f576fb38e3",
+          "events_sha256": "44fec9804c5ab384fd01424cf9a09ef3f35df9d386c83bbee21028d1a1c1f841"
+        },
+        {
+          "index": 2,
+          "current_source_sha256": "f60db9a492c093f825a6d495b03471ae5daef9afdc7ce1d4089b9142b50819eb",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.528
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "2d553f7b7e0f3b706017976197f1ac9fe3ce39bcd7cd18747247747436b49c4d",
+          "events_sha256": "0eecc31b0041414ea1c057426fb74a0408cafba0ad62ec4b10a44bdd5c151d85"
+        },
+        {
+          "index": 3,
+          "current_source_sha256": "f60db9a492c093f825a6d495b03471ae5daef9afdc7ce1d4089b9142b50819eb",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.468
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "921bab06c695d5b2247e970a949264f53aa5910535debe576cc3273c4e1acf27",
+          "events_sha256": "2ca23a835f1b048d1f1226f89e6c1b26000357cf47eb2f0ef71e3a0f15a45d25"
+        }
+      ],
+      "stop_reason": null
+    },
+    {
+      "task": "conv",
+      "condition": "pfdb_diagnostic",
+      "replicate": 0,
+      "complete": true,
+      "attempts": [
+        {
+          "index": 0,
+          "current_source_sha256": "f60db9a492c093f825a6d495b03471ae5daef9afdc7ce1d4089b9142b50819eb",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.518
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "636eb8151435eabac6201cbb0fc01bcc4814f51e793dcc1c7e87c2df4540c53e",
+          "events_sha256": "c293f1505e1e03fbdab4851e796eb1ed368fb27fe8b635bb1bfdec9796865d11"
+        },
+        {
+          "index": 1,
+          "current_source_sha256": "f60db9a492c093f825a6d495b03471ae5daef9afdc7ce1d4089b9142b50819eb",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.568
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "5afb7c65d2794545626ddf07390d9791686a09812da52e3848d8baddaf17a337",
+          "events_sha256": "2e9e512de4878874b0da229c4249cd43334a8a12681dd11100dd9b82b27ba620"
+        },
+        {
+          "index": 2,
+          "current_source_sha256": "f60db9a492c093f825a6d495b03471ae5daef9afdc7ce1d4089b9142b50819eb",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.468
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "287149b08a33a779cda31074720ced7c992d4d8ba2f90b3f79291342ca85ff29",
+          "events_sha256": "efbbd591125843962f7586b575d5604a6ae11e17d10df4375575dc72cea2967d"
+        },
+        {
+          "index": 3,
+          "current_source_sha256": "f60db9a492c093f825a6d495b03471ae5daef9afdc7ce1d4089b9142b50819eb",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.468
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "0060492331d4f7005cd8afe3eeba65ceb3de7c0f9b945c5980090a182924ff5b",
+          "events_sha256": "85a423a5f49d7714c79f41fc3af2ce59012af604770750e177a70b3a1b96f2b1"
+        }
+      ],
+      "stop_reason": null
+    },
+    {
+      "task": "conv",
+      "condition": "pfdb_diagnostic",
+      "replicate": 1,
+      "complete": true,
+      "attempts": [
+        {
+          "index": 0,
+          "current_source_sha256": "f60db9a492c093f825a6d495b03471ae5daef9afdc7ce1d4089b9142b50819eb",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.849
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "70db7b60abe04ef471e680f07d91e6b6d1f311d85ed071af586320e08e2ded15",
+          "events_sha256": "799fc48a01d2abda805cc8555b3c8b1527829751801e3f10ba1bd8e5bbd359a4"
+        },
+        {
+          "index": 1,
+          "current_source_sha256": "f60db9a492c093f825a6d495b03471ae5daef9afdc7ce1d4089b9142b50819eb",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.836
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "fc32c8a1daf92d8c65a10a165c3ccd419f12439fe5bb9fece67d4a1cd8b057c4",
+          "events_sha256": "a7381acacb518b8273506702ebb3162fa3f2c33e6053a3beed2aa96d5e02d7ca"
+        },
+        {
+          "index": 2,
+          "current_source_sha256": "f60db9a492c093f825a6d495b03471ae5daef9afdc7ce1d4089b9142b50819eb",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.518
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "d6243ed8edeb18114778e8b5dc8d6ca63dbadb06f2e2a897bdfb88fa2f3fe21a",
+          "events_sha256": "c027ed1b5fc4f3fde903748eb775082586e6f22fd712d97b0814a86bc7bc771c"
+        },
+        {
+          "index": 3,
+          "current_source_sha256": "f60db9a492c093f825a6d495b03471ae5daef9afdc7ce1d4089b9142b50819eb",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.618
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "622d623afe91ede29264f9c598e1005ea22dac343f0125a744590676401838e7",
+          "events_sha256": "0485b254a59ce6a8dbfdad4c75dd8ff97e542049c4310da792b6314a0e184fbd"
+        }
+      ],
+      "stop_reason": null
+    },
+    {
+      "task": "hc",
+      "condition": "native_file",
+      "replicate": 0,
+      "complete": true,
+      "attempts": [
+        {
+          "index": 0,
+          "current_source_sha256": "baaaf86286a6af11fcb12d3de0c11d7e4298a1967b3bda03efd74e90090402e9",
+          "source_sha256": "8d593b77dda60f1843699be529ba614cd3645e53b360499337fdfdacad8a4cb4",
+          "process": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 185.39
+          },
+          "json_proposal_accepted": true,
+          "rejected": null,
+          "process_completed": true,
+          "provider_errors": [],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": true,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": true,
+          "steps": 4,
+          "tools": [
+            "read",
+            "pfdb_pfdb_overview",
+            "pfdb_pfdb_tasks",
+            "pfdb_pfdb_density",
+            "pfdb_pfdb_critical_path",
+            "pfdb_pfdb_rows",
+            "pfdb_pfdb_perf_hints",
+            "pfdb_pfdb_memory"
+          ],
+          "tool_errors": 0,
+          "backend_calls": 7,
+          "backend_errors": 0,
+          "budget_truncations": 1,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "afb4c4783a00cb51e789152008050171a73c501e5a5790fe683dc05416836591",
+          "events_sha256": "0210854a8e65041ca1992d3c94b1a80974aaf13fdfd9ac45fa37bd5c470aef79"
+        },
+        {
+          "index": 1,
+          "current_source_sha256": "8d593b77dda60f1843699be529ba614cd3645e53b360499337fdfdacad8a4cb4",
+          "source_sha256": "ac8bcdab2c78fb97090e0f6030a5c3b0f67265b3a4890a52775226533ea695ec",
+          "process": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 82.044
+          },
+          "json_proposal_accepted": true,
+          "rejected": null,
+          "process_completed": true,
+          "provider_errors": [],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": true,
+          "reported_numerical_passed": true,
+          "diagnostic_retrieved": true,
+          "steps": 4,
+          "tools": [
+            "read",
+            "pfdb_pfdb_list_runs",
+            "pfdb_pfdb_overview",
+            "pfdb_pfdb_rows",
+            "pfdb_pfdb_density",
+            "pfdb_pfdb_bench"
+          ],
+          "tool_errors": 0,
+          "backend_calls": 5,
+          "backend_errors": 0,
+          "budget_truncations": 1,
+          "search_median_us": 18.049999999999997,
+          "build_id": null,
+          "record_sha256": "dfc0a0509ccfbc114271d67d162b872d8eb642be816feb683054e410a3775df6",
+          "events_sha256": "4ac27caafb56d4e3c74249562607b9dcbb958dc64cfd7bcc7f492fd709c19e58"
+        },
+        {
+          "index": 2,
+          "current_source_sha256": "ac8bcdab2c78fb97090e0f6030a5c3b0f67265b3a4890a52775226533ea695ec",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 27.87
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.auth"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": true,
+          "steps": 2,
+          "tools": [
+            "read",
+            "pfdb_pfdb_overview",
+            "pfdb_pfdb_bench",
+            "pfdb_pfdb_critical_path",
+            "pfdb_pfdb_rows",
+            "pfdb_pfdb_density",
+            "pfdb_pfdb_compare"
+          ],
+          "tool_errors": 0,
+          "backend_calls": 6,
+          "backend_errors": 0,
+          "budget_truncations": 1,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "734e0efa02d9e8ae3d14fbbe5e1096ea095de7a6fa6f5330c4f21a38179cacfa",
+          "events_sha256": "7bcf28651bcf72a0eca7dfa15dc2d5ed168aebb355a7ef94c3f2e96e3b6f8b93"
+        },
+        {
+          "index": 3,
+          "current_source_sha256": "ac8bcdab2c78fb97090e0f6030a5c3b0f67265b3a4890a52775226533ea695ec",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.468
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "1f5cf5277aae12741f0b61ea9348a019243e1dfaacdfd72fc093cbb129d1e09f",
+          "events_sha256": "aea54ce1265f1800ac784923b82c91413b2b743c6ade2afa4fb749980b8de7d4"
+        }
+      ],
+      "stop_reason": null
+    },
+    {
+      "task": "hc",
+      "condition": "native_file",
+      "replicate": 1,
+      "complete": true,
+      "attempts": [
+        {
+          "index": 0,
+          "current_source_sha256": "baaaf86286a6af11fcb12d3de0c11d7e4298a1967b3bda03efd74e90090402e9",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.829
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "65217f6ac3eb3124ef9b88df30a591c8f6f3fae0f5035a3f94800160f1476183",
+          "events_sha256": "04deda7d3618b5212ce4cb17a3beb6b3874d81257583918d83f17d94ee36c218"
+        },
+        {
+          "index": 1,
+          "current_source_sha256": "baaaf86286a6af11fcb12d3de0c11d7e4298a1967b3bda03efd74e90090402e9",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.833
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "f77b3637d4bddb2e780723b009651335799802317021203dab6dcb30febd3043",
+          "events_sha256": "2941c7ad812e56be4639545b2d3748ea743d9574ef872309e668b96542a9b45a"
+        },
+        {
+          "index": 2,
+          "current_source_sha256": "baaaf86286a6af11fcb12d3de0c11d7e4298a1967b3bda03efd74e90090402e9",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.633
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "174fc2ea902f063c49e0ddc2a31366a00dd32b72efd9b3d6234f56178b5896b0",
+          "events_sha256": "70def2c2608ab70cdf60e0a53a0244abd883035ae943f46dbcb6e25751251f00"
+        },
+        {
+          "index": 3,
+          "current_source_sha256": "baaaf86286a6af11fcb12d3de0c11d7e4298a1967b3bda03efd74e90090402e9",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.669
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "9650f30117d2a2251247ddcbc68d15ffd08823f2225e8fc88da46d42d1d08635",
+          "events_sha256": "54d7d26e1a09928820dc883e3cc97784fb6f843985bb346dcab2867e7b0df750"
+        }
+      ],
+      "stop_reason": null
+    },
+    {
+      "task": "hc",
+      "condition": "pfdb_diagnostic",
+      "replicate": 0,
+      "complete": true,
+      "attempts": [
+        {
+          "index": 0,
+          "current_source_sha256": "baaaf86286a6af11fcb12d3de0c11d7e4298a1967b3bda03efd74e90090402e9",
+          "source_sha256": "20fb8350ff2ee26a9f9470820817ba4b4ceee5c780718e9a29c7107d6f0770fc",
+          "process": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 108.552
+          },
+          "json_proposal_accepted": true,
+          "rejected": null,
+          "process_completed": true,
+          "provider_errors": [],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": true,
+          "reported_numerical_passed": true,
+          "diagnostic_retrieved": true,
+          "steps": 3,
+          "tools": [
+            "pfdb_pfdb_list_trials",
+            "pfdb_pfdb_overview",
+            "pfdb_pfdb_bench",
+            "pfdb_pfdb_density",
+            "pfdb_pfdb_critical_path",
+            "pfdb_pfdb_tasks"
+          ],
+          "tool_errors": 0,
+          "backend_calls": 6,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": 17.45,
+          "build_id": null,
+          "record_sha256": "4584160a6c6027d1e67fd64bd80751337398e02e74bb18a66d8269c22cb4d463",
+          "events_sha256": "98be35f5a18b82ecc771d06f5866110cd77cc22ee4c198ae7678917aaef27261"
+        },
+        {
+          "index": 1,
+          "current_source_sha256": "20fb8350ff2ee26a9f9470820817ba4b4ceee5c780718e9a29c7107d6f0770fc",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 88.348
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.auth"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": true,
+          "steps": 2,
+          "tools": [
+            "pfdb_pfdb_overview",
+            "pfdb_pfdb_bench",
+            "pfdb_pfdb_tasks",
+            "pfdb_pfdb_density",
+            "pfdb_pfdb_list_trials",
+            "pfdb_pfdb_pmu",
+            "pfdb_pfdb_rows",
+            "pfdb_pfdb_why_long",
+            "pfdb_pfdb_critical_path",
+            "pfdb_pfdb_incore"
+          ],
+          "tool_errors": 0,
+          "backend_calls": 10,
+          "backend_errors": 0,
+          "budget_truncations": 1,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "bede7a9adc7122a4eedb16e8fee28612e176fd8799393aa84886a750163ca7dd",
+          "events_sha256": "af7afdf62fe175affe2271f0116a26b58568b033a28ff527fab37b185db021b2"
+        },
+        {
+          "index": 2,
+          "current_source_sha256": "20fb8350ff2ee26a9f9470820817ba4b4ceee5c780718e9a29c7107d6f0770fc",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.772
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "071ebeb694e1128d1285bf5b6a6c6bf9659791909f0edd65e5629a65c6b277b0",
+          "events_sha256": "eb415212aba66ec1d7018be17b55a6c726fa89bd45b125c357dbf32dce3a8d4d"
+        },
+        {
+          "index": 3,
+          "current_source_sha256": "20fb8350ff2ee26a9f9470820817ba4b4ceee5c780718e9a29c7107d6f0770fc",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.848
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "6b59d6fb5342b83b4ac5b0a859cbe433d22767d7e61818556b1336d244d0c4c7",
+          "events_sha256": "84ebe617ea2fc867d7dc8cfd8d7564d5a4a2327c771a21ec0b20822f6e9d2741"
+        }
+      ],
+      "stop_reason": null
+    },
+    {
+      "task": "hc",
+      "condition": "pfdb_diagnostic",
+      "replicate": 1,
+      "complete": true,
+      "attempts": [
+        {
+          "index": 0,
+          "current_source_sha256": "baaaf86286a6af11fcb12d3de0c11d7e4298a1967b3bda03efd74e90090402e9",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 1.57
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "90d276c2bda54729079561f8370acaff89c4deb79a131bae515b1a89d21e2314",
+          "events_sha256": "43fdded0c60cd31f841190fe7e2661cf60704be1b6a9b29ddf3bc1a6cbea8f42"
+        },
+        {
+          "index": 1,
+          "current_source_sha256": "baaaf86286a6af11fcb12d3de0c11d7e4298a1967b3bda03efd74e90090402e9",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.769
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "99373be30cedfc2a27e2aea8fed6a052dbfc58f3bcf05f54e7ccde4f9880ef40",
+          "events_sha256": "d50255e8e035537371b8e82f62e5bb36d443fd70f1966b54c552a864e6eb8ffe"
+        },
+        {
+          "index": 2,
+          "current_source_sha256": "baaaf86286a6af11fcb12d3de0c11d7e4298a1967b3bda03efd74e90090402e9",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.718
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "445d719b9991de0f00c070b679b6b0fadc39d2349f1ad6f49041950c20103a7b",
+          "events_sha256": "d9b5c44b6dc9da1ce952a2da2b8f792553e3e0199fc46a73e6f70cdbf72deb1a"
+        },
+        {
+          "index": 3,
+          "current_source_sha256": "baaaf86286a6af11fcb12d3de0c11d7e4298a1967b3bda03efd74e90090402e9",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.818
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "760e4c2cf44459d7219875425d7891689265264b5e419e75edaf6d6c40726d02",
+          "events_sha256": "8a280f3f9f622078697f8cc6ed14d8d018251f0b1d4c54aceaf92d819d9c5a3f"
+        }
+      ],
+      "stop_reason": null
+    },
+    {
+      "task": "mtp",
+      "condition": "native_file",
+      "replicate": 0,
+      "complete": true,
+      "attempts": [
+        {
+          "index": 0,
+          "current_source_sha256": "86eed6b078e3f328e1458048493159a44087daf6c015dd4c234e0a06493ccbf6",
+          "source_sha256": null,
+          "process": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 160.832
+          },
+          "json_proposal_accepted": false,
+          "rejected": "Expecting value: line 1 column 1 (char 0)",
+          "process_completed": true,
+          "provider_errors": [],
+          "posthoc_extractable_only": true,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": true,
+          "steps": 4,
+          "tools": [
+            "read",
+            "pfdb_pfdb_version",
+            "read",
+            "pfdb_pfdb_list_runs",
+            "pfdb_pfdb_baseline_list"
+          ],
+          "tool_errors": 1,
+          "backend_calls": 3,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "d2d8d9bee2892ea5debaf7250a4fd544da587b0edc88dcf177c0da70d7cb0c88",
+          "events_sha256": "ce7760bf710bbf79c7e68424e671fb53229aa1b1e7bb8eca23c9ebe721578ddf"
+        },
+        {
+          "index": 1,
+          "current_source_sha256": "86eed6b078e3f328e1458048493159a44087daf6c015dd4c234e0a06493ccbf6",
+          "source_sha256": "e8e12e7220e0365a69a6eabca0ea1eaa1b333e85b32623d91421307336cacceb",
+          "process": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 282.297
+          },
+          "json_proposal_accepted": true,
+          "rejected": null,
+          "process_completed": true,
+          "provider_errors": [],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": true,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": true,
+          "steps": 3,
+          "tools": [
+            "read",
+            "pfdb_pfdb_list_runs",
+            "pfdb_pfdb_list_trials",
+            "pfdb_pfdb_baseline_list"
+          ],
+          "tool_errors": 0,
+          "backend_calls": 3,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "321803cc490ca33a6364d845e52237d5062cfea9fbd8ac2d810f3960b4ffff62",
+          "events_sha256": "0500b32f86c99a2823d67cf71a45452e095a1a778cce3a7f064136ec055b8231"
+        },
+        {
+          "index": 2,
+          "current_source_sha256": "e8e12e7220e0365a69a6eabca0ea1eaa1b333e85b32623d91421307336cacceb",
+          "source_sha256": "a14924b7be4636201223bda44763b61323aa9a245eba136a40f2d5b6e20ef3fb",
+          "process": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 429.623
+          },
+          "json_proposal_accepted": true,
+          "rejected": null,
+          "process_completed": true,
+          "provider_errors": [],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": true,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": true,
+          "steps": 2,
+          "tools": [
+            "read",
+            "pfdb_pfdb_list_trials",
+            "pfdb_pfdb_list_runs"
+          ],
+          "tool_errors": 0,
+          "backend_calls": 2,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "77c93e396f8c1ba35a25c4e288e9873f337c1cfdfe4e908f456972a053cc931f",
+          "events_sha256": "21191cc61d0358f403909bf0b982c93da54485ac1d97ffafd38883e97f112a5e"
+        },
+        {
+          "index": 3,
+          "current_source_sha256": "a14924b7be4636201223bda44763b61323aa9a245eba136a40f2d5b6e20ef3fb",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.518
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "47c20c562abb1bab98abc938935adea8b4ce69580e42cb1b14799a21bb09c301",
+          "events_sha256": "025fa5e4b004ca60c105b44cc17c8261557c3c3cd9cd3f6cbd7a80355d3f69ab"
+        }
+      ],
+      "stop_reason": null
+    },
+    {
+      "task": "mtp",
+      "condition": "native_file",
+      "replicate": 1,
+      "complete": true,
+      "attempts": [
+        {
+          "index": 0,
+          "current_source_sha256": "86eed6b078e3f328e1458048493159a44087daf6c015dd4c234e0a06493ccbf6",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.718
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "86df91dac854674a594839eba7c68cea6b69b9aeb7a8adbec5b5128ab27bbffa",
+          "events_sha256": "7b35a76e3852324b31055d9aaaa583a2c17d39bf5c7c3f27f08dd37569584ab1"
+        },
+        {
+          "index": 1,
+          "current_source_sha256": "86eed6b078e3f328e1458048493159a44087daf6c015dd4c234e0a06493ccbf6",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.718
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "7285aef69a62d846c776f0ae6c2b7908936e93c6e047fff5e5738bbfc76c8936",
+          "events_sha256": "37fd8b60fac936937d26ceae85bd6d49be34bed144472c480f92457246fc91bc"
+        },
+        {
+          "index": 2,
+          "current_source_sha256": "86eed6b078e3f328e1458048493159a44087daf6c015dd4c234e0a06493ccbf6",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.618
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "dc958e39892f4f1e30b30f442629b010e6ca9b302bfd6a32bf711c4504fd089b",
+          "events_sha256": "62c8ee3075af6de27721a93013a32e6afc37acbd94c73090d1c7f7c1bd77c2bc"
+        },
+        {
+          "index": 3,
+          "current_source_sha256": "86eed6b078e3f328e1458048493159a44087daf6c015dd4c234e0a06493ccbf6",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.568
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "5e4b9be7c661c5949cbdae23de6eb86c8f699daee95888179be97838d08f7067",
+          "events_sha256": "0fb526a67a1cb789f6bd37a07aba7be883624c05d9ca1a698e703306b92d47c3"
+        }
+      ],
+      "stop_reason": null
+    },
+    {
+      "task": "mtp",
+      "condition": "pfdb_diagnostic",
+      "replicate": 0,
+      "complete": true,
+      "attempts": [
+        {
+          "index": 0,
+          "current_source_sha256": "86eed6b078e3f328e1458048493159a44087daf6c015dd4c234e0a06493ccbf6",
+          "source_sha256": "84b0cd09ca0ee4c3720892cc1bed93900c7d4362851bd3e19c62f47344d5a6a4",
+          "process": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 129.593
+          },
+          "json_proposal_accepted": true,
+          "rejected": null,
+          "process_completed": true,
+          "provider_errors": [],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": true,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": true,
+          "steps": 2,
+          "tools": [
+            "pfdb_pfdb_list_trials",
+            "pfdb_pfdb_list_runs"
+          ],
+          "tool_errors": 0,
+          "backend_calls": 2,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "2754909ed3e4882a06ac229eb3d9ae5d5cf05810782598875da7dc6a32410aea",
+          "events_sha256": "75e9ef870f4c02d6fd171d6a405ea52a1e57628e15b1d52d46f8898cbf2cad4e"
+        },
+        {
+          "index": 1,
+          "current_source_sha256": "84b0cd09ca0ee4c3720892cc1bed93900c7d4362851bd3e19c62f47344d5a6a4",
+          "source_sha256": "7db1b8127210bd37efce2e77cac059b766d6e9be29cfb72f9f91e3ae0ebd0422",
+          "process": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 199.508
+          },
+          "json_proposal_accepted": true,
+          "rejected": null,
+          "process_completed": true,
+          "provider_errors": [],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": true,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": true,
+          "steps": 3,
+          "tools": [
+            "pfdb_pfdb_list_trials",
+            "pfdb_pfdb_list_runs",
+            "pfdb_pfdb_list_trials",
+            "pfdb_pfdb_baseline_list"
+          ],
+          "tool_errors": 0,
+          "backend_calls": 4,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "a468fd0ca43a28ee873baaea48edd5ae73931aee2b18f3f621e914856a1c2557",
+          "events_sha256": "2848b0133ceae115157872aece07e658685c713810fb2fdaa0a5502b81c3b1df"
+        },
+        {
+          "index": 2,
+          "current_source_sha256": "7db1b8127210bd37efce2e77cac059b766d6e9be29cfb72f9f91e3ae0ebd0422",
+          "source_sha256": "9dee6483c412f350634359c12a054649b76711fb30775a185cfaa6b0b450ce7e",
+          "process": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 219.137
+          },
+          "json_proposal_accepted": true,
+          "rejected": null,
+          "process_completed": true,
+          "provider_errors": [],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": true,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": true,
+          "steps": 3,
+          "tools": [
+            "pfdb_pfdb_list_trials",
+            "pfdb_pfdb_list_trials",
+            "pfdb_pfdb_list_runs",
+            "pfdb_pfdb_baseline_list"
+          ],
+          "tool_errors": 0,
+          "backend_calls": 4,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "c91aaace3d57111327cb890228e49768c39d5cfa25dd4129e088308450b7f3fe",
+          "events_sha256": "6b99e92f35da4e893d95fa37d13326881c40d65064f2348dce0f5da486af139e"
+        },
+        {
+          "index": 3,
+          "current_source_sha256": "9dee6483c412f350634359c12a054649b76711fb30775a185cfaa6b0b450ce7e",
+          "source_sha256": "4624f621e534fa8e539251bf0d9ff06dced5801b22744bb0c1428720a3c61142",
+          "process": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 167.635
+          },
+          "json_proposal_accepted": true,
+          "rejected": null,
+          "process_completed": true,
+          "provider_errors": [],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": true,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": true,
+          "steps": 2,
+          "tools": [
+            "pfdb_pfdb_list_trials",
+            "pfdb_pfdb_list_runs"
+          ],
+          "tool_errors": 0,
+          "backend_calls": 2,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "65217be9cac437840f6247089bfef74c6cc3f3bd21826e67922a18644b3040dc",
+          "events_sha256": "7d6c8b2e56c9ed9c544462b3e7877af78ee3c9280246804bd8ff33a7a700baa5"
+        }
+      ],
+      "stop_reason": null
+    },
+    {
+      "task": "mtp",
+      "condition": "pfdb_diagnostic",
+      "replicate": 1,
+      "complete": true,
+      "attempts": [
+        {
+          "index": 0,
+          "current_source_sha256": "86eed6b078e3f328e1458048493159a44087daf6c015dd4c234e0a06493ccbf6",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.668
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "5162c4688a5c3cf1cbe9ad39e3f68ae88515f1a463932800c60a28b1c1dfb9f1",
+          "events_sha256": "dc6084072a3cd04c6982064c8552cfadb8ecd1f8e9d5563f25ccb92171f9685b"
+        },
+        {
+          "index": 1,
+          "current_source_sha256": "86eed6b078e3f328e1458048493159a44087daf6c015dd4c234e0a06493ccbf6",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.668
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "d8c09b8f4dde07787c1d50788d61bfcc13fbdd6bfc27e3e47a5a03ad575bad52",
+          "events_sha256": "e6e36e4e133a137f03325e2b933098fcba65643e500f2ee1c2ab95b4b8fd4424"
+        },
+        {
+          "index": 2,
+          "current_source_sha256": "86eed6b078e3f328e1458048493159a44087daf6c015dd4c234e0a06493ccbf6",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.669
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "00d88532fcc6f21cc0e033ef838c8b72f1054fab55ce8dc0bd72a33475c5ad16",
+          "events_sha256": "1bb06cb3bcd6224ae6294a064fcd9f6d01aa779d96f13f3ec6c5e4a54aa2d15c"
+        },
+        {
+          "index": 3,
+          "current_source_sha256": "86eed6b078e3f328e1458048493159a44087daf6c015dd4c234e0a06493ccbf6",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.669
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "83cd9e925644d7184d0c3df748515635e57437f4e17fe26bff03964d0895d35a",
+          "events_sha256": "d750332ba4abd709f7ea87ea95964a26c4676e26f93b34761ff98defa152eddd"
+        }
+      ],
+      "stop_reason": null
+    },
+    {
+      "task": "rms",
+      "condition": "native_file",
+      "replicate": 0,
+      "complete": true,
+      "attempts": [
+        {
+          "index": 0,
+          "current_source_sha256": "bc146840d014c525105660cf1db05980adc06c0c070e8f5f8f2a32a4698b66bf",
+          "source_sha256": "376532395584d5a026de05dc93ca99f882ff40eb522a724de83470fd26a921ac",
+          "process": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 48.877
+          },
+          "json_proposal_accepted": true,
+          "rejected": null,
+          "process_completed": true,
+          "provider_errors": [],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": true,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": true,
+          "steps": 3,
+          "tools": [
+            "read",
+            "pfdb_pfdb_list_runs",
+            "pfdb_pfdb_list_trials",
+            "pfdb_pfdb_version"
+          ],
+          "tool_errors": 0,
+          "backend_calls": 3,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "5436355c3aa918da4b72b52ee4846b227486053d5bad70cadaca2997559bd558",
+          "events_sha256": "e13a75a78ee85554c0d138297dd2515edae5e561c3c24f39ac4021b65a5a7748"
+        },
+        {
+          "index": 1,
+          "current_source_sha256": "376532395584d5a026de05dc93ca99f882ff40eb522a724de83470fd26a921ac",
+          "source_sha256": "289bc0baccf4847d8beefea12fd429af33ca1fd8a54a5dc116103532578e4ba7",
+          "process": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 43.284
+          },
+          "json_proposal_accepted": true,
+          "rejected": null,
+          "process_completed": true,
+          "provider_errors": [],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": true,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": true,
+          "steps": 3,
+          "tools": [
+            "read",
+            "pfdb_pfdb_list_trials",
+            "pfdb_pfdb_list_runs"
+          ],
+          "tool_errors": 0,
+          "backend_calls": 2,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "07ac40bc5b260f7969647b86fddbd285522beb068e7afee5dad2f3dc4832f608",
+          "events_sha256": "714209983bd21803e8c04f6c039c763219bdb8d2d69237c3e7a0e1029a92e5f2"
+        },
+        {
+          "index": 2,
+          "current_source_sha256": "289bc0baccf4847d8beefea12fd429af33ca1fd8a54a5dc116103532578e4ba7",
+          "source_sha256": "b685d0f0e09c75dcc8b4a766f8d63f3d11467d9139db031f314dd55ce6e02b88",
+          "process": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 128.591
+          },
+          "json_proposal_accepted": true,
+          "rejected": null,
+          "process_completed": true,
+          "provider_errors": [],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": true,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": true,
+          "steps": 3,
+          "tools": [
+            "read",
+            "pfdb_pfdb_list_runs",
+            "pfdb_pfdb_list_trials",
+            "pfdb_pfdb_list_trials"
+          ],
+          "tool_errors": 0,
+          "backend_calls": 3,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "a370f81bc1bdeb168b1fb976a8a1b89e4818b1dc716bd5d00ab767ff478f80d8",
+          "events_sha256": "c08324eb3983ddd857c6ab8be9b519e8ac7445398597b9b86d43858d61a42f16"
+        },
+        {
+          "index": 3,
+          "current_source_sha256": "b685d0f0e09c75dcc8b4a766f8d63f3d11467d9139db031f314dd55ce6e02b88",
+          "source_sha256": null,
+          "process": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 357.598
+          },
+          "json_proposal_accepted": false,
+          "rejected": "unauthorized file read",
+          "process_completed": true,
+          "provider_errors": [],
+          "posthoc_extractable_only": true,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": true,
+          "steps": 3,
+          "tools": [
+            "pfdb_pfdb_list_runs",
+            "read",
+            "read",
+            "read"
+          ],
+          "tool_errors": 2,
+          "backend_calls": 1,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "a8a7b48962529f9c2ee52d7bdafe023739eb696fef57b0aec37da55d1a83b8bc",
+          "events_sha256": "7ae5cf195769f0c627ee648804bcdb058cba5d105bed5f26ba8f3edbb4c34d0b"
+        }
+      ],
+      "stop_reason": null
+    },
+    {
+      "task": "rms",
+      "condition": "native_file",
+      "replicate": 1,
+      "complete": true,
+      "attempts": [
+        {
+          "index": 0,
+          "current_source_sha256": "bc146840d014c525105660cf1db05980adc06c0c070e8f5f8f2a32a4698b66bf",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.618
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "d741fb6e7d86cbbb18a70acc1c58762671874afa03c4f28015ddf6f7139b9e67",
+          "events_sha256": "ad050e4ea550e1ef248fa661e6f19eb505bbb104dfed241a1b530584087101fd"
+        },
+        {
+          "index": 1,
+          "current_source_sha256": "bc146840d014c525105660cf1db05980adc06c0c070e8f5f8f2a32a4698b66bf",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.719
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "23cfa38255c8b8ec7a991ec9212f7beb5b7101c8d37e009e1ad072de428ff473",
+          "events_sha256": "0f72f198b2cbe79274dd45ada85c1c0c011586bd529f4f2c1662296bdc9d3cdc"
+        },
+        {
+          "index": 2,
+          "current_source_sha256": "bc146840d014c525105660cf1db05980adc06c0c070e8f5f8f2a32a4698b66bf",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.618
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "0e7e7031e22573ffe1f8deb2345d47823a73cdad559f3ddda89c2f5d00fb0f51",
+          "events_sha256": "837241cebb932c9ab751a3242f4bb978006cbdbc880892e79a37bf3982547d78"
+        },
+        {
+          "index": 3,
+          "current_source_sha256": "bc146840d014c525105660cf1db05980adc06c0c070e8f5f8f2a32a4698b66bf",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.568
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "95b9b0a2171e74857ffb6b49bce994cd46408d93db1b208f2288d5f7e7fdfa72",
+          "events_sha256": "bfc6f0945de510f8ba3dda1c790d696ed302724ce13a55f4d1b5f706aa945268"
+        }
+      ],
+      "stop_reason": null
+    },
+    {
+      "task": "rms",
+      "condition": "pfdb_diagnostic",
+      "replicate": 0,
+      "complete": true,
+      "attempts": [
+        {
+          "index": 0,
+          "current_source_sha256": "bc146840d014c525105660cf1db05980adc06c0c070e8f5f8f2a32a4698b66bf",
+          "source_sha256": "e64e8fafa014bf4a52d6d96ce972b2906f3c160484e9e3608dfe7464bf449be7",
+          "process": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 48.396
+          },
+          "json_proposal_accepted": true,
+          "rejected": null,
+          "process_completed": true,
+          "provider_errors": [],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": true,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": true,
+          "steps": 3,
+          "tools": [
+            "pfdb_pfdb_list_trials",
+            "pfdb_pfdb_list_runs",
+            "pfdb_pfdb_list_trials"
+          ],
+          "tool_errors": 0,
+          "backend_calls": 3,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "14dac0eaca46679ae4897c4aa8deff092dc4731dbd662c72205b06cdfb8dd1e1",
+          "events_sha256": "61288ea1f11683a62a302e0b918c2143330618917106e034515f90b8aac95b59"
+        },
+        {
+          "index": 1,
+          "current_source_sha256": "e64e8fafa014bf4a52d6d96ce972b2906f3c160484e9e3608dfe7464bf449be7",
+          "source_sha256": "9d61bd4e66e944908880b0613fe852256c0f36d4df4c64e0198c01e8a278c8a1",
+          "process": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 172.288
+          },
+          "json_proposal_accepted": true,
+          "rejected": null,
+          "process_completed": true,
+          "provider_errors": [],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": true,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": true,
+          "steps": 3,
+          "tools": [
+            "pfdb_pfdb_list_trials",
+            "pfdb_pfdb_list_trials",
+            "pfdb_pfdb_list_runs"
+          ],
+          "tool_errors": 0,
+          "backend_calls": 3,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "733f9e2c4ae1575357f7261aec588bf14edf1469b61bf9c86b38fd3438082c2b",
+          "events_sha256": "5916e4e4b987fcca8a46fb03636c825e4cace2c5151f00a02b97f871c7692e20"
+        },
+        {
+          "index": 2,
+          "current_source_sha256": "9d61bd4e66e944908880b0613fe852256c0f36d4df4c64e0198c01e8a278c8a1",
+          "source_sha256": "fc0cccc90630e1c0dfc7092d10bf5de205043c11d44db713960eee1e52b72045",
+          "process": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 105.185
+          },
+          "json_proposal_accepted": true,
+          "rejected": null,
+          "process_completed": true,
+          "provider_errors": [],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": true,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": true,
+          "steps": 3,
+          "tools": [
+            "pfdb_pfdb_list_trials",
+            "pfdb_pfdb_list_runs",
+            "pfdb_pfdb_list_trials"
+          ],
+          "tool_errors": 0,
+          "backend_calls": 3,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "83a3c8360f59c81b18104dde19dff0b818a377e797873ab90b123cd12a35479e",
+          "events_sha256": "35910c9405ddd1c3a7ae69f5eaa259bfd2e5337f07da48ff28c56de4e6adc8e4"
+        },
+        {
+          "index": 3,
+          "current_source_sha256": "fc0cccc90630e1c0dfc7092d10bf5de205043c11d44db713960eee1e52b72045",
+          "source_sha256": "4e535258e599bdc45fa5bdb91c68857a1ca8fc133380b4174e83587813a151eb",
+          "process": {
+            "returncode": 0,
+            "timed_out": false,
+            "wall_s": 62.77
+          },
+          "json_proposal_accepted": true,
+          "rejected": null,
+          "process_completed": true,
+          "provider_errors": [],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": true,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": true,
+          "steps": 3,
+          "tools": [
+            "pfdb_pfdb_list_trials",
+            "pfdb_pfdb_list_runs",
+            "pfdb_pfdb_list_trials"
+          ],
+          "tool_errors": 0,
+          "backend_calls": 3,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "5b5bf05cb7425e75b30c3a11c73f26f96bea920eae06345b89646a41e6e98837",
+          "events_sha256": "0b63f4b0a02daa2a663c7af8f9129ba6b5d282bd34c7ce14ddc42f7565c7677c"
+        }
+      ],
+      "stop_reason": null
+    },
+    {
+      "task": "rms",
+      "condition": "pfdb_diagnostic",
+      "replicate": 1,
+      "complete": true,
+      "attempts": [
+        {
+          "index": 0,
+          "current_source_sha256": "bc146840d014c525105660cf1db05980adc06c0c070e8f5f8f2a32a4698b66bf",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.618
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "6fbe790b90ed9e65fd15272f7c00cdad048a12460f4b8b57cf145ea8efe4a823",
+          "events_sha256": "5a9ede73d7235bd7c19684a9fc438ba1600c6b9e18bbfa6dd4c8fcb1549a87b0"
+        },
+        {
+          "index": 1,
+          "current_source_sha256": "bc146840d014c525105660cf1db05980adc06c0c070e8f5f8f2a32a4698b66bf",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.569
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "407a597e90dc287e7691c7e34ae4efa1721cd2493aabca5b4944e30874c7fdad",
+          "events_sha256": "3404c80187c3a93b4911b305978ad5d885d8dc61dba1bd5f01918fe3a608121a"
+        },
+        {
+          "index": 2,
+          "current_source_sha256": "bc146840d014c525105660cf1db05980adc06c0c070e8f5f8f2a32a4698b66bf",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.718
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "8c0aca2a947cddd9260c7b25066763f2f1f867512fe97247b4ebb429a2244123",
+          "events_sha256": "23987234138264eb5123e87431626d4369348aef2fb5e238dd72c937d1633eee"
+        },
+        {
+          "index": 3,
+          "current_source_sha256": "bc146840d014c525105660cf1db05980adc06c0c070e8f5f8f2a32a4698b66bf",
+          "source_sha256": null,
+          "process": {
+            "returncode": 1,
+            "timed_out": false,
+            "wall_s": 0.869
+          },
+          "json_proposal_accepted": false,
+          "rejected": "model process did not complete normally",
+          "process_completed": false,
+          "provider_errors": [
+            "provider.no-route"
+          ],
+          "posthoc_extractable_only": false,
+          "stopped": false,
+          "candidate_evaluated": false,
+          "reported_numerical_passed": false,
+          "diagnostic_retrieved": false,
+          "steps": 0,
+          "tools": [],
+          "tool_errors": 0,
+          "backend_calls": 0,
+          "backend_errors": 0,
+          "budget_truncations": 0,
+          "search_median_us": null,
+          "build_id": null,
+          "record_sha256": "f4024d3da6c0bc58fda4619fcf2e7aee7580f44dd6e500eaf334265ca18cd831",
+          "events_sha256": "07326745a0f10af43a287a0be35745ebef90a3adc29f0a4257d7b2cd7e2c9690"
+        }
+      ],
+      "stop_reason": null
+    }
+  ],
+  "usage": {
+    "status": "ok",
+    "input": 1577385,
+    "output": 57906,
+    "reasoning": 284325,
+    "cost": 0.44458942199999996
+  },
+  "protocol_sha256": "8d6d9352a7f9513f5464ad3730c68f2d73c0c3f9cad818dfbfcef3fdc6ef3df5",
+  "result_sha256": "2dfbb92fcfa20968f942f63deaa5ea4a9cc082590109059c4c7762abfe5741ce",
+  "limitations": [
+    "Small fixed case sample; not population accuracy.",
+    "Diagnostic retrieval is post-treatment behavior, not a randomized subgroup.",
+    "Search timing is provisional; no automatic verdict or safe-candidate certification.",
+    "Provider internal request retries and immutable model revision are unobserved.",
+    "46 of64 sessions have provider errors; no diagnostic-interface efficacy estimate."
+  ],
+  "confirmations": [
+    {
+      "task": "hc",
+      "labels": [
+        "initial"
+      ],
+      "source_sha256": "baaaf86286a6af11fcb12d3de0c11d7e4298a1967b3bda03efd74e90090402e9",
+      "independent_medians_us": [
+        22.1,
+        22.2,
+        21.6
+      ],
+      "median_of_process_medians_us": 22.1,
+      "heldout_passed": true,
+      "tokens13_passed": true,
+      "source_golden_replay": true,
+      "rounds": 100,
+      "warmup": 5,
+      "platform": "a2a3",
+      "logical_device": 0
+    },
+    {
+      "task": "hc",
+      "labels": [
+        "manual"
+      ],
+      "source_sha256": "f7577bf1ecba646b0fb51d437304a8d938a07e523bd17bcd07662f75c9c3d769",
+      "independent_medians_us": [
+        15.7,
+        15.4,
+        15.6
+      ],
+      "median_of_process_medians_us": 15.6,
+      "heldout_passed": true,
+      "tokens13_passed": false,
+      "source_golden_replay": true,
+      "rounds": 100,
+      "warmup": 5,
+      "platform": "a2a3",
+      "logical_device": 0
+    },
+    {
+      "task": "hc",
+      "labels": [
+        "native_file"
+      ],
+      "source_sha256": "ac8bcdab2c78fb97090e0f6030a5c3b0f67265b3a4890a52775226533ea695ec",
+      "independent_medians_us": [
+        18.75,
+        18.7,
+        19.0
+      ],
+      "median_of_process_medians_us": 18.75,
+      "heldout_passed": true,
+      "tokens13_passed": true,
+      "source_golden_replay": true,
+      "rounds": 100,
+      "warmup": 5,
+      "platform": "a2a3",
+      "logical_device": 0
+    },
+    {
+      "task": "hc",
+      "labels": [
+        "pfdb_diagnostic"
+      ],
+      "source_sha256": "20fb8350ff2ee26a9f9470820817ba4b4ceee5c780718e9a29c7107d6f0770fc",
+      "independent_medians_us": [
+        18.6,
+        18.4,
+        18.5
+      ],
+      "median_of_process_medians_us": 18.5,
+      "heldout_passed": true,
+      "tokens13_passed": true,
+      "source_golden_replay": true,
+      "rounds": 100,
+      "warmup": 5,
+      "platform": "a2a3",
+      "logical_device": 0
+    }
+  ],
+  "confirmation_sha256": "865131308904dc104c670893585c5b3760d0c3c7338eb1b97ccded000c087310"
+}

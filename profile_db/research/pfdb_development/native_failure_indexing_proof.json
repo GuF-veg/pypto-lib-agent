@@ -1,0 +1,13 @@
+{
+  "scope": "CPU replay of generated source's indexing expression; no NPU rerun or candidate repair",
+  "mismatches": 60928,
+  "mismatch_count_by_head": [
+    0,
+    30455,
+    0,
+    30473
+  ],
+  "recorded_npu_mismatches": 60928,
+  "reported_first_values": 20,
+  "max_cpu_vs_recorded_actual_difference": 0.0
+}

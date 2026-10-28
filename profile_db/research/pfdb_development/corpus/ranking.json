@@ -1,0 +1,201 @@
+{
+  "kind": "saved_pfdb_query_facts",
+  "queries": [
+    {
+      "id": "r1",
+      "query": "overview",
+      "params": {
+        "run_id": 1
+      },
+      "facts": [
+        {
+          "id": "r1.0",
+          "rec": "RUN",
+          "run_id": 1,
+          "program": "compressor_ratio4",
+          "platform": "a2a3",
+          "level": 4,
+          "clock_freq_hz": 50000000,
+          "num_cores": 60,
+          "rank": "single",
+          "git_commit": "d6cbf967bcf0d4b4bc412467cf28c944e26b1362",
+          "git_dirty": false,
+          "retained": true,
+          "evidence": "measured"
+        },
+        {
+          "id": "r1.1",
+          "rec": "METRIC",
+          "run_id": 1,
+          "makespan_us": 213.12,
+          "cpm_us": 200.46,
+          "raw_span_us": 209.92,
+          "bench_min_us": 202.4,
+          "bench_median_us": 206.5,
+          "bench_mean_us": 207.051,
+          "bench_max_us": 215.0,
+          "bench_rounds": 100,
+          "tasks": 4,
+          "task_rows": 74,
+          "edges": 13,
+          "artifacts": 5,
+          "time_bands": 84,
+          "idle_gaps": 2,
+          "evidence": "measured"
+        },
+        {
+          "id": "r1.2",
+          "rec": "RESOURCE",
+          "run_id": 1,
+          "engine": "aic",
+          "cores": 20,
+          "evidence": "measured"
+        },
+        {
+          "id": "r1.3",
+          "rec": "RESOURCE",
+          "run_id": 1,
+          "engine": "aiv",
+          "cores": 40,
+          "evidence": "measured"
+        }
+      ]
+    },
+    {
+      "id": "r2",
+      "query": "overview",
+      "params": {
+        "run_id": 2
+      },
+      "facts": [
+        {
+          "id": "r2.0",
+          "rec": "RUN",
+          "run_id": 2,
+          "program": "compressor_ratio4",
+          "platform": "a2a3",
+          "level": 4,
+          "clock_freq_hz": 50000000,
+          "num_cores": 60,
+          "rank": "single",
+          "git_commit": "d6cbf967bcf0d4b4bc412467cf28c944e26b1362",
+          "git_dirty": false,
+          "retained": true,
+          "evidence": "measured"
+        },
+        {
+          "id": "r2.1",
+          "rec": "METRIC",
+          "run_id": 2,
+          "makespan_us": 252.78,
+          "cpm_us": 232.88,
+          "raw_span_us": 248.88,
+          "bench_min_us": 230.3,
+          "bench_median_us": 239.3,
+          "bench_mean_us": 239.216,
+          "bench_max_us": 248.7,
+          "bench_rounds": 100,
+          "tasks": 9,
+          "task_rows": 220,
+          "edges": 29,
+          "artifacts": 5,
+          "time_bands": 100,
+          "idle_gaps": 27,
+          "evidence": "measured"
+        },
+        {
+          "id": "r2.2",
+          "rec": "RESOURCE",
+          "run_id": 2,
+          "engine": "aic",
+          "cores": 20,
+          "evidence": "measured"
+        },
+        {
+          "id": "r2.3",
+          "rec": "RESOURCE",
+          "run_id": 2,
+          "engine": "aiv",
+          "cores": 40,
+          "evidence": "measured"
+        }
+      ]
+    },
+    {
+      "id": "p1",
+      "query": "task",
+      "params": {
+        "run_id": 1,
+        "task_id": "4294967297"
+      },
+      "facts": [
+        {
+          "id": "p1.0",
+          "rec": "TASK",
+          "run_id": 1,
+          "task_id": "4294967297",
+          "name": "prefill_c4_proj",
+          "family": "prefill_c4_proj",
+          "engine": "aic",
+          "scope": "auto",
+          "early_dispatch_flag": false,
+          "kernel_ids": [
+            1,
+            -1,
+            -1
+          ],
+          "block_num": 32,
+          "num_rows": 32,
+          "busy_us": 117.16,
+          "wall_us": 120.92,
+          "min_dispatch_us": 68.24,
+          "min_receive_us": 68.6,
+          "min_start_us": 70.82,
+          "max_end_us": 187.98,
+          "max_finish_us": 189.16,
+          "on_cpm_observed": true,
+          "on_cpm_static": true,
+          "evidence": "measured"
+        }
+      ]
+    },
+    {
+      "id": "p2",
+      "query": "task",
+      "params": {
+        "run_id": 2,
+        "task_id": "4294967297"
+      },
+      "facts": [
+        {
+          "id": "p2.0",
+          "rec": "TASK",
+          "run_id": 2,
+          "task_id": "4294967297",
+          "name": "prefill_c4_kv_score_proj_full",
+          "family": "prefill_c4_kv_score_proj_full",
+          "engine": "aic",
+          "scope": "auto",
+          "early_dispatch_flag": false,
+          "kernel_ids": [
+            2,
+            -1,
+            -1
+          ],
+          "block_num": 64,
+          "num_rows": 64,
+          "busy_us": 99.06,
+          "wall_us": 102.86,
+          "min_dispatch_us": 77.38,
+          "min_receive_us": 77.74,
+          "min_start_us": 80.02,
+          "max_end_us": 179.08,
+          "max_finish_us": 180.24,
+          "on_cpm_observed": true,
+          "on_cpm_static": true,
+          "evidence": "measured"
+        }
+      ]
+    }
+  ]
+}

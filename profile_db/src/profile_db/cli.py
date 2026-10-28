@@ -93,11 +93,14 @@ def _parser() -> argparse.ArgumentParser:
 
     for command in ("attach", "refresh"):
         operation = sub.add_parser(command, help="attach or reanalyze existing artifacts")
-        operation.add_argument("--run-id", type=int, required=True)
         if command == "attach":
+            target = operation.add_mutually_exclusive_group(required=True)
+            target.add_argument("--run-id", type=int)
+            target.add_argument("--trial-id", type=int, help="import a candidate evidence manifest")
             operation.add_argument("source")
             operation.add_argument("--copy", action="store_true")
         else:
+            operation.add_argument("--run-id", type=int, required=True)
             operation.add_argument("--source")
         _add_format_args(operation)
 
@@ -224,6 +227,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     trial_list = trial_sub.add_parser("list", help="list trials")
     trial_list.add_argument("--active", action="store_true", dest="active_only")
+    trial_list.add_argument("--trial-id", type=int, help="show one trial's candidate identity, scope and artifact availability")
+    trial_list.add_argument("--source-sha256")
+    trial_list.add_argument("--scope-sha256")
+    trial_list.add_argument("--view", choices=["summary", "diagnostics"], default="summary",
+                            help="diagnostics reads registered text for an explicit trial and expected source SHA")
     _add_format_args(trial_list)
     return parser
 
@@ -728,7 +736,8 @@ def _run_trial(args: argparse.Namespace) -> int:
         print(f"pfdb: error: {exc}", file=sys.stderr)
         return 1
     try:
-        _emit(db.list_trials(active_only=args.active_only), args)
+        _emit(db.list_trials(active_only=args.active_only, trial_id=args.trial_id, view=args.view,
+                             source_sha256=args.source_sha256, scope_sha256=args.scope_sha256), args)
         return 0
     except PfdbError as exc:
         print(f"pfdb: error: {exc}", file=sys.stderr)
@@ -756,7 +765,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command in ("attach", "refresh"):
         try:
             with ProfileDB() as db:
-                report = db.attach(args.source, run_id=args.run_id, copy=args.copy) if args.command == "attach" else db.refresh(run_id=args.run_id, source=args.source)
+                report = db.attach(args.source, run_id=args.run_id, trial_id=args.trial_id, copy=args.copy) if args.command == "attach" else db.refresh(run_id=args.run_id, source=args.source)
             print(json.dumps(report, sort_keys=True))
             return 0
         except PfdbError as exc:

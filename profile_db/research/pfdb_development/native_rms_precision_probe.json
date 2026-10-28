@@ -1,0 +1,60 @@
+{
+  "scope": "One Go-authored precision-only AST-guarded ablation; separate from diagnostic-entry study",
+  "preflight_failure": {
+    "id": "rms-precision-probe-v1",
+    "model_calls": 0,
+    "reason": "overstrict permission-tail assertion; browser deny may follow wildcard deny; original log retained"
+  },
+  "default_precision": {
+    "source_sha256": "6cff745ba3d293adec47a64b5b8020a3ecc8122303193be643fcf1842ef31e6c",
+    "golden_tree_sha256": "946c1f6d5d8baeb8e89a3a999bba150c9af81f4a61ee20ac748f630e88779d54",
+    "medians_us": [
+      15.2,
+      14.6,
+      15.3
+    ],
+    "median_of_medians_us": 15.2,
+    "heldout_passed": true,
+    "dynamic_T13_passed": false
+  },
+  "high_precision": {
+    "source_sha256": "42f084cacbe9dac05a99e8f1d5640a7951cfafcb0ec4ff2960330247c5627657",
+    "golden_tree_sha256": "946c1f6d5d8baeb8e89a3a999bba150c9af81f4a61ee20ac748f630e88779d54",
+    "medians_us": [
+      15.6,
+      15.55,
+      15.4
+    ],
+    "median_of_medians_us": 15.55,
+    "heldout_passed": true,
+    "dynamic_T13_passed": false
+  },
+  "archived_manual_control": {
+    "source_sha256": "aae3285315de1dea59f263bf2c7658a4ad57bca6706395a28669a38d67a70566",
+    "golden_tree_sha256": "946c1f6d5d8baeb8e89a3a999bba150c9af81f4a61ee20ac748f630e88779d54",
+    "medians_us": [
+      20.65,
+      20.9,
+      20.6
+    ],
+    "median_of_medians_us": 20.65,
+    "heldout_passed": true,
+    "dynamic_T13_passed": false
+  },
+  "protocol_sha256": "e3986019d0cf7ea6443dddecbe2819a95aa7dc5fd80663d400f1cf4e98eee451",
+  "runner_sha256": "6caaf04369b81478d0467013f16e1b5c2ab19a8c4efb5d59f76cd1e44fe5d8b2",
+  "result_sha256": "0debc9bf12cd16c6b1d4c154bbce3f101ca86f69d686cc37fef2a34a73f79ab4",
+  "confirmation_sha256": "22d16334a1463c2c359275c14746d4a6e86cac407fea300f7f9d82c77f0fc60c",
+  "usage": {
+    "status": "ok",
+    "input": 3122,
+    "output": 1555,
+    "reasoning": 886,
+    "cost": 0.00230695
+  },
+  "limitations": [
+    "Archived manual control from an earlier batch; no paired randomized interleaving or immutable model revision.",
+    "T13 outside all RMS retained implementations' declared token-tile range; no universal dynamic shape claim.",
+    "Only rsqrt precision was matched. Wider chunks, unrolling and other implementation differences were not causally separated."
+  ]
+}

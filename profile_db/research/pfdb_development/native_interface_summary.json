@@ -1,0 +1,216 @@
+{
+  "package": "0.7.0",
+  "db_schema": 9,
+  "mcp_schema": "6",
+  "tools": 41,
+  "model": "opencode-go/deepseek-v4.1-flash",
+  "immutable_model_revision": "unavailable",
+  "scope": "native read-only factual retrieval; not operator generation or causal optimization efficacy",
+  "setup_model_sessions": 21,
+  "formal_model_sessions": 6,
+  "all_model_sessions": 27,
+  "setup_failures_preserved": [
+    "native-interface-v1/smoke",
+    "native-interface-v1/smoke-permissions",
+    "native-queries-v1",
+    "native-queries-v2",
+    "native-queries-v3"
+  ],
+  "preflight_stops_without_model_calls": [
+    "native-queries-v4",
+    "native-queries-v5"
+  ],
+  "registration_sha256": "6f32ca91617489083ce2d6c95b937d6b7c3191e008f5c736667507b2eb4eb2cb",
+  "database_unchanged": true,
+  "results": [
+    {
+      "task": "diagnostic",
+      "replicate": 0,
+      "strict_passed": true,
+      "calls": 3,
+      "response_bytes": 4112,
+      "wall_s": 12.384,
+      "executed_backend_calls": 3,
+      "response_sha256": "a8371a2d60219850d136d1719dc1867b5b827d6a7155177eaf15747f8ecece01",
+      "result_sha256": "a0773f9941016eb2926017088ce7142b9fd8007147aa98f373b042c52a06b2c9"
+    },
+    {
+      "task": "execution",
+      "replicate": 0,
+      "strict_passed": false,
+      "calls": 2,
+      "response_bytes": 670,
+      "wall_s": 10.331,
+      "executed_backend_calls": 1,
+      "response_sha256": "ff07cb013b8f3a45ece17c22281578d14ddbd789f62f0aa949b2e3a30e45fe68",
+      "result_sha256": "44a6937210b0a9a95a01732124959815080dc6b9906177be7e4a0f898da727b8"
+    },
+    {
+      "task": "wrong_source",
+      "replicate": 0,
+      "strict_passed": true,
+      "calls": 1,
+      "response_bytes": 445,
+      "wall_s": 5.174,
+      "executed_backend_calls": 1,
+      "response_sha256": "54d25ce33f64683d60394244d42196d86b1e2d33f754c3b9bcc3b22d57062bec",
+      "result_sha256": "9a335e2dfab5f8b00b2b162530fefcbeb90708592f15a19684e7efd20210ee37"
+    },
+    {
+      "task": "diagnostic",
+      "replicate": 1,
+      "strict_passed": true,
+      "calls": 1,
+      "response_bytes": 1339,
+      "wall_s": 10.532,
+      "executed_backend_calls": 1,
+      "response_sha256": "629b44d279ee2cd6cd6cbac4d1caddbba0112acb438e11146cd8a042a4c3d742",
+      "result_sha256": "afc261f2bf63fc5703d938fcde6b0e760992bafaacb7883e0bd8c60a629ec931"
+    },
+    {
+      "task": "execution",
+      "replicate": 1,
+      "strict_passed": false,
+      "calls": 2,
+      "response_bytes": 1194,
+      "wall_s": 8.98,
+      "executed_backend_calls": 2,
+      "response_sha256": "f59479372a2a9d4ab9922d9949239279a9843de358a4b357909b72ef0ec4a6b7",
+      "result_sha256": "2711c3f1710b1115852409caf774bc1a57718a50f38db8e580bc58c3feacb49f"
+    },
+    {
+      "task": "wrong_source",
+      "replicate": 1,
+      "strict_passed": true,
+      "calls": 2,
+      "response_bytes": 3197,
+      "wall_s": 11.233,
+      "executed_backend_calls": 2,
+      "response_sha256": "448b0fa279564fd078ff7ad7f065ade72bcdb6d5c40b6ed87cfac38b4ac2baa6",
+      "result_sha256": "c0f512e64e2aa30bbbc2f17faca6ba16e52723043823a5d23d322489f25c22fd"
+    }
+  ],
+  "strict_passed": 4,
+  "posthoc_public_response_audit": {
+    "reviewer": "Codex primary agent; public outputs only; not independent review",
+    "execution_expected": {
+      "physical_rows": 6,
+      "distinct_cores": 6,
+      "max_rows_per_core": 1,
+      "declared_blocks_sum": 6,
+      "topology_aiv_cores": 40
+    },
+    "execution_0": {
+      "target_counts_correct": true,
+      "extra_capacity_claim": 64,
+      "extra_capacity_claim_supported": false,
+      "tool_name_error": true
+    },
+    "execution_1": {
+      "target_counts_correct": true,
+      "topology_capacity_correct": true,
+      "nested_answer_schema_penalty": true,
+      "prompt_did_not_explicitly_require_flat_keys": true
+    },
+    "source_diagnostic_reads_correct": 2,
+    "wrong_source_diagnostic_refusals": 2
+  },
+  "usage_all": {
+    "sessions": 27,
+    "available": 27,
+    "cost": 0.039185663999999995,
+    "cost_unit": "API native; currency and subscription billing unknown",
+    "tokens": {
+      "input": 133522,
+      "output": 5426,
+      "reasoning": 26978
+    }
+  },
+  "usage_formal": {
+    "sessions": 6,
+    "available": 6,
+    "cost": 0.01821999,
+    "cost_unit": "API native; currency and subscription billing unknown",
+    "tokens": {
+      "input": 99849,
+      "output": 2973,
+      "reasoning": 2057
+    }
+  },
+  "handoff_replay": {
+    "scope": "offline replay; no new validation or device execution",
+    "database_unchanged": true,
+    "results": [
+      {
+        "task": "rms",
+        "state": "refused_legacy_report_without_source_sha",
+        "reason": "acquisition source hash disagrees with snapshot"
+      },
+      {
+        "task": "lookup",
+        "trial_id": 1,
+        "run_id": 1,
+        "source_sha256": "a55e57699bedfdc4c3c854b52211653220413f16b4f260e50707b4257fe3b21b",
+        "state": "available",
+        "validation_reported_status": "passed",
+        "build_state": "unavailable",
+        "availability": {
+          "profile": "available",
+          "perf_hints": "unknown_request",
+          "memory": "unknown_request",
+          "ir": "unknown_request",
+          "diagnostic": "available",
+          "bench": "not_requested",
+          "pmu": "not_requested"
+        },
+        "wrong_identity_text_refused": true
+      },
+      {
+        "task": "conv",
+        "trial_id": 2,
+        "run_id": null,
+        "source_sha256": "57cc7f3ff95716a3077b1b5aca1510dae8c8d76e4216282ac14dbe5939d4b22c",
+        "state": "available",
+        "validation_reported_status": "passed",
+        "build_state": "unavailable",
+        "availability": {
+          "profile": "not_requested",
+          "perf_hints": "unknown_request",
+          "memory": "unknown_request",
+          "ir": "unknown_request",
+          "diagnostic": "available",
+          "bench": "available",
+          "pmu": "not_requested"
+        },
+        "wrong_identity_text_refused": true
+      }
+    ]
+  },
+  "implementation_validation": {
+    "full_suite": {
+      "passed": 463,
+      "skipped": 11,
+      "log_sha256": "986a666f0e8b8b08cb660d9902a2a8f3663f9ca2180691073eaa66cc04eddf89"
+    },
+    "final_targeted_suite": {
+      "passed": 55,
+      "log_sha256": "6273dbc7b66e52278809c8b11a5af417802b8569022bff1582c8211c59333516"
+    },
+    "invariants": {
+      "files_checked": 293,
+      "changed": [],
+      "upstream": {
+        "pypto": {
+          "head": "ee49fceaa3290cf90257a22eab867c04245b499d",
+          "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "unchanged": true
+        },
+        "runtime": {
+          "head": "6e383fc57c12a8bd4dce045289b8b4f5d55a15f1",
+          "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "unchanged": true
+        }
+      }
+    }
+  }
+}

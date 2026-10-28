@@ -106,8 +106,8 @@ def load_deps(deps_path: Path, name_map: dict[str, str]) -> DepGraph:
     edges = data.get("edges")
     if not isinstance(tasks, list) or not tasks:
         raise IngestError(f"{deps_path}: 'tasks' must be a non-empty list")
-    if not isinstance(edges, list) or not edges:
-        raise IngestError(f"{deps_path}: 'edges' must be a non-empty list")
+    if not isinstance(edges, list):
+        raise IngestError(f"{deps_path}: 'edges' must be a list (possibly empty)")
 
     graph = DepGraph()
     for index, raw in enumerate(tasks):

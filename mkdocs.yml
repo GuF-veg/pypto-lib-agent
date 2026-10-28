@@ -129,7 +129,15 @@ nav:
       - Profiling commands and evidence: debug-and-tune/profiling-options.md
       - Agent profile feedback: debug-and-tune/agent-profile-feedback.md
       - Profile database (pfdb): debug-and-tune/profile-db.md
+      - pfdb candidate evidence: debug-and-tune/pfdb-candidate-evidence.md
       - pfdb runtime integration: debug-and-tune/pfdb-runtime-integration.md
+      - pfdb agent feedback research: debug-and-tune/pfdb-agent-feedback-research.md
+      - pfdb development plan: debug-and-tune/pfdb-development-plan.md
+      - pfdb development results: debug-and-tune/pfdb-development-results.md
+      - pfdb follow-up results: debug-and-tune/pfdb-followup-results.md
+      - pfdb new operator study: debug-and-tune/pfdb-new-operator-study.md
+      - pfdb native interface results: debug-and-tune/pfdb-native-interface-results.md
+      - pfdb native operator feasibility: debug-and-tune/pfdb-native-operator-study.md
       - Profile database dogfood feedback: debug-and-tune/profile-db-dogfood-feedback.md
       - Decode CSA pfdb tuning plan: debug-and-tune/decode-csa-pfdb-tuning-plan.md
       - Decode CSA optimization report: debug-and-tune/decode-csa-optimization-report.md

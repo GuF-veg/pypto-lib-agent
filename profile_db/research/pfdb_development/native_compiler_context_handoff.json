@@ -1,0 +1,12 @@
+{
+  "scope": "Existing pfdb diagnostics can deliver selected existing compiler text; no new endpoint or automatic excerpt selection",
+  "source_sha256": "bf1efd3d9ab61d892c07ed9718abac51e49699ba2622d496cd63836db548c833",
+  "original_manifest_sha256": "28971036200b604a8327e293fa17165ce6c407ccea7c3bac8d01be03370b8b7b",
+  "original_unchanged": true,
+  "compiler_artifact_sha256": "0be81ac48b01976eb8daea741d1fe1936958aef3b15348f802d0acff361d76a1",
+  "derived_manifest_sha256": "14435490d5f2651a32fad86eb4219be3a45f7776f3f026c1cfd5dd138f4a29f8",
+  "readable_text_bytes": 16384,
+  "contains_hidden_cast_chain": true,
+  "wrong_source_text_refused": true,
+  "build_identity_certified": false
+}

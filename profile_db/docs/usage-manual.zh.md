@@ -1,6 +1,8 @@
 # pfdb（profile_db）使用手册
 
-> 版本基准：**profile-db 0.4.0**（数据库 schema v8 / MCP tool schema v4 / 渲染器 `profile_db.render/3`）。
+> 版本基准：**profile-db 0.8.1**（数据库 schema v9 / MCP tool schema v7 / 渲染器 `profile_db.render/3`）。
+> 0.8.1 在已有入口增加 capture 时间范围与关键路径度量定义，空 counter 明确 unavailable，未声明验证结果默认 unknown；显式 not_run 和历史记录保持可读。0.8.0 区分只读/可写工具目录，并标明 RESOURCE 的 capture 拓扑范围；0.7.0 增补有候选源码校验的诊断文本读取和 overview 执行规模计数；0.6.0 增补[候选身份、范围与缺失状态](../../docs/debug-and-tune/pfdb-candidate-evidence.md)，仍只分析已有工件；当前命令及迁移边界以
+> [公开手册](../../docs/debug-and-tune/profile-db.md)和[实施记录](../../docs/debug-and-tune/pfdb-development-results.md)为准。
 
 > 0.4.0 的复用清单、口径、兼容条件和升级流程以
 > [runtime 集成维护文档](../../docs/debug-and-tune/pfdb-runtime-integration.md)
@@ -393,6 +395,8 @@ RUN bench_mean_us=3685.488 device_id=0 edges=242 level=4 makespan_us=3984.04 pla
 
 #### `overview`
 
+除原有指标外，还返回声明的 block 数量和缺失数量，以及各 engine 的物理记录行数、实际出现的核数、每核最大行数。RESOURCE 的 `scope="capture_declared_topology"` 表示 capture 元数据声明的拓扑计数；EXECUTION 才是实际记录中出现的核心计数。它们不独立认证整片芯片的硬件上限。这些是整次 capture 的计数，不能解释为利用率、执行波数或逻辑工作量。没有物理记录时返回 unavailable。
+
 参数：`--run-id`。回答"这个 run 的顶线指标、拓扑与图规模"。
 
 ```text
@@ -753,7 +757,7 @@ $ pfdb prune --keep 1
 pruned 1 run(s) [2]; kept [1, 3]
 ```
 
-被删的 run 永远可以从 `build_output/` 重新 ingest 重建（会得到新的 run_id）。
+只要原工件仍存在，被删的 run 可以重新 ingest。仍被 trial/baseline 引用的旧 run ID 不会分配给新 capture；这不承诺无任何保留引用的 ID 全局单调。
 
 ### 8.2 `pfdb note`
 
@@ -777,6 +781,8 @@ pfdb: error: runs 1 and 2 are not comparable: program differs: 'A' vs 'B'
 ```
 
 ⚠️ program 默认取自 `_jit_<case>_<hash>` 构建目录名，**同一段代码的两次采集 hash 不同**——要对比就在 ingest 时统一 `--program`（§4.1）。
+
+`compatible` 仅指 capture 配置和 profile analysis 口径；输出明确 `workload_validation_checked=false`。相同 program 不证明输入、合法域或数值验证一致。此处 bootstrap 的目标为 mean，不能确认 median 优化。
 
 输出（真实示例）：
 
@@ -824,7 +830,9 @@ pfdb trial list [--active]
 pfdb trial attach-bench 2 --bench-log a.log --bench-log b.log --bench-log c.log
 ```
 
-`trial list` 里 `bench_mean_us` 优先取 trial 自附的 bench，其次取绑定 run 的。
+读取已注册诊断文本使用 `pfdb trial list --trial-id 2 --view diagnostics --source-sha256 <当前候选SHA> --budget 32768`。必须显式给出预期源码 SHA；源码、构建或诊断文件变更时不返回正文。每文件最多返回末尾 16 KiB，保留 hash、截断及 UTF-8 替换解码信息。默认 summary 不读取正文。详细绑定及信任边界见[候选证据规范](../../docs/debug-and-tune/pfdb-candidate-evidence.md)。
+
+`trial list` 返回 min/median/mean/max/rounds 的一致摘要：全部取 trial 自附数据；仅当整份摘要为空时才回退到绑定 run。prune 在删除 run 前保留该小摘要，不保留完整 trace，也不把 caller verdict 当成 validation。已绑定 trial 不能改绑另一个 run；新实验应注册带 `--parent` 的 child trial。
 
 ---
 
@@ -840,12 +848,14 @@ pfdb serve --mcp --path /abs/path.duckdb
 - 默认只读；`--writable` 打开写连接并**占用唯一的写者席位**（期间其他 ingest 会 LockError）；
 - 错误以 `pfdb: error: …` 文本返回，不抛栈。
 
-### 9.1 工具清单（38 个）
+### 9.1 工具清单（只读 33 个，可写 41 个）
 
-- **26 个查询工具**：由查询注册表自动生成，命名 `pfdb.<query>`（`runs_list` 改名 `pfdb.list_runs`），`inputSchema` 与 CLI 参数同源（pydantic），工具描述即该查询的 owner question；
-- **10 个生命周期工具**：`pfdb.compare`、`pfdb.baseline_diff/list/add`、`pfdb.register_trial`、`pfdb.bind_trial`、`pfdb.attach_bench`、`pfdb.set_verdict`、`pfdb.list_trials`、`pfdb.note`；
-- `pfdb.render`：返回 IMAGE 事实 + `ImageContent`（PNG base64，多模态模型可直接读图）；
-- `pfdb.version`：返回 tool schema 版本（当前 3）。
+- **27 个查询工具**：由查询注册表自动生成，包含 `host`，命名 `pfdb.<query>`（`runs_list` 改名 `pfdb.list_runs`），`inputSchema` 与 CLI 参数同源（pydantic），工具描述即该查询的 owner question；
+- **12 个生命周期工具**（默认只读模式暴露其中 4 个；`--writable` 才暴露其余 8 个）：`pfdb.compare`、`pfdb.baseline_diff/list/add`、`pfdb.register_trial`、`pfdb.bind_trial`、`pfdb.attach_bench`、`pfdb.set_verdict`、`pfdb.list_trials`、`pfdb.note`、`pfdb.attach`、`pfdb.refresh`；
+- `pfdb.render`：PNG 返回 IMAGE 事实 + `ImageContent`；HTML/Perfetto 导出返回文件事实，支持组合见 canonical 手册；
+- `pfdb.version`：返回 tool schema 版本（当前 7）。
+
+查询及只读 compare/baseline diff/list/trial list 工具支持正整数 `budget_bytes`。截断后提高预算重新读取，并用新响应替换旧响应；这不是可跨 refresh 拼接的游标。写操作没有预算重试入口。
 
 ### 9.2 端到端验证客户端
 
@@ -855,10 +865,10 @@ pfdb serve --mcp --path /abs/path.duckdb
 PFDB_PATH=$PWD/.pfdb/profile.duckdb python profile_db/examples/mock_agent.py
 ```
 
-输出节选（38 个工具被发现，每步打印服务端返回的 facts 文本）：
+输出格式节选（默认只读目录发现 33 个工具，每步打印服务端返回的 facts 文本）：
 
 ```text
-# 38 tools: pfdb.list_runs, pfdb.overview, pfdb.inventory, …, pfdb.version
+# 33 tools: pfdb.list_runs, pfdb.overview, pfdb.inventory, …, pfdb.version
 == list_runs ==
 RUN bench_mean_us=3685.488 … program="decode_csa_tp1" … run_id=1 tasks=72 evidence=measured
 …

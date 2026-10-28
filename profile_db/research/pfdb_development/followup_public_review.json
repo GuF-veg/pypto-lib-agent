@@ -1,0 +1,912 @@
+{
+  "rubric": "followup_review_rubric.md",
+  "rubric_sha256": "2a08842708c0ebf6e92b80cf0fa0d62224fffef48c3edb659fb9692787807953",
+  "review_scope": "Per-item evidence-support judgments using only each own question, supplied packet, and public response. Labels, scores, and mappings withheld; evidence content cannot be fully blinded. All 54 individual records completed before aggregation; no treatment comparisons.",
+  "input_batches": [
+    {
+      "path": "build_output/pfdb_development/followup-v1/blind/public-batch1.json",
+      "sha256": "bd7d252347a5903b37af63cbb6a398ec5cd4c071101037b2d2836fb144dbd1f5"
+    },
+    {
+      "path": "build_output/pfdb_development/followup-v1/blind/public-batch2.json",
+      "sha256": "a8f372180a9d298dd78db1a82f4ab0580e6180542ab4d595046527ade7b857a9"
+    }
+  ],
+  "items": [
+    {
+      "item_id": "item01",
+      "packet_id": "packet02",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q1.0-q1.5 support the three fingerprint comparisons; q2.0-q2.1 and q3.0-q3.3 support the limited metadata/source/IR conclusion.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "Requesting compiler provenance linking source, IR, and artifacts targets the missing generating-build association.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly declines compiler attestation and timing inferences.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item07",
+      "packet_id": "packet03",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q1.1 identifies Right; q1.2 maps Right to L0B. q1.3 supplies no generated identity placement or cross-pool relief measurement.",
+      "experiment_quality": "partial",
+      "experiment_evidence": "The request targets placement and capacity/synchronization effects, but does not specify a with/without comparison or an observable safety criterion.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Generated identity placement is unavailable; warning relief and removal safety remain unproven.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item11",
+      "packet_id": "packet15",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q1.1-q1.2 support Right/L0B; q2.0 shows TMULS on Vec tiles, supporting UB placement. No relief or safety outcome is supplied.",
+      "experiment_quality": "partial",
+      "experiment_evidence": "L0B occupancy and flag timing after removal are relevant, but the proposal omits a baseline comparison and a criterion connecting timing to preserved synchronization.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Separates measured Vec placement from unmeasured L0B relief and synchronization safety.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item13",
+      "packet_id": "packet04",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q1.2 is a contiguous initializer; q1.3 uses position-minus-first as an index bound; q1.4 is one fixture PASS and q1.5 explicitly withholds policy and new gap validation.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "A separate skipped-position diagnostic plus owner input-domain policy and device validation targets the distinct premise, legal-domain, and implementation obligations.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly leaves gap legality unresolved and new gap validation unavailable.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item18",
+      "packet_id": "packet17",
+      "response_status": "present",
+      "unsupported_claim_count": 1,
+      "issue_categories": [
+        "unsupported_fact"
+      ],
+      "unsupported_claims": [
+        {
+          "claim": "arbitrary_consistent_paging_breaks_affine_equivalence: true",
+          "categories": [
+            "unsupported_fact"
+          ],
+          "evidence": "q2.0 states that under p[j]=p[0]+j the physical interval is exactly the position window and retained guards filter the same members. Arbitrary consistent paging does not change that equivalence; the response asserts the opposite."
+        }
+      ],
+      "support_evidence": "Affine sufficiency and the limited saved PASS follow from q1.1-q1.5 and q2.0; the paging claim does not.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "A differential non-affine scan with guards retained, device validation, and a general policy request targets missing general-domain evidence. It is proposed work, not a claimed result.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly declines general deployment authority from the saved PASS.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item23",
+      "packet_id": "packet18",
+      "response_status": "present",
+      "unsupported_claim_count": 1,
+      "issue_categories": [
+        "unsupported_fact"
+      ],
+      "unsupported_claims": [
+        {
+          "claim": "arbitrary_consistent_paging_breaks_affine_equivalence: true",
+          "categories": [
+            "unsupported_fact"
+          ],
+          "evidence": "From q1.1/q1.3, under p[j]=p[0]+j the same indices satisfy the position window and both scans retain the same state_slot_mapping guard. Consistent paging alone cannot break this equality; no packet evidence establishes the asserted break."
+        }
+      ],
+      "support_evidence": "q1.1 and q1.3 support affine set equivalence; q1.4-q1.5 limit the saved PASS. The paging claim contradicts those guarded scans.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "Testing non-affine cases at multiple starts and separately obtaining domain policy and device validation addresses the missing broader scope.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly rejects general-domain proof from the saved PASS.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item27",
+      "packet_id": "packet14",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q1.2/q1.4/q1.5 and q2.0 support the distinction between initializer, non-affine positions, owner policy, and device evidence.",
+      "experiment_quality": "partial",
+      "experiment_evidence": "The skipped-position diagnostic tests the inverse-index premise and explicitly keeps it separate from policy/device evidence, but does not obtain either remaining general-use obligation.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly marks policy unresolved and device validation unavailable.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item33",
+      "packet_id": "packet06",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q3.0-q3.1, q4.0 and q5.0 support 40 units, 20 AIC blocks, two steps, 48 repeated row positions, and one projection submit. q4.1/q5.0 withhold actual execution capture.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "Selected-source swimlane/core capture and a separate traffic measurement target observed rows, assignments, and redundant traffic without treating source arithmetic as observations.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly leaves observed execution rows unavailable and declines proof of 40 AIC cores.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item34",
+      "packet_id": "packet01",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q2.2 gives four historical warnings; q3.0 allocates two Right buffers and reuses the pair across outer chunks. q1.1 withholds selected compiler/timing evidence.",
+      "experiment_quality": "partial",
+      "experiment_evidence": "Building the selected source and capturing hints/timing is relevant, but the proposal omits its MemoryReuse/storage association evidence needed for selected allocation and outer-chunk answers.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly leaves selected counts/association unavailable and does not transfer historical warnings or infer overlap.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item36",
+      "packet_id": "packet09",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q1.0-q1.5 directly support metadata equality and source/MemoryReuse inequality; q2.0-q2.1 provide no generating source/IR identity.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "Compiler-emitted provenance tied to each source hash targets the missing source-to-build association.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly confines the answer to fingerprint observations rather than causal attribution.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item38",
+      "packet_id": "packet08",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q2.2/q3.0 and q4.2/q5.0 support warning counts 4/0, two Right allocations in each build, and same-pair/distinct-per-chunk associations; q6.0 explicitly distinguishes static evidence from overlap.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "A selected K128 timing/PMU/swimlane capture targets the missing observation of adjacent-chunk overlap.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly reports no measured overlap despite warning disappearance and changed association.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item41",
+      "packet_id": "packet07",
+      "response_status": "present",
+      "unsupported_claim_count": 1,
+      "issue_categories": [
+        "precise_count_error",
+        "source_phase_conflation"
+      ],
+      "unsupported_claims": [
+        {
+          "claim": "candidate_observed_execution_rows: 512; Result observes 512 execution rows",
+          "categories": [
+            "precise_count_error",
+            "source_phase_conflation"
+          ],
+          "evidence": "q4.1 says tokens=512, swimlane=0, pmu=0. Input fixture size is not an observed execution-row count; neither q4.0 launch blocks nor source arithmetic supplies that measurement. The repeated note is the same proposition and is counted once."
+        }
+      ],
+      "support_evidence": "q3.0-q3.1 and q4.0 support the static arithmetic and separate AIC/AIV launches; q4.1 does not support an observed execution-row count.",
+      "experiment_quality": "partial",
+      "experiment_evidence": "Per-core timing/utilization is relevant, but the proposal does not specify counting actual captured execution rows to resolve its asserted 512 count.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly declines proof of 40 AIC cores, but does not calibrate the execution-row count.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item43",
+      "packet_id": "packet13",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q2.2/q3.0 and q4.2/q5.0 support the warning and allocation counts and different outer-chunk associations; q4.1 provides no physical timing.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "A paired K256/K128 capture with identical fixtures and physical overlap timing supplies the missing direct comparison.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly avoids inferring overlap from allocation counts or absent warnings.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item45",
+      "packet_id": "packet11",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q1.1/q1.3 imply the affine interval equivalence with identical retained mapping guards; q1.4-q1.5 limit the saved PASS to its fixture.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "The proposal requests the missing general policy and device validation, explicitly including non-affine positions and arbitrary consistent paging. It does not report an already validated general domain.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly declines saved-PASS authority over the general domain.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item47",
+      "packet_id": "packet10",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q1.0 supplies only the selected digest; q1.1 withholds its source body/orchestration/physical rows, while q2.0-q2.1 belong to a different source hash.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "Requesting selected source, orchestration, and physical records, followed by separate observation of rows/cores, directly fills the missing evidence.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Unavailable answers correctly avoid borrowing historical-source arithmetic.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item48",
+      "packet_id": "packet05",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q1.1-q1.2 support Right/L0B and q2.0/q3.0 support Vec/UB placement while withholding relief and synchronization proof.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "An explicit with/without identity comparison of L0B occupancy and synchronization separates the tested cross-pool hypothesis from a separate L0B co-resident reduction.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly rejects both unmeasured relief and synchronization-safety proof.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item49",
+      "packet_id": "packet12",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q1.2 is initializer code, q1.1/q1.3 distinguish actual positions from physical-index arithmetic, and q1.4-q1.5 supply only a fixed fixture PASS.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "Non-initializer skipped-position diagnostics are explicitly limited to premise tests; separately requesting owner policy and device validation addresses the remaining obligations.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly leaves gap legality unresolved and gap-device evidence unavailable.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item50",
+      "packet_id": "packet16",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q1.0-q1.5 support equal metadata but unequal source/IR fingerprints; q3.0-q3.3 and q4.0 support their concrete build distinction and preserved-producer boundary.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "Preserving producer/build records and comparing source hashes plus pass IR targets attribution beyond metadata signatures.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly makes no timing or causal-timing inference.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item02",
+      "packet_id": "packet17",
+      "response_status": "present",
+      "unsupported_claim_count": 1,
+      "issue_categories": [
+        "unsupported_fact"
+      ],
+      "unsupported_claims": [
+        {
+          "claim": "arbitrary_consistent_paging_breaks_affine_equivalence: true",
+          "categories": [
+            "unsupported_fact"
+          ],
+          "evidence": "q2.0 explicitly states that under p[j]=p[0]+j the candidate physical interval is exactly the position window and both scans retain the same mapping guard. Consistent paging alone does not break this equivalence. Non-affine positions are a separate change of premise."
+        }
+      ],
+      "support_evidence": "q1.1/q1.3 and q2.0 support affine interval equivalence with the same retained guard; q1.4/q1.5 withhold general-domain authority.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "Establishing general position policy and device-testing non-affine assignments with guards retained targets missing general-domain evidence.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly rejects general authority from the saved PASS.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item03",
+      "packet_id": "packet11",
+      "response_status": "present",
+      "unsupported_claim_count": 1,
+      "issue_categories": [
+        "unsupported_fact"
+      ],
+      "unsupported_claims": [
+        {
+          "claim": "arbitrary_consistent_paging_breaks_affine_equivalence: true",
+          "categories": [
+            "unsupported_fact"
+          ],
+          "evidence": "From q1.1/q1.3, that under p[j]=p[0]+j the candidate physical interval is exactly the position window and both scans retain the same mapping guard. Consistent paging alone does not break this equivalence. Non-affine positions are a separate change of premise."
+        }
+      ],
+      "support_evidence": "q1.1/q1.3 imply the same guarded index set under p[j]=p[0]+j. q1.4/q1.5 supply only a fixed affine fixture PASS, not a general policy or new device validation.",
+      "experiment_quality": "partial",
+      "experiment_evidence": "The proposed device tests broaden beyond the fixture and retain guards, but no owner domain-policy request or criterion defines the claimed general scope. Timing instrumentation does not settle that policy.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly limits the saved PASS and declines timing claims.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item04",
+      "packet_id": "packet04",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q1.2 supplies an arange initializer; q1.1/q1.3 distinguish actual position membership from the candidate index interval. q1.4/q1.5 withhold a general contract and new gap-device result.",
+      "experiment_quality": "partial",
+      "experiment_evidence": "A skipped-position diagnostic can challenge the inverse-index premise, but the proposal only distinguishes owner policy/device results and does not obtain either missing obligation.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly leaves gap policy unresolved and new gap-device validation unavailable.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item05",
+      "packet_id": "packet07",
+      "response_status": "present",
+      "unsupported_claim_count": 1,
+      "issue_categories": [
+        "precise_count_error",
+        "source_phase_conflation"
+      ],
+      "unsupported_claims": [
+        {
+          "claim": "candidate_observed_execution_rows: 512",
+          "categories": [
+            "precise_count_error",
+            "source_phase_conflation"
+          ],
+          "evidence": "q4.1 has tokens=512, swimlane=0, pmu=0. Fixture input count is not an observed execution-row count; q4.0 launch geometry and q3 source arithmetic do not measure it."
+        }
+      ],
+      "support_evidence": "q3.0/q3.1 and q4.0 support 40 work units, 20 AIC blocks, two steps, 48 repeated row positions, and one projection submit. q4.1 reports tokens=512 with swimlane=0 and pmu=0, not an execution-row capture.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "Directly requesting AIC execution-row and core-utilization measurements targets the missing observations and keeps AIV geometry separate.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly declines 40-AIC-core proof, but asserts an unsupported observed-row count.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item06",
+      "packet_id": "packet15",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q1.1/q1.2 support Right/L0B; q2.0 shows generated TMULS on Vec tiles, hence UB. No cross-pool relief or synchronization-safety outcome is supplied.",
+      "experiment_quality": "partial",
+      "experiment_evidence": "L0B occupancy and synchronization validation are relevant, but only an after-removal measurement is specified, without a retained baseline or observable synchronization criterion.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly separates generated UB placement from unmeasured L0B relief and safety.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item08",
+      "packet_id": "packet08",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q2.2/q3.0 and q4.2/q5.0 support warning counts 4/0, two Right allocations in each build, and same-pair/distinct-per-chunk associations. q4.1/q6.0 establish that physical overlap remains unmeasured.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "A matched-fixture K128/K256 capture with PMU and swimlane targets the missing observed overlap comparison.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly declines measured overlap despite static warning and association differences.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item09",
+      "packet_id": "packet15",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q1.1/q1.2 support Right/L0B; q2.0 shows generated TMULS on Vec tiles, hence UB. No cross-pool relief or synchronization-safety outcome is supplied.",
+      "experiment_quality": "partial",
+      "experiment_evidence": "Free-space and synchronization measurement after a change is relevant, but omits a retained baseline and a defined safety observation.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly identifies generated Vec placement while withholding relief and removal-safety proof.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item10",
+      "packet_id": "packet05",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q1.1/q1.2 support Right/L0B; q2.0/q3.0 establish Vec/UB identity placement while explicitly withholding capacity-relief and synchronization proof.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "Retained-versus-removed identity comparisons of separate L0B/UB co-liveness, stage fit, and barrier timing discriminate cross-pool relief and handoff hypotheses.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly declines capacity-relief and synchronization conclusions from placement alone.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item12",
+      "packet_id": "packet12",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q1.2 is initializer code; q1.1/q1.3 show that monotonic gaps need not invert to physical indices. q1.4/q1.5 provide one fixture PASS and no general gap policy or new gap-device outcome.",
+      "experiment_quality": "partial",
+      "experiment_evidence": "Skipped/non-monotonic/misaligned diagnostics broaden the premise test, but do not obtain an owner legal-domain policy or a new device result.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly leaves legality unresolved and new gap-device validation unavailable; its proposed diagnostic is not claimed as an obtained outcome.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item14",
+      "packet_id": "packet01",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q2.2 gives four historical warnings; q3.0 allocates two Right buffers reused across adjacent outer chunks. q1.1 withholds selected compiler and timing evidence.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "Selected perf hints, MemoryReuse allocations, and physical overlap timing directly address the missing selected evidence.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly leaves selected counts/association unavailable and avoids transferring historical warnings.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item15",
+      "packet_id": "packet08",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q2.2/q3.0 and q4.2/q5.0 support warning counts 4/0, two Right allocations in each build, and same-pair/distinct-per-chunk associations. q4.1/q6.0 establish that physical overlap remains unmeasured.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "Matched K128/K256 physical overlap captures with an explicitly non-short-window fixture target the missing overlap observation.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly declines measured overlap despite static allocation and warning evidence.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item16",
+      "packet_id": "packet05",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q1.1/q1.2 support Right/L0B; q2.0/q3.0 establish Vec/UB identity placement while explicitly withholding capacity-relief and synchronization proof.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "Explicit with/without identity occupancy profiles and a separate handoff-removal synchronization test discriminate the two missing effects.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly separates UB placement from L0B relief and synchronization safety.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item17",
+      "packet_id": "packet06",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q3.0/q3.1, q4.0 and q5.0 support 40 units, 20 AIC blocks, two steps, 48 repeated row positions, and one submit. q4.1/q5.0 withhold observed execution rows and core assignments.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "Selected-source swimlane/PMU capture to observe per-core rows and traffic targets the missing physical observations.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly leaves observed rows unavailable and rejects proof of 40 AIC cores.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item19",
+      "packet_id": "packet02",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q1.0-q1.5 support equal metadata fingerprints and unequal source/MemoryReuse fingerprints. q2.0/q2.1 and q3.0-q3.3 support the limited metadata identity and distinct source/IR structures.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "Comparing producer records and compiler attestations targets generating-build provenance beyond platform metadata.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly confines association to supplied records rather than source/IR attestation.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item20",
+      "packet_id": "packet17",
+      "response_status": "present",
+      "unsupported_claim_count": 1,
+      "issue_categories": [
+        "unsupported_fact"
+      ],
+      "unsupported_claims": [
+        {
+          "claim": "arbitrary_consistent_paging_breaks_affine_equivalence: true",
+          "categories": [
+            "unsupported_fact"
+          ],
+          "evidence": "q2.0 explicitly states that under p[j]=p[0]+j the candidate physical interval is exactly the position window and both scans retain the same mapping guard. Consistent paging alone does not break this equivalence. Non-affine positions are a separate change of premise."
+        }
+      ],
+      "support_evidence": "q1.1/q1.3 and q2.0 support affine interval equivalence with the same retained guard; q1.4/q1.5 withhold general-domain authority.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "An explicit position-domain policy plus non-affine device tests across starts/lengths with guards retained addresses broader-scope evidence.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly limits the saved 512-token start-zero PASS; its non-affine counterpremise does not support the affine paging boolean.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item21",
+      "packet_id": "packet13",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q2.2/q3.0 and q4.2/q5.0 support warning counts 4/0, two Right allocations in each build, and same-pair/distinct-per-chunk associations. q4.1 supplies no physical overlap capture.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "A controlled paired K256/K128 physical-timing and overlap capture targets the missing direct performance observation.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly declines overlap inference from warning or allocation counts.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item22",
+      "packet_id": "packet03",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q1.1/q1.2 establish Right/L0B; q1.0 shows only a source-level identity multiply. q1.3 supplies neither generated placement nor cross-pool relief measurement.",
+      "experiment_quality": "partial",
+      "experiment_evidence": "Generated placement plus before/after buffer fit directly address placement and relief, but omit the separate synchronization-safety obligation.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly leaves generated placement unavailable and distinguishes source/docs from generated evidence.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item24",
+      "packet_id": "packet09",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q1.0-q1.5 show identical metadata, unequal source hashes despite equal source sizes, and unequal MemoryReuse hashes/sizes. q2.0/q2.1 do not identify generating source or IR.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "Compiler-attested source/IR provenance with matched build inputs targets the missing build identity.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly makes fingerprint conclusions without timing or causal timing attribution.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item25",
+      "packet_id": "packet09",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q1.0-q1.5 show identical metadata, unequal source hashes despite equal source sizes, and unequal MemoryReuse hashes/sizes. q2.0/q2.1 do not identify generating source or IR.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "Per-build IR/source provenance hashes alongside metadata discriminate distinct generating artifacts sharing one metadata fingerprint.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly limits platform metadata to file-level information.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item26",
+      "packet_id": "packet16",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q1.0-q1.5 and q4.0 establish identical metadata with differing source/MemoryReuse fingerprints; q3.0-q3.3 support concrete source/IR differences and the preserved-producer boundary.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "Distinct build IDs, compiler attestations, and full source/IR/metadata hashes directly target the attribution gap.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly distinguishes supplied producer association from compiler attestation.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item28",
+      "packet_id": "packet06",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q3.0/q3.1, q4.0 and q5.0 support 40 units, 20 AIC blocks, two steps, 48 repeated row positions, and one submit. q4.1/q5.0 withhold observed execution rows and core assignments.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "Selected-chunk swimlane/PMU capture for actual rows and traffic targets missing execution observations.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly separates derived work/launch geometry from observed execution rows and core counts.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item29",
+      "packet_id": "packet04",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q1.2 supplies an arange initializer; q1.1/q1.3 distinguish actual position membership from the candidate index interval. q1.4/q1.5 withhold a general contract and new gap-device result.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "Owner policy followed by adversarial position/mapping tests on the intended device distinguishes legal-domain and device obligations beyond fixture PASS.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly leaves gap policy unresolved and gap-device evidence unavailable.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item30",
+      "packet_id": "packet10",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q1.0 supplies only the selected source digest; q1.1 withholds its body, orchestration, and physical records. q2.0/q2.1 belong to another source hash and cannot supply selected-source counts.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "Requesting selected source, orchestration, and physical records followed by execution-row counting directly fills the missing selected evidence.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly avoids borrowing historical-source counts.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item31",
+      "packet_id": "packet13",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q2.2/q3.0 and q4.2/q5.0 support warning counts 4/0, two Right allocations in each build, and same-pair/distinct-per-chunk associations. q4.1 supplies no physical overlap capture.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "A direct paired proj_a_mm overlap measurement targets the missing physical observation rather than treating static evidence as timing.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly declines measured overlap and transfer of the historical warning.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item32",
+      "packet_id": "packet02",
+      "response_status": "present",
+      "unsupported_claim_count": 1,
+      "issue_categories": [
+        "precise_count_error"
+      ],
+      "unsupported_claims": [
+        {
+          "claim": "the source files and MemoryReuse pass dumps have different SHA-256 values and byte sizes [source-size portion]",
+          "categories": [
+            "precise_count_error"
+          ],
+          "evidence": "q1.2 and q1.3 both list file_bytes=34840. Their source hashes differ, but their source sizes do not. q1.4/q1.5 do have differing MemoryReuse sizes. Only the erroneous source-size proposition is counted."
+        }
+      ],
+      "support_evidence": "q1.0-q1.5 support equal metadata fingerprints and unequal source/MemoryReuse fingerprints. q2.0/q2.1 and q3.0-q3.3 support the limited metadata identity and distinct source/IR structures.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "Matched-build hashing of source/IR/MemoryReuse artifacts plus producer provenance targets the source-to-build association.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly makes no timing claim and rejects metadata-only build identity.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item35",
+      "packet_id": "packet10",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q1.0 supplies only the selected source digest; q1.1 withholds its body, orchestration, and physical records. q2.0/q2.1 belong to another source hash and cannot supply selected-source counts.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "Selected body/orchestration/physical-row records and separate first-chunk geometry/row accounting directly address absent selected evidence.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly marks all selected counts unavailable and separates AIV lanes.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item37",
+      "packet_id": "packet12",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q1.2 is initializer code; q1.1/q1.3 show that monotonic gaps need not invert to physical indices. q1.4/q1.5 provide one fixture PASS and no general gap policy or new gap-device outcome.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "Owner-approved skipped/non-monotonic/boundary cases plus a new device result targets broader-domain evidence and its legal-scope prerequisite.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly limits existing PASS to the initializer fixture.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item39",
+      "packet_id": "packet18",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q1.1/q1.3 imply the same guarded index set under p[j]=p[0]+j; q1.4/q1.5 limit the saved PASS to its fixture.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "A general position policy and device validation over non-fixture starts/sequences explicitly address the general-use obligation.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly rejects saved-fixture proof of general correctness.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item40",
+      "packet_id": "packet14",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q1.2/q1.4/q1.5 and q2.0 explicitly distinguish initializer policy, the non-affine inverse-index premise, owner policy, and device evidence.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "Obtaining owner gap policy before a gap-device validation separates policy from implementation evidence; it confines a static diagnostic to a premise test.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly leaves current policy and new device evidence unresolved/unavailable.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item42",
+      "packet_id": "packet07",
+      "response_status": "present",
+      "unsupported_claim_count": 1,
+      "issue_categories": [
+        "precise_count_error",
+        "source_phase_conflation"
+      ],
+      "unsupported_claims": [
+        {
+          "claim": "candidate_observed_execution_rows: 512",
+          "categories": [
+            "precise_count_error",
+            "source_phase_conflation"
+          ],
+          "evidence": "q4.1 has tokens=512, swimlane=0, pmu=0. Fixture input count is not an observed execution-row count; q4.0 launch geometry and q3 source arithmetic do not measure it."
+        }
+      ],
+      "support_evidence": "q3.0/q3.1 and q4.0 support 40 work units, 20 AIC blocks, two steps, 48 repeated row positions, and one projection submit. q4.1 reports tokens=512 with swimlane=0 and pmu=0, not an execution-row capture.",
+      "experiment_quality": "partial",
+      "experiment_evidence": "Per-core occupancy and physical row-load observations are useful, but the proposal does not specify counting actual execution rows rather than input row loads.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly declines 40-AIC-core proof, but does not calibrate the execution-row count.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item44",
+      "packet_id": "packet03",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q1.1/q1.2 establish Right/L0B; q1.0 shows only a source-level identity multiply. q1.3 supplies neither generated placement nor cross-pool relief measurement.",
+      "experiment_quality": "partial",
+      "experiment_evidence": "Generated identity placement and post-removal capacity/synchronization measurements are relevant, but omit a retained comparison and a safety criterion.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly leaves generated placement, relief, and synchronization proof unavailable.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item46",
+      "packet_id": "packet16",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q1.0-q1.5 and q4.0 establish identical metadata with differing source/MemoryReuse fingerprints; q3.0-q3.3 support concrete source/IR differences and the preserved-producer boundary.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "Comparing preserved source/IR per build against producer records targets source-to-build association beyond metadata.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly rejects metadata-only matching and makes no timing inference.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item51",
+      "packet_id": "packet11",
+      "response_status": "present",
+      "unsupported_claim_count": 1,
+      "issue_categories": [
+        "unsupported_fact"
+      ],
+      "unsupported_claims": [
+        {
+          "claim": "arbitrary_consistent_paging_breaks_affine_equivalence: true",
+          "categories": [
+            "unsupported_fact"
+          ],
+          "evidence": "From q1.1/q1.3, that under p[j]=p[0]+j the candidate physical interval is exactly the position window and both scans retain the same mapping guard. Consistent paging alone does not break this equivalence. Non-affine positions are a separate change of premise."
+        }
+      ],
+      "support_evidence": "q1.1/q1.3 imply the same guarded index set under p[j]=p[0]+j. q1.4/q1.5 supply only a fixed affine fixture PASS, not a general policy or new device validation.",
+      "experiment_quality": "partial",
+      "experiment_evidence": "Non-affine device tests and general validation broaden beyond the fixture, but do not obtain a legal-domain policy or define the resulting general-scope boundary.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly limits saved PASS to initializer positions; the paging assertion is repeated in prose and counted once.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item52",
+      "packet_id": "packet18",
+      "response_status": "present",
+      "unsupported_claim_count": 1,
+      "issue_categories": [
+        "unsupported_fact"
+      ],
+      "unsupported_claims": [
+        {
+          "claim": "arbitrary_consistent_paging_breaks_affine_equivalence: true",
+          "categories": [
+            "unsupported_fact"
+          ],
+          "evidence": "From q1.1/q1.3, that under p[j]=p[0]+j the candidate physical interval is exactly the position window and both scans retain the same mapping guard. Consistent paging alone does not break this equivalence. Non-affine positions are a separate change of premise."
+        }
+      ],
+      "support_evidence": "q1.1/q1.3 imply the same guarded index set under p[j]=p[0]+j; q1.4/q1.5 limit the saved PASS to its fixture.",
+      "experiment_quality": "partial",
+      "experiment_evidence": "Non-affine paging measurement can test a premise, but an obligation covering all tensor values lacks a legal input-domain definition and a specified device-validation criterion.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly rejects general proof from the saved fixture.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item53",
+      "packet_id": "packet14",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q1.2/q1.4/q1.5 and q2.0 explicitly distinguish initializer policy, the non-affine inverse-index premise, owner policy, and device evidence.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "A premise-only skipped-position diagnostic plus separate owner policy and supplied device validation targets all three missing evidence roles.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly leaves gap policy unresolved and new device validation unavailable.",
+      "material_unanswered_requirements": []
+    },
+    {
+      "item_id": "item54",
+      "packet_id": "packet01",
+      "response_status": "present",
+      "unsupported_claim_count": 0,
+      "issue_categories": [],
+      "unsupported_claims": [],
+      "support_evidence": "q2.2 gives four historical warnings; q3.0 allocates two Right buffers reused across adjacent outer chunks. q1.1 withholds selected compiler and timing evidence.",
+      "experiment_quality": "adequate",
+      "experiment_evidence": "Selected MemoryReuse and warning records plus a dedicated physical overlap measurement directly address missing selected evidence.",
+      "calibrated_unavailable": true,
+      "calibration_evidence": "Correctly leaves selected compiler answers unavailable and avoids inferring overlap.",
+      "material_unanswered_requirements": []
+    }
+  ],
+  "aggregate": {
+    "reviewed_items": 54,
+    "present_responses": 54,
+    "missing_responses": 0,
+    "unsupported_claim_count": 11,
+    "responses_with_unsupported_claims": 11,
+    "present_responses_without_identified_unsupported_claims": 43,
+    "issue_category_response_counts": {
+      "unsupported_fact": 7,
+      "unsupported_causality": 0,
+      "contract_overgeneralization": 0,
+      "source_phase_conflation": 3,
+      "memory_pool_conflation": 0,
+      "unobserved_overlap_speedup": 0,
+      "precise_count_error": 4
+    },
+    "experiment_quality_counts": {
+      "adequate": 39,
+      "partial": 15,
+      "poor": 0
+    },
+    "aggregation_limit": "Descriptive only, after completing all individual reviews. No treatment labels, mappings, scores, or treatment-effect comparisons used."
+  }
+}

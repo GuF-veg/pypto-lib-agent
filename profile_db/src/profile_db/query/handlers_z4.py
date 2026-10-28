@@ -10,10 +10,8 @@
 """Z4 handlers: why a task was late or long, its physical rows, the
 scheduler phases around it, and the early-dispatch proof.
 
-Timeline decomposition reuses the derived layer's tested pure functions
-(stall / early_dispatch) — the same functions that produce the values the
-T3 derivators store, so ``fin_detect + dispatch_wait + start_wait == gap``
-holds here identically."""
+Timeline decomposition preserves data-ready, FIN, dispatch, receive and start.
+Critical-path gaps and scheduler counters retain their runtime definitions."""
 
 from __future__ import annotations
 
@@ -199,13 +197,14 @@ def why_long(conn, params: WhyLongParams) -> list[Fact]:
         ]
     family = task[2]
     busy_us = task[9]
+    level = int(common.one(conn, "SELECT swimlane_level FROM run WHERE run_id = ?", [run_id])[0] or 0)
     fields = common.fields(
         run_id=run_id,
         task_id=params.task_id,
         name=task[1],
         family=family,
         busy_us=common.us(busy_us),
-        wall_us=common.us(task[10]),
+        wall_us=common.us(task[10]) if level >= 2 else None,
         num_rows=task[8],
     )
     if family is not None:
@@ -221,7 +220,8 @@ def why_long(conn, params: WhyLongParams) -> list[Fact]:
         if vals:
             median = vals[(len(vals) - 1) // 2]
             fields["family_median_us"] = common.us(median)
-            fields["family_rank"] = 1 + sum(1 for v in vals if v < busy_us)
+            if busy_us is not None:
+                fields["family_rank"] = 1 + sum(1 for v in vals if v < busy_us)
             fields["family_tasks"] = len(vals)
     row_durations = [
         r[1] - r[0]
@@ -235,7 +235,25 @@ def why_long(conn, params: WhyLongParams) -> list[Fact]:
     if row_durations:
         fields["min_row_us"] = common.us(min(row_durations))
         fields["max_row_us"] = common.us(max(row_durations))
-    return [Fact("LONG", fields, Evidence.MEASURED)]
+    return [
+        Fact("LONG", fields, Evidence.MEASURED),
+        Fact(
+            "METRIC_DEFINITION",
+            common.fields(
+                run_id=run_id,
+                task_id=params.task_id,
+                unit="us",
+                task_busy="max(row.end_us)-min(row.start_us)",
+                task_wall="max(row.finish_us)-min(row.dispatch_us)",
+                wall_us_available=level >= 2 and task[10] is not None,
+                row_duration="row.end_us-row.start_us",
+                row_scope="kernel lifecycle interval including possible synchronization and waits",
+                pipe_activity_measurement="pipe counters or instruction trace; lifecycle endpoints only bracket execution",
+                family_median_method="lower_middle_order_statistic",
+            ),
+            Evidence.PROVEN,
+        ),
+    ]
 
 
 @register(
@@ -414,8 +432,7 @@ def early(conn, params: EarlyDispatchParams) -> list[Fact]:
 
 @register(
     "pmu",
-    "Constraints: which pipe is close to saturation, and what is the total "
-    "cycle count?",
+    "Constraints: what pipe counters and total-cycle ratios were captured for this task?",
     PmuParams,
     default_budget_bytes=32768,
 )
@@ -556,7 +573,15 @@ def critical_path(conn, params: CriticalPathParams) -> list[Fact]:
     identities = common.task_identities(
         conn, run_id, [task_id for _, task_id, *_ in rows if task_id is not None]
     )
-    facts: list[Fact] = []
+    facts: list[Fact] = [Fact("METRIC_DEFINITION", dict(
+        run_id=run_id, kind=params.kind, unit="us",
+        task_busy="max(row.end_us)-min(row.start_us)",
+        path_compute="observed: non-overlapped task-envelope contribution; static: task envelope",
+        path_stall="gap before task on observed path; unavailable on static path",
+        row_scope="kernel lifecycle interval including possible synchronization and waits",
+        pipe_activity_measurement="pipe counters or instruction trace; zero path stall does not exclude waits inside a task",
+        latency_scope="profile capture, not unprofiled benchmark",
+    ), Evidence.PROVEN)]
     for seq, task_id, wall, busy, compute, stall_us, gap, gap_kind, early_status in rows:
         name, family, engine = identities.get(str(task_id), (None, None, None))
         facts.append(

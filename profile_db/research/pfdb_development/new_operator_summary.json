@@ -1,0 +1,840 @@
+{
+  "date": "2026-10-22",
+  "model": "opencode-go/deepseek-v4.1-flash",
+  "opencode_version": "2.1.2",
+  "pfdb_version": "0.6.0",
+  "scope": "Externally orchestrated, tool-free proposals; no autonomous discovery or population success-rate claim.",
+  "main_attempts": [
+    {
+      "attempt": "rms/generation-0",
+      "source_sha256": "218ae5d134d219f974717e48ede1c574635274c291d5361c90c1570466132217",
+      "body_ast_sha256": "1a3f6f733b4465c1a930591c350d5407cf56463aafb6b250868381eb131f29d4",
+      "numerical_search_passed": false,
+      "model_wall_s": 63.269
+    },
+    {
+      "attempt": "rms/generation-1",
+      "source_sha256": "218ae5d134d219f974717e48ede1c574635274c291d5361c90c1570466132217",
+      "body_ast_sha256": "1a3f6f733b4465c1a930591c350d5407cf56463aafb6b250868381eb131f29d4",
+      "numerical_search_passed": false,
+      "model_wall_s": 108.548
+    },
+    {
+      "attempt": "rms/generation-2",
+      "source_sha256": "bc146840d014c525105660cf1db05980adc06c0c070e8f5f8f2a32a4698b66bf",
+      "body_ast_sha256": "cae0b3fe706ad057fe97d11271d6fdc911a87755ffc9e5733d4b6ac9c48fd21f",
+      "numerical_search_passed": false,
+      "model_wall_s": 191.92
+    },
+    {
+      "attempt": "lookup/basic-0",
+      "source_sha256": "a55e57699bedfdc4c3c854b52211653220413f16b4f260e50707b4257fe3b21b",
+      "body_ast_sha256": "56510080b3cfc07e89215d6cfb438a96062a07485f05379e85d65d5cefedfd0c",
+      "numerical_search_passed": true,
+      "model_wall_s": 44.014
+    },
+    {
+      "attempt": "lookup/basic-1",
+      "source_sha256": "39f101a023f6f1b724c88a0ffdd29c806738231849f187dd2462db7596a62990",
+      "body_ast_sha256": "a0d4d9d745afc49918856befd29fec497586c5604be79abf3fd16214902bd38d",
+      "numerical_search_passed": true,
+      "model_wall_s": 128.083
+    },
+    {
+      "attempt": "lookup/generation-0",
+      "source_sha256": "e40029d27faa6469d79ae0ba103526bb2a9c0fb31a57a7b7e9c3f5ef9fa6a086",
+      "body_ast_sha256": "aa31e08980eb9eb783398186fd33f02bfe8bd2ac5dd49137d3e49b5e59af0deb",
+      "numerical_search_passed": true,
+      "model_wall_s": 69.126
+    },
+    {
+      "attempt": "lookup/pfdb-0",
+      "source_sha256": "a6d76817f152869ef4da3247a089853712278754751ace7a2f95f0a07b6ff1b3",
+      "body_ast_sha256": "82da09c5e344c48b643da6544d33d7126fc8f92a55da4d1248c7e72b6b55e44c",
+      "numerical_search_passed": true,
+      "model_wall_s": 77.118
+    },
+    {
+      "attempt": "lookup/pfdb-1",
+      "source_sha256": "a55e57699bedfdc4c3c854b52211653220413f16b4f260e50707b4257fe3b21b",
+      "body_ast_sha256": "56510080b3cfc07e89215d6cfb438a96062a07485f05379e85d65d5cefedfd0c",
+      "numerical_search_passed": true,
+      "model_wall_s": 99.802
+    },
+    {
+      "attempt": "hc/basic-0",
+      "source_sha256": "ac744a5b458853135a2ceed624ee720c598dbe8e9ca5dffcc13fc033c4f014dc",
+      "body_ast_sha256": "413156f5173cb9f217275ed391ce08502b1422879f162917fd0028b427c51c6a",
+      "numerical_search_passed": true,
+      "model_wall_s": 134.582
+    },
+    {
+      "attempt": "hc/basic-1",
+      "source_sha256": "6806cb4ae5cb0c1e922ec071a5c3ad8f7d28356e10df9c372517887132ad7959",
+      "body_ast_sha256": "416ca7e035543061ebc88a404a528ba672a72a63e235ea0adc34e012e07bee6e",
+      "numerical_search_passed": false,
+      "model_wall_s": 146.784
+    },
+    {
+      "attempt": "hc/generation-0",
+      "source_sha256": "baaaf86286a6af11fcb12d3de0c11d7e4298a1967b3bda03efd74e90090402e9",
+      "body_ast_sha256": "01dbc4addf4236226498bfbf82bf0ab5068c66c87806afe97583e029a16c5bc0",
+      "numerical_search_passed": true,
+      "model_wall_s": 87.458
+    },
+    {
+      "attempt": "hc/pfdb-0",
+      "source_sha256": "289f03ce78b18d63d4a66cec8faf0a769b83a3044366fa62067e98ba5c851c0c",
+      "body_ast_sha256": "f20159f0bfff458afd4536607fdcf1d9630810090f99617bbcf342224472a2a9",
+      "numerical_search_passed": true,
+      "model_wall_s": 121.395
+    },
+    {
+      "attempt": "hc/pfdb-1",
+      "source_sha256": "3bdfc9c3baca587842c1d08df997320e3aaf9aed6e227858c0a1fe994e529dab",
+      "body_ast_sha256": "d8d48ff2511f024c8b62b7359dfd6e6b3e37e378b3509e2dce7399d690216f20",
+      "numerical_search_passed": true,
+      "model_wall_s": 236.896
+    },
+    {
+      "attempt": "conv/basic-0",
+      "source_sha256": "0e3fd386c3f7b2db91507588dae85f86b6fa89be712c796158611683bb41563c",
+      "body_ast_sha256": "00dba3c99f739241263a62caa6a6d169f4d6e1e7a888d6997bf4b16c299a55da",
+      "numerical_search_passed": true,
+      "model_wall_s": 100.304
+    },
+    {
+      "attempt": "conv/basic-1",
+      "source_sha256": "94951adadd4f5eb756a5ac7eab294ef96c37eefa7c9c93e35cf4ea18f871cb4d",
+      "body_ast_sha256": "f4578f141caa9d5f7ff2154033d69820202ede4665885bbdfa5f35be7faabaf0",
+      "numerical_search_passed": true,
+      "model_wall_s": 177.97
+    },
+    {
+      "attempt": "conv/generation-0",
+      "source_sha256": "f60db9a492c093f825a6d495b03471ae5daef9afdc7ce1d4089b9142b50819eb",
+      "body_ast_sha256": "a70b7d70b955a173cc0cbd56e98aaf7c0b1d42f7604ba3cdc1eacdcc7db2ecca",
+      "numerical_search_passed": true,
+      "model_wall_s": 205.837
+    },
+    {
+      "attempt": "conv/pfdb-0",
+      "source_sha256": "57cc7f3ff95716a3077b1b5aca1510dae8c8d76e4216282ac14dbe5939d4b22c",
+      "body_ast_sha256": "ebb3f81436ebd3ab9e34cf1951fc4a6c0d1d2aad0a296709e002cb42935ddd40",
+      "numerical_search_passed": true,
+      "model_wall_s": 197.348
+    },
+    {
+      "attempt": "conv/pfdb-1",
+      "source_sha256": "aab01e3b60ab49d48117a30fb3265daa25bb2f0a82cead8e0b381e662e98f8ad",
+      "body_ast_sha256": "d1c4030f8b2aa86bbd38b738d34609552c432117db7599659b69c644316101cd",
+      "numerical_search_passed": true,
+      "model_wall_s": 87.495
+    },
+    {
+      "attempt": "mtp/generation-0",
+      "source_sha256": "326e3ee754fce9be3a783f68b708cde394e5fb15961441f5308ec5f22055f70c",
+      "body_ast_sha256": "93de99f2c78676bf8c0735349e8b3bdaf7b5dee7bedb15a651439374db1be3d6",
+      "numerical_search_passed": false,
+      "model_wall_s": 338.378
+    },
+    {
+      "attempt": "mtp/generation-1",
+      "source_sha256": "410e56a61479963103f7d8d596b6fa001203109556548a7ebf293c0eadac0061",
+      "body_ast_sha256": "3e1d41558c6324a65bb0986c9704257c164df02dce2f903a78160e975da0be34",
+      "numerical_search_passed": false,
+      "model_wall_s": 88.559
+    },
+    {
+      "attempt": "mtp/generation-2",
+      "source_sha256": "86eed6b078e3f328e1458048493159a44087daf6c015dd4c234e0a06493ccbf6",
+      "body_ast_sha256": "582eda2a05e75bddb67440f7a69eba7c8832c39b6036faad57e247f427132f36",
+      "numerical_search_passed": false,
+      "model_wall_s": 207.818
+    }
+  ],
+  "main_calls": 21,
+  "main_numerical_passes": 14,
+  "diagnostic_probe_calls": 2,
+  "retained": [
+    {
+      "task": "rms",
+      "labels": [
+        "manual"
+      ],
+      "source": "models/deepseek_v4_flash_mtp/rmsnorm.py",
+      "source_sha256": "aae3285315de1dea59f263bf2c7658a4ad57bca6706395a28669a38d67a70566",
+      "build_tree_sha256": "3e0277cec0ff8c5ca40df40e25ee1bfce2abcb988a48671e8b5f6661228a2260",
+      "golden_tree_sha256": "946c1f6d5d8baeb8e89a3a999bba150c9af81f4a61ee20ac748f630e88779d54",
+      "stratum_medians_us": [
+        20.65,
+        20.9,
+        20.6
+      ],
+      "median_of_stratum_medians_us": 20.65,
+      "heldout_passed": true,
+      "dynamic_T13_passed": false
+    },
+    {
+      "task": "lookup",
+      "labels": [
+        "manual"
+      ],
+      "source": "models/deepseek_v4_flash_mtp/lookup_embedding.py",
+      "source_sha256": "82c5b1643baef3dae5bd4335d04a5e978cdfc34fbd1c22cf0a0286dc4fb86a05",
+      "build_tree_sha256": "885d33accb1b91d93d8967e04c94b16a5da90b369cdc36f5648bb6cb4e9e1704",
+      "golden_tree_sha256": "24a4b956ff71203e300d6e89b8dc8eb868c98e9bc08ed9dae0540eaa27f9d77a",
+      "stratum_medians_us": [
+        18.9,
+        19.4,
+        18.8
+      ],
+      "median_of_stratum_medians_us": 18.9,
+      "heldout_passed": true,
+      "dynamic_T13_passed": true
+    },
+    {
+      "task": "lookup",
+      "labels": [
+        "initial"
+      ],
+      "source": "build_output/pfdb_development/new-operators-v1/lookup/generation-0/candidate.py",
+      "source_sha256": "e40029d27faa6469d79ae0ba103526bb2a9c0fb31a57a7b7e9c3f5ef9fa6a086",
+      "build_tree_sha256": "dad835fde7fa4e99b947b19bc8640ed03bb03817729ceebaa3f5b50e8b5d185e",
+      "golden_tree_sha256": "24a4b956ff71203e300d6e89b8dc8eb868c98e9bc08ed9dae0540eaa27f9d77a",
+      "stratum_medians_us": [
+        13.5,
+        13.25,
+        13.3
+      ],
+      "median_of_stratum_medians_us": 13.3,
+      "heldout_passed": true,
+      "dynamic_T13_passed": true
+    },
+    {
+      "task": "lookup",
+      "labels": [
+        "basic",
+        "pfdb"
+      ],
+      "source": "build_output/pfdb_development/new-operators-v1/lookup/basic-0/candidate.py",
+      "source_sha256": "a55e57699bedfdc4c3c854b52211653220413f16b4f260e50707b4257fe3b21b",
+      "build_tree_sha256": "3729f0d068be1f4c976dda73194ec2e1f9120d70502c5a62b712cac9ba016003",
+      "golden_tree_sha256": "24a4b956ff71203e300d6e89b8dc8eb868c98e9bc08ed9dae0540eaa27f9d77a",
+      "stratum_medians_us": [
+        11.3,
+        11.2,
+        11.0
+      ],
+      "median_of_stratum_medians_us": 11.2,
+      "heldout_passed": true,
+      "dynamic_T13_passed": true
+    },
+    {
+      "task": "hc",
+      "labels": [
+        "manual"
+      ],
+      "source": "models/deepseek_v4_flash_mtp/hc_post.py",
+      "source_sha256": "f7577bf1ecba646b0fb51d437304a8d938a07e523bd17bcd07662f75c9c3d769",
+      "build_tree_sha256": "b9ba45069bbbac73a7680bf90987659a81e3bdfe8b945dbd6b08ba33d9d0da68",
+      "golden_tree_sha256": "880f4056bf5d1a0a07a94ab58e755ad30c8aaac09fc815c15f10ca75ff7ec58c",
+      "stratum_medians_us": [
+        16.1,
+        15.8,
+        15.4
+      ],
+      "median_of_stratum_medians_us": 15.8,
+      "heldout_passed": true,
+      "dynamic_T13_passed": false
+    },
+    {
+      "task": "hc",
+      "labels": [
+        "initial",
+        "basic"
+      ],
+      "source": "build_output/pfdb_development/new-operators-v1/hc/generation-0/candidate.py",
+      "source_sha256": "baaaf86286a6af11fcb12d3de0c11d7e4298a1967b3bda03efd74e90090402e9",
+      "build_tree_sha256": "1165f9d8c719a9cef547debb51f639a4ef89271f983608186ff3fceeaa358fd5",
+      "golden_tree_sha256": "880f4056bf5d1a0a07a94ab58e755ad30c8aaac09fc815c15f10ca75ff7ec58c",
+      "stratum_medians_us": [
+        23.75,
+        23.5,
+        23.7
+      ],
+      "median_of_stratum_medians_us": 23.7,
+      "heldout_passed": true,
+      "dynamic_T13_passed": true
+    },
+    {
+      "task": "hc",
+      "labels": [
+        "pfdb"
+      ],
+      "source": "build_output/pfdb_development/new-operators-v1/hc/pfdb-0/candidate.py",
+      "source_sha256": "289f03ce78b18d63d4a66cec8faf0a769b83a3044366fa62067e98ba5c851c0c",
+      "build_tree_sha256": "33e1e72042134fa181c1d1aecdc7ee0d7030f2de1dc4e15b607cf543586b75bd",
+      "golden_tree_sha256": "880f4056bf5d1a0a07a94ab58e755ad30c8aaac09fc815c15f10ca75ff7ec58c",
+      "stratum_medians_us": [
+        17.6,
+        17.5,
+        17.9
+      ],
+      "median_of_stratum_medians_us": 17.6,
+      "heldout_passed": true,
+      "dynamic_T13_passed": true
+    },
+    {
+      "task": "conv",
+      "labels": [
+        "manual"
+      ],
+      "source": "models/glm5_3_flash/kda_conv.py",
+      "source_sha256": "ad749009b75fd1cf96227ddb0748955f0d2484dfc9db7cb9d7d89b07da6baae8",
+      "build_tree_sha256": "340315ab787d8dc501fb372b1683915d24eafe674f2771560e56df384f71dc13",
+      "golden_tree_sha256": "9bd3406ee0876f9af6e2eb407097116779d184f3c018ded3efa0a51c7e5e6cf0",
+      "stratum_medians_us": [
+        14.6,
+        15.0,
+        14.5
+      ],
+      "median_of_stratum_medians_us": 14.6,
+      "heldout_passed": true,
+      "dynamic_T13_passed": null
+    },
+    {
+      "task": "conv",
+      "labels": [
+        "initial"
+      ],
+      "source": "build_output/pfdb_development/new-operators-v1/conv/generation-0/candidate.py",
+      "source_sha256": "f60db9a492c093f825a6d495b03471ae5daef9afdc7ce1d4089b9142b50819eb",
+      "build_tree_sha256": "d3883a254e436a1b37f1c253eac0997b7e18c1b3c1bff39d787c84d0c8dfe6de",
+      "golden_tree_sha256": "9bd3406ee0876f9af6e2eb407097116779d184f3c018ded3efa0a51c7e5e6cf0",
+      "stratum_medians_us": [
+        24.85,
+        24.7,
+        24.9
+      ],
+      "median_of_stratum_medians_us": 24.85,
+      "heldout_passed": true,
+      "dynamic_T13_passed": null
+    },
+    {
+      "task": "conv",
+      "labels": [
+        "basic"
+      ],
+      "source": "build_output/pfdb_development/new-operators-v1/conv/basic-1/candidate.py",
+      "source_sha256": "94951adadd4f5eb756a5ac7eab294ef96c37eefa7c9c93e35cf4ea18f871cb4d",
+      "build_tree_sha256": "5d8f1f70ab6c10e580f4f3f749f81fa5d15c2815aecab814379b99ff6cec893f",
+      "golden_tree_sha256": "9bd3406ee0876f9af6e2eb407097116779d184f3c018ded3efa0a51c7e5e6cf0",
+      "stratum_medians_us": [
+        14.350000000000001,
+        14.850000000000001,
+        14.4
+      ],
+      "median_of_stratum_medians_us": 14.4,
+      "heldout_passed": true,
+      "dynamic_T13_passed": null
+    },
+    {
+      "task": "conv",
+      "labels": [
+        "pfdb"
+      ],
+      "source": "build_output/pfdb_development/new-operators-v1/conv/pfdb-0/candidate.py",
+      "source_sha256": "57cc7f3ff95716a3077b1b5aca1510dae8c8d76e4216282ac14dbe5939d4b22c",
+      "build_tree_sha256": "0724067a83b9204c6b29aafe776268ba66086eb7a92a55be62a2d70ac0cf8a82",
+      "golden_tree_sha256": "9bd3406ee0876f9af6e2eb407097116779d184f3c018ded3efa0a51c7e5e6cf0",
+      "stratum_medians_us": [
+        15.4,
+        15.5,
+        15.5
+      ],
+      "median_of_stratum_medians_us": 15.5,
+      "heldout_passed": true,
+      "dynamic_T13_passed": null
+    },
+    {
+      "task": "mtp",
+      "labels": [
+        "manual"
+      ],
+      "source": "models/deepseek_v4_flash_mtp/mtp_projection.py",
+      "source_sha256": "2b89453bbe50ac624a4cb66ebfd8c1d7461d4098346b3460ab173b160110da7e",
+      "build_tree_sha256": "40f6b4b1d06cffce110b19f95decbfdec40fecbc14c607f474ddaff88eba0f99",
+      "golden_tree_sha256": "c842d03e02885b4072d14b24d94ae7c0bc49fab403e7d00bcb124b946d58b67f",
+      "stratum_medians_us": [
+        83.1,
+        82.7,
+        83.0
+      ],
+      "median_of_stratum_medians_us": 83.0,
+      "heldout_passed": true,
+      "dynamic_T13_passed": false
+    }
+  ],
+  "pfdb_packets": [
+    {
+      "attempt": "conv/pfdb-0",
+      "prompt_bytes": 68943,
+      "packet_bytes": 6285,
+      "source_sha256": "f60db9a492c093f825a6d495b03471ae5daef9afdc7ce1d4089b9142b50819eb",
+      "groups": [
+        {
+          "query": "overview",
+          "bytes": 507,
+          "truncated": false,
+          "error": null
+        },
+        {
+          "query": "inventory",
+          "bytes": 2118,
+          "truncated": false,
+          "error": null
+        },
+        {
+          "query": "critical_path",
+          "bytes": 243,
+          "truncated": false,
+          "error": null
+        },
+        {
+          "query": "perf_hints",
+          "bytes": 1829,
+          "truncated": false,
+          "error": null
+        },
+        {
+          "query": "memory",
+          "bytes": 36,
+          "truncated": false,
+          "error": null
+        },
+        {
+          "query": "density",
+          "bytes": 809,
+          "truncated": false,
+          "error": null
+        }
+      ]
+    },
+    {
+      "attempt": "conv/pfdb-1",
+      "prompt_bytes": 67362,
+      "packet_bytes": 3935,
+      "source_sha256": "57cc7f3ff95716a3077b1b5aca1510dae8c8d76e4216282ac14dbe5939d4b22c",
+      "groups": [
+        {
+          "query": "overview",
+          "bytes": 506,
+          "truncated": false,
+          "error": null
+        },
+        {
+          "query": "inventory",
+          "bytes": 1926,
+          "truncated": false,
+          "error": null
+        },
+        {
+          "query": "critical_path",
+          "bytes": 242,
+          "truncated": false,
+          "error": null
+        },
+        {
+          "query": "perf_hints",
+          "bytes": 39,
+          "truncated": false,
+          "error": null
+        },
+        {
+          "query": "memory",
+          "bytes": 36,
+          "truncated": false,
+          "error": null
+        },
+        {
+          "query": "density",
+          "bytes": 482,
+          "truncated": false,
+          "error": null
+        }
+      ]
+    },
+    {
+      "attempt": "hc/pfdb-0",
+      "prompt_bytes": 58234,
+      "packet_bytes": 4401,
+      "source_sha256": "baaaf86286a6af11fcb12d3de0c11d7e4298a1967b3bda03efd74e90090402e9",
+      "groups": [
+        {
+          "query": "overview",
+          "bytes": 505,
+          "truncated": false,
+          "error": null
+        },
+        {
+          "query": "inventory",
+          "bytes": 1927,
+          "truncated": false,
+          "error": null
+        },
+        {
+          "query": "critical_path",
+          "bytes": 225,
+          "truncated": false,
+          "error": null
+        },
+        {
+          "query": "perf_hints",
+          "bytes": 39,
+          "truncated": false,
+          "error": null
+        },
+        {
+          "query": "memory",
+          "bytes": 36,
+          "truncated": false,
+          "error": null
+        },
+        {
+          "query": "density",
+          "bytes": 954,
+          "truncated": false,
+          "error": null
+        }
+      ]
+    },
+    {
+      "attempt": "hc/pfdb-1",
+      "prompt_bytes": 63493,
+      "packet_bytes": 3928,
+      "source_sha256": "289f03ce78b18d63d4a66cec8faf0a769b83a3044366fa62067e98ba5c851c0c",
+      "groups": [
+        {
+          "query": "overview",
+          "bytes": 506,
+          "truncated": false,
+          "error": null
+        },
+        {
+          "query": "inventory",
+          "bytes": 1925,
+          "truncated": false,
+          "error": null
+        },
+        {
+          "query": "critical_path",
+          "bytes": 227,
+          "truncated": false,
+          "error": null
+        },
+        {
+          "query": "perf_hints",
+          "bytes": 39,
+          "truncated": false,
+          "error": null
+        },
+        {
+          "query": "memory",
+          "bytes": 36,
+          "truncated": false,
+          "error": null
+        },
+        {
+          "query": "density",
+          "bytes": 491,
+          "truncated": false,
+          "error": null
+        }
+      ]
+    },
+    {
+      "attempt": "lookup/pfdb-0",
+      "prompt_bytes": 55781,
+      "packet_bytes": 3774,
+      "source_sha256": "e40029d27faa6469d79ae0ba103526bb2a9c0fb31a57a7b7e9c3f5ef9fa6a086",
+      "groups": [
+        {
+          "query": "overview",
+          "bytes": 506,
+          "truncated": false,
+          "error": null
+        },
+        {
+          "query": "inventory",
+          "bytes": 1925,
+          "truncated": false,
+          "error": null
+        },
+        {
+          "query": "critical_path",
+          "bytes": 242,
+          "truncated": false,
+          "error": null
+        },
+        {
+          "query": "perf_hints",
+          "bytes": 39,
+          "truncated": false,
+          "error": null
+        },
+        {
+          "query": "memory",
+          "bytes": 36,
+          "truncated": false,
+          "error": null
+        },
+        {
+          "query": "density",
+          "bytes": 327,
+          "truncated": false,
+          "error": null
+        }
+      ]
+    },
+    {
+      "attempt": "lookup/pfdb-1",
+      "prompt_bytes": 61543,
+      "packet_bytes": 3775,
+      "source_sha256": "a6d76817f152869ef4da3247a089853712278754751ace7a2f95f0a07b6ff1b3",
+      "groups": [
+        {
+          "query": "overview",
+          "bytes": 507,
+          "truncated": false,
+          "error": null
+        },
+        {
+          "query": "inventory",
+          "bytes": 1925,
+          "truncated": false,
+          "error": null
+        },
+        {
+          "query": "critical_path",
+          "bytes": 243,
+          "truncated": false,
+          "error": null
+        },
+        {
+          "query": "perf_hints",
+          "bytes": 39,
+          "truncated": false,
+          "error": null
+        },
+        {
+          "query": "memory",
+          "bytes": 36,
+          "truncated": false,
+          "error": null
+        },
+        {
+          "query": "density",
+          "bytes": 326,
+          "truncated": false,
+          "error": null
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "sessions": 23,
+    "available": 23,
+    "native_cost_units": 0.36242679599999994,
+    "input_tokens": 153585,
+    "output_tokens": 37251,
+    "reasoning_token_counts": 448923,
+    "units": "Provider-native cost units; no currency/subscription billing inference. Numeric metadata only."
+  },
+  "source_preservation": {
+    "checked_files": 293,
+    "all_unchanged": true,
+    "upstream": {
+      "pypto": {
+        "head": "ee49fceaa3290cf90257a22eab867c04245b499d",
+        "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "runtime": {
+        "head": "6e383fc57c12a8bd4dce045289b8b4f5d55a15f1",
+        "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    }
+  },
+  "acceptance_exclusion": {
+    "3bdfc9c3baca587842c1d08df997320e3aaf9aed6e227858c0a1fe994e529dab": {
+      "source": "build_output/pfdb_development/new-operators-v1/hc/pfdb-1/candidate.py",
+      "status": "not_accepted_unproven_concurrent_write_safety",
+      "reason": "Adjacent SPMD blocks overlap [3264,3328) FP32 columns per token/output; partial overlapping ordinary-store safety is unproven. Numeric PASS is retained, not called a reproduced race."
+    }
+  },
+  "methodology": {
+    "confirmation_metric": "Median of three independent 100-round effective_us medians; warmup5; frozen search golden replay; a2a3; pool-assigned physical card exposed as logical0.",
+    "conv_state": "Evolves through correctness,warmup,timing; no per-round pristine reset.",
+    "dynamic_challenge": "Exploratory T13seed17; three manual controls fail, so not a certified general deployment domain.",
+    "early_stderr": "RMS slots0/1 had missing compiler stderr and remain feedback-censored. Child transport corrected externally without launcher/runtime modification."
+  },
+  "candidate_v06_replay": [
+    {
+      "task": "lookup",
+      "trial_id": 1,
+      "run_id": 1,
+      "source_sha256": "a55e57699bedfdc4c3c854b52211653220413f16b4f260e50707b4257fe3b21b",
+      "scope_sha256": "e86eb164467d180a2e92c2bbbfa912eeae80ed12a175a88f2b7c8064e60ccb27",
+      "build_id": "3bc2ea6e235be1493e250d3dd01bcc0c5cb2a743ac3762310e9ca4c31e38ced1",
+      "facts_bytes": 5463,
+      "wrong_source_refused": true
+    },
+    {
+      "task": "hc",
+      "trial_id": 2,
+      "run_id": 2,
+      "source_sha256": "289f03ce78b18d63d4a66cec8faf0a769b83a3044366fa62067e98ba5c851c0c",
+      "scope_sha256": "696db6cfaddea24c59e91a99a8d63c166c4c2f90b0f19c7174065e4b064e0473",
+      "build_id": "2b1eac6ed8bca911b2e023be00a63d365efefbc670c1d4a3ef0db34cabf51649",
+      "facts_bytes": 5372,
+      "wrong_source_refused": true
+    },
+    {
+      "task": "conv",
+      "trial_id": 3,
+      "run_id": 3,
+      "source_sha256": "57cc7f3ff95716a3077b1b5aca1510dae8c8d76e4216282ac14dbe5939d4b22c",
+      "scope_sha256": "ecc07f93542459017f27472fd31670d056ae410b1bbc63073d627e9b4b22a9ff",
+      "build_id": "c8833571c64ed1722f646bea1d2b09e8b4e95b859cad55c3acb949219735fa37",
+      "facts_bytes": 5672,
+      "wrong_source_refused": true
+    },
+    {
+      "task": "rms",
+      "trial_id": 4,
+      "run_id": null,
+      "source_sha256": "bc146840d014c525105660cf1db05980adc06c0c070e8f5f8f2a32a4698b66bf",
+      "scope_sha256": "e614c9556dda8a45bdb629b1a572ca3cafe5835088fcfa29e3fc1278a2e42ee5",
+      "build_id": null,
+      "facts_bytes": 2752,
+      "wrong_source_refused": true
+    }
+  ],
+  "review_selection_audit": {
+    "original_confirmation_review_sha256": null,
+    "reason": "The earlier shell step failed constructing a relative path before writing the exclusion file; confirmation therefore selected by numerical provisional medians. The unsafe HC proposal was already slower than retainedP0, so exclusion does not change any selected source or measurement.",
+    "selection_unchanged": true,
+    "original_jobs_sha256": "01474b8e9d982773dad6a91ca0c0d4c44832753856ab05e0d5407cba2dff488b"
+  },
+  "observed_profiles": [
+    {
+      "label": "lookup-manual",
+      "source_sha256": "82c5b1643baef3dae5bd4335d04a5e978cdfc34fbd1c22cf0a0286dc4fb86a05",
+      "block_num": 48,
+      "rows": 48,
+      "distinct_cores": 40,
+      "max_rows_per_core": 2,
+      "task_busy_us": 20.92,
+      "profile_task_wall_us": 25.54
+    },
+    {
+      "label": "hc-manual",
+      "source_sha256": "f7577bf1ecba646b0fb51d437304a8d938a07e523bd17bcd07662f75c9c3d769",
+      "block_num": 8,
+      "rows": 8,
+      "distinct_cores": 8,
+      "max_rows_per_core": 1,
+      "task_busy_us": 8.12,
+      "profile_task_wall_us": 18.22
+    },
+    {
+      "label": "conv-manual",
+      "source_sha256": "ad749009b75fd1cf96227ddb0748955f0d2484dfc9db7cb9d7d89b07da6baae8",
+      "block_num": 15,
+      "rows": 15,
+      "distinct_cores": 15,
+      "max_rows_per_core": 1,
+      "task_busy_us": 9.72,
+      "profile_task_wall_us": 21.18
+    },
+    {
+      "label": "lookup-initial",
+      "source_sha256": "e40029d27faa6469d79ae0ba103526bb2a9c0fb31a57a7b7e9c3f5ef9fa6a086",
+      "block_num": 16,
+      "rows": 16,
+      "distinct_cores": 16,
+      "max_rows_per_core": 1,
+      "task_busy_us": 6.64,
+      "profile_task_wall_us": 17.9
+    },
+    {
+      "label": "hc-initial",
+      "source_sha256": "baaaf86286a6af11fcb12d3de0c11d7e4298a1967b3bda03efd74e90090402e9",
+      "block_num": 64,
+      "rows": 64,
+      "distinct_cores": 40,
+      "max_rows_per_core": 2,
+      "task_busy_us": 25.0,
+      "profile_task_wall_us": 30.44
+    },
+    {
+      "label": "conv-initial",
+      "source_sha256": "f60db9a492c093f825a6d495b03471ae5daef9afdc7ce1d4089b9142b50819eb",
+      "block_num": 1,
+      "rows": 1,
+      "distinct_cores": 1,
+      "max_rows_per_core": 1,
+      "task_busy_us": 21.26,
+      "profile_task_wall_us": 23.66
+    },
+    {
+      "label": "lookup-retained",
+      "source_sha256": "a55e57699bedfdc4c3c854b52211653220413f16b4f260e50707b4257fe3b21b",
+      "block_num": 8,
+      "rows": 8,
+      "distinct_cores": 8,
+      "max_rows_per_core": 1,
+      "task_busy_us": 4.24,
+      "profile_task_wall_us": 15.72
+    },
+    {
+      "label": "hc-pfdb",
+      "source_sha256": "289f03ce78b18d63d4a66cec8faf0a769b83a3044366fa62067e98ba5c851c0c",
+      "block_num": 32,
+      "rows": 32,
+      "distinct_cores": 32,
+      "max_rows_per_core": 1,
+      "task_busy_us": 10.64,
+      "profile_task_wall_us": 20.66
+    },
+    {
+      "label": "conv-pfdb",
+      "source_sha256": "57cc7f3ff95716a3077b1b5aca1510dae8c8d76e4216282ac14dbe5939d4b22c",
+      "block_num": 6,
+      "rows": 6,
+      "distinct_cores": 6,
+      "max_rows_per_core": 1,
+      "task_busy_us": 10.66,
+      "profile_task_wall_us": 17.9
+    },
+    {
+      "label": "conv-basic",
+      "source_sha256": "94951adadd4f5eb756a5ac7eab294ef96c37eefa7c9c93e35cf4ea18f871cb4d",
+      "block_num": 18,
+      "rows": 18,
+      "distinct_cores": 18,
+      "max_rows_per_core": 1,
+      "task_busy_us": 11.06,
+      "profile_task_wall_us": 18.64
+    }
+  ],
+  "compiler_attribution": {
+    "task": "mtp",
+    "probe": "profile_db/research/pfdb_development/probe_new_matmul.py",
+    "probe_sha256": "a02cc848c1c27a8a6e581cdf480936071eea38c1b692c71d7b82a72c87dfa42e",
+    "diagnostic": "tile.row_expand_mul: tile rows=16 and row_vec rows=8",
+    "scope": "Independent rank2M8 matmul plus matching row-scale; CPU compile-only; not a generated candidate repair.",
+    "device_execution": false,
+    "upstream_modified": false
+  }
+}

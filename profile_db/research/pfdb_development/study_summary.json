@@ -1,0 +1,5560 @@
+[
+  {
+    "study_id": "decisions-d0-v2",
+    "result_sha256": "fffc245a86162c86a98e4e6e24bde6b2e216c0a947f954421c85e4cfcc90dc87",
+    "protocol_sha256": "d1d64ad70cbf1149d418baa27c02611e760b7ff76e25a36e85b335a99161dbed",
+    "model": "opencode-go/deepseek-v4.1-flash",
+    "conditions": {
+      "facts": {
+        "attempts": 30,
+        "completed": 30,
+        "fields_passed": 30,
+        "rubric_passed": 30,
+        "prompt_bytes": 123351
+      },
+      "columns": {
+        "attempts": 30,
+        "completed": 30,
+        "fields_passed": 30,
+        "rubric_passed": 30,
+        "prompt_bytes": 91518
+      }
+    },
+    "attempts": [
+      {
+        "case_id": "submit_grid",
+        "condition": "facts",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "logical_tasks": true,
+          "blocks_per_task": true,
+          "physical_rows_per_task": true,
+          "merged_submit_proven": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 4618,
+        "prompt_sha256": "78f6e6b9674586b708d962cb8501bc2b6adb92d7ec1011119c924ee7aa1eaef7",
+        "wall_s": 13.206,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0011677000000000002,
+            "tokens": {
+              "input": 2070,
+              "output": 181,
+              "reasoning": 838,
+              "cache": {
+                "read": 0,
+                "write": 1990
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "submit_grid",
+        "condition": "columns",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "logical_tasks": true,
+          "blocks_per_task": true,
+          "physical_rows_per_task": true,
+          "merged_submit_proven": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 2787,
+        "prompt_sha256": "ca0726eb0153f1c50ae09373ec0ea0c89324a0beea6ddbecf34da679a9005784",
+        "wall_s": 9.559,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0008757249999999999,
+            "tokens": {
+              "input": 1373,
+              "output": 236,
+              "reasoning": 592,
+              "cache": {
+                "read": 0,
+                "write": 1457
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "lowering_identity",
+        "condition": "facts",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "exact_scatter_axis": true,
+          "all_scatter_is_slow_proven": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1401,
+        "prompt_sha256": "8bb5a5ea4c5c16efb62cdb6b756abd6d250645a5724cced363c94d66e16c2d22",
+        "wall_s": 9.719,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0005352,
+            "tokens": {
+              "input": 1561,
+              "output": 283,
+              "reasoning": 308,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "lowering_identity",
+        "condition": "columns",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "exact_scatter_axis": true,
+          "all_scatter_is_slow_proven": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1425,
+        "prompt_sha256": "6db55d65e35d0ce4f2f6851cf7e03094c275d4f90a1b0c0f78cc06cb28c6dfe9",
+        "wall_s": 5.979,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0005013,
+            "tokens": {
+              "input": 1577,
+              "output": 295,
+              "reasoning": 241,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "completion_boundary",
+        "condition": "facts",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "projection_producers": true,
+          "deleting_a_live_group_edge_is_justified": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 10163,
+        "prompt_sha256": "d4b102ce259e6cc3025c59adc9494d5fe79d48fe6ee614dfa6eaf792998fb9e5",
+        "wall_s": 9.041,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00161405,
+            "tokens": {
+              "input": 4405,
+              "output": 223,
+              "reasoning": 563,
+              "cache": {
+                "read": 0,
+                "write": 3866
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "completion_boundary",
+        "condition": "columns",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "projection_producers": true,
+          "deleting_a_live_group_edge_is_justified": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 5868,
+        "prompt_sha256": "bf9452a94159b2e7e0c7712f4148bdb29a8555fad40fea2f2bd908db1e000d24",
+        "wall_s": 7.746,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00139645,
+            "tokens": {
+              "input": 2881,
+              "output": 284,
+              "reasoning": 752,
+              "cache": {
+                "read": 0,
+                "write": 2758
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "realized_pipeline",
+        "condition": "facts",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "requested_depth": true,
+          "fitted_buffers": true,
+          "stage_2_parameter_proves_double_buffering": true,
+          "isolated_latency_benefit_us": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 2465,
+        "prompt_sha256": "02e479c433572c8ff45e3147d7588ed256395cabebaf7dc9600f34195d81e079",
+        "wall_s": 6.695,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.000643675,
+            "tokens": {
+              "input": 976,
+              "output": 174,
+              "reasoning": 425,
+              "cache": {
+                "read": 0,
+                "write": 1169
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "realized_pipeline",
+        "condition": "columns",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "requested_depth": true,
+          "fitted_buffers": true,
+          "stage_2_parameter_proves_double_buffering": true,
+          "isolated_latency_benefit_us": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 2422,
+        "prompt_sha256": "2bdd86ac85c808e072fffff96e6e7b16899c5baa170c66b2d576353563b99619",
+        "wall_s": 5.24,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.000483225,
+            "tokens": {
+              "input": 961,
+              "output": 112,
+              "reasoning": 214,
+              "cache": {
+                "read": 0,
+                "write": 1161
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "local_global_ranking",
+        "condition": "facts",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "lower_full_program_median_run": true,
+          "shorter_projection_span_run": true,
+          "local_projection_alone_determines_program": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3528,
+        "prompt_sha256": "101cde64201fde7eea708c1ce45c141e565c8545d45105694b9a56d86812290d",
+        "wall_s": 13.051,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00120365,
+            "tokens": {
+              "input": 1640,
+              "output": 102,
+              "reasoning": 1149,
+              "cache": {
+                "read": 0,
+                "write": 1668
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "local_global_ranking",
+        "condition": "columns",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "lower_full_program_median_run": true,
+          "shorter_projection_span_run": true,
+          "local_projection_alone_determines_program": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3620,
+        "prompt_sha256": "d8c8b6d806d6565c8faccdb80012f0bf552ded4aaec701d1913b7bd2196107d2",
+        "wall_s": 8.196,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0009448499999999999,
+            "tokens": {
+              "input": 1674,
+              "output": 226,
+              "reasoning": 597,
+              "cache": {
+                "read": 0,
+                "write": 1708
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "bounded_scan_legality",
+        "condition": "facts",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "general_correctness_proven": true,
+          "reference_selection_basis": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1802,
+        "prompt_sha256": "0905800c4f4b4465bc81e568d12d5e399f6c08f0be5c1aaa8b9a9ffd8903a314",
+        "wall_s": 10.743,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00075385,
+            "tokens": {
+              "input": 1828,
+              "output": 240,
+              "reasoning": 654,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "bounded_scan_legality",
+        "condition": "columns",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "general_correctness_proven": true,
+          "reference_selection_basis": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1824,
+        "prompt_sha256": "2d9729121af190cd400c94a76739648aa2b5bdbe9b35c6a527449cd7b230f539",
+        "wall_s": 15.784,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0005991999999999999,
+            "tokens": {
+              "input": 1849,
+              "output": 141,
+              "reasoning": 483,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "row_span_semantics",
+        "condition": "facts",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "busy_us": true,
+          "wall_us": true,
+          "max_row_us": true,
+          "busy_us_semantics": true,
+          "timestamps_establish_pipe_active_time": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 8028,
+        "prompt_sha256": "2fc3d10fcfef72107d4e69875c00d4c604196fcdeb7a97cbaf9a9b0757a475ef",
+        "wall_s": 10.955,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0019379,
+            "tokens": {
+              "input": 3632,
+              "output": 173,
+              "reasoning": 1466,
+              "cache": {
+                "read": 0,
+                "write": 3334
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "row_span_semantics",
+        "condition": "columns",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "busy_us": true,
+          "wall_us": true,
+          "max_row_us": true,
+          "busy_us_semantics": true,
+          "timestamps_establish_pipe_active_time": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 4201,
+        "prompt_sha256": "808205269cea5f368dec096a67f3a99f90f1a947fa6ef480d7ac5fd80ceea2d1",
+        "wall_s": 20.995,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0031880249999999997,
+            "tokens": {
+              "input": 2165,
+              "output": 168,
+              "reasoning": 4135,
+              "cache": {
+                "read": 0,
+                "write": 2269
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "occupancy_objective",
+        "condition": "facts",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "occupancy_alone_proves_speedup": true,
+          "unprofiled_median_available": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 5559,
+        "prompt_sha256": "bff4a3383d536a1d93b2db1b702d21ee4e34e093c36db97bd48254540f205cb5",
+        "wall_s": 9.638,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.001322275,
+            "tokens": {
+              "input": 2571,
+              "output": 190,
+              "reasoning": 863,
+              "cache": {
+                "read": 0,
+                "write": 2451
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "occupancy_objective",
+        "condition": "columns",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "occupancy_alone_proves_speedup": true,
+          "unprofiled_median_available": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 4738,
+        "prompt_sha256": "76d9e168d00d8c88f5d1122adf89ecb9d188b11d208fe4f7116e6b34a6eb031b",
+        "wall_s": 9.291,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00125795,
+            "tokens": {
+              "input": 2188,
+              "output": 207,
+              "reasoning": 896,
+              "cache": {
+                "read": 0,
+                "write": 2156
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "capture_identity",
+        "condition": "facts",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "same_workload_established": true,
+          "task_id_only_pmu_join_safe": true,
+          "token_count_relation": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 2391,
+        "prompt_sha256": "ef6a665614c2212d4f8cb0f2c79226cac3abc7a48b1202441aa4c8b68b79660b",
+        "wall_s": 8.635,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.001221625,
+            "tokens": {
+              "input": 2532,
+              "output": 223,
+              "reasoning": 922,
+              "cache": {
+                "read": 0,
+                "write": 1243
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "capture_identity",
+        "condition": "columns",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "same_workload_established": true,
+          "task_id_only_pmu_join_safe": true,
+          "token_count_relation": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 2435,
+        "prompt_sha256": "810bfb411c74eabaa0e34ce430e978afd1b2009eb1040d8816ede0e3ad5e0088",
+        "wall_s": 6.259,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0006234249999999999,
+            "tokens": {
+              "input": 1126,
+              "output": 186,
+              "reasoning": 310,
+              "cache": {
+                "read": 0,
+                "write": 1271
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "experiment_memory",
+        "condition": "facts",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "saved_trial_count": true,
+          "repeat_hypothesis_exclusion_proven": true,
+          "caller_win_proves_validation": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1162,
+        "prompt_sha256": "e270ea686888c8a8d67060b223d22302b28675406e18df0cab5d6bf2396ec361",
+        "wall_s": 7.814,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00041049999999999995,
+            "tokens": {
+              "input": 1280,
+              "output": 102,
+              "reasoning": 328,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "experiment_memory",
+        "condition": "columns",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "saved_trial_count": true,
+          "repeat_hypothesis_exclusion_proven": true,
+          "caller_win_proves_validation": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1186,
+        "prompt_sha256": "be4590562ca553616fd990c56538969fce618253b827766d1c021879e102cbd6",
+        "wall_s": 7.56,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0003669,
+            "tokens": {
+              "input": 526,
+              "output": 106,
+              "reasoning": 374,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "submit_grid",
+        "condition": "columns",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "logical_tasks": true,
+          "blocks_per_task": true,
+          "physical_rows_per_task": true,
+          "merged_submit_proven": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 2787,
+        "prompt_sha256": "ca0726eb0153f1c50ae09373ec0ea0c89324a0beea6ddbecf34da679a9005784",
+        "wall_s": 9.914,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0007551250000000002,
+            "tokens": {
+              "input": 1373,
+              "output": 198,
+              "reasoning": 429,
+              "cache": {
+                "read": 0,
+                "write": 1457
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "submit_grid",
+        "condition": "facts",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "logical_tasks": true,
+          "blocks_per_task": true,
+          "physical_rows_per_task": true,
+          "merged_submit_proven": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 4618,
+        "prompt_sha256": "78f6e6b9674586b708d962cb8501bc2b6adb92d7ec1011119c924ee7aa1eaef7",
+        "wall_s": 6.652,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0005806499999999999,
+            "tokens": {
+              "input": 2067,
+              "output": 98,
+              "reasoning": 353,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "lowering_identity",
+        "condition": "columns",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "exact_scatter_axis": true,
+          "all_scatter_is_slow_proven": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1425,
+        "prompt_sha256": "6db55d65e35d0ce4f2f6851cf7e03094c275d4f90a1b0c0f78cc06cb28c6dfe9",
+        "wall_s": 7.607,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0008109999999999999,
+            "tokens": {
+              "input": 1577,
+              "output": 157,
+              "reasoning": 877,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "lowering_identity",
+        "condition": "facts",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "exact_scatter_axis": true,
+          "all_scatter_is_slow_proven": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1401,
+        "prompt_sha256": "8bb5a5ea4c5c16efb62cdb6b756abd6d250645a5724cced363c94d66e16c2d22",
+        "wall_s": 10.498,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0006313,
+            "tokens": {
+              "input": 1561,
+              "output": 348,
+              "reasoning": 409,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "completion_boundary",
+        "condition": "columns",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "projection_producers": true,
+          "deleting_a_live_group_edge_is_justified": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 5868,
+        "prompt_sha256": "bf9452a94159b2e7e0c7712f4148bdb29a8555fad40fea2f2bd908db1e000d24",
+        "wall_s": 9.117,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00144985,
+            "tokens": {
+              "input": 2881,
+              "output": 350,
+              "reasoning": 786,
+              "cache": {
+                "read": 0,
+                "write": 2758
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "completion_boundary",
+        "condition": "facts",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "projection_producers": true,
+          "deleting_a_live_group_edge_is_justified": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 10163,
+        "prompt_sha256": "d4b102ce259e6cc3025c59adc9494d5fe79d48fe6ee614dfa6eaf792998fb9e5",
+        "wall_s": 11.086,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00202755,
+            "tokens": {
+              "input": 4405,
+              "output": 331,
+              "reasoning": 1145,
+              "cache": {
+                "read": 0,
+                "write": 3866
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "realized_pipeline",
+        "condition": "columns",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "requested_depth": true,
+          "fitted_buffers": true,
+          "stage_2_parameter_proves_double_buffering": true,
+          "isolated_latency_benefit_us": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 2422,
+        "prompt_sha256": "2bdd86ac85c808e072fffff96e6e7b16899c5baa170c66b2d576353563b99619",
+        "wall_s": 5.544,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.000486825,
+            "tokens": {
+              "input": 961,
+              "output": 108,
+              "reasoning": 224,
+              "cache": {
+                "read": 0,
+                "write": 1161
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "realized_pipeline",
+        "condition": "facts",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "requested_depth": true,
+          "fitted_buffers": true,
+          "stage_2_parameter_proves_double_buffering": true,
+          "isolated_latency_benefit_us": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 2465,
+        "prompt_sha256": "02e479c433572c8ff45e3147d7588ed256395cabebaf7dc9600f34195d81e079",
+        "wall_s": 5.854,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.000515375,
+            "tokens": {
+              "input": 976,
+              "output": 133,
+              "reasoning": 241,
+              "cache": {
+                "read": 0,
+                "write": 1169
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "local_global_ranking",
+        "condition": "columns",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "lower_full_program_median_run": true,
+          "shorter_projection_span_run": true,
+          "local_projection_alone_determines_program": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3620,
+        "prompt_sha256": "d8c8b6d806d6565c8faccdb80012f0bf552ded4aaec701d1913b7bd2196107d2",
+        "wall_s": 12.647,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00100315,
+            "tokens": {
+              "input": 1674,
+              "output": 194,
+              "reasoning": 710,
+              "cache": {
+                "read": 0,
+                "write": 1708
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "local_global_ranking",
+        "condition": "facts",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "lower_full_program_median_run": true,
+          "shorter_projection_span_run": true,
+          "local_projection_alone_determines_program": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3528,
+        "prompt_sha256": "101cde64201fde7eea708c1ce45c141e565c8545d45105694b9a56d86812290d",
+        "wall_s": 7.807,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00080225,
+            "tokens": {
+              "input": 1640,
+              "output": 100,
+              "reasoning": 483,
+              "cache": {
+                "read": 0,
+                "write": 1668
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "bounded_scan_legality",
+        "condition": "columns",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "general_correctness_proven": true,
+          "reference_selection_basis": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1824,
+        "prompt_sha256": "2d9729121af190cd400c94a76739648aa2b5bdbe9b35c6a527449cd7b230f539",
+        "wall_s": 8.61,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0007602,
+            "tokens": {
+              "input": 1849,
+              "output": 126,
+              "reasoning": 766,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "bounded_scan_legality",
+        "condition": "facts",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "general_correctness_proven": true,
+          "reference_selection_basis": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1802,
+        "prompt_sha256": "0905800c4f4b4465bc81e568d12d5e399f6c08f0be5c1aaa8b9a9ffd8903a314",
+        "wall_s": 13.36,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.000580854,
+            "tokens": {
+              "input": 1060,
+              "output": 136,
+              "reasoning": 658,
+              "cache": {
+                "read": 768,
+                "write": 0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "row_span_semantics",
+        "condition": "columns",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "busy_us": true,
+          "wall_us": true,
+          "max_row_us": true,
+          "busy_us_semantics": true,
+          "timestamps_establish_pipe_active_time": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 4201,
+        "prompt_sha256": "808205269cea5f368dec096a67f3a99f90f1a947fa6ef480d7ac5fd80ceea2d1",
+        "wall_s": 18.075,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0019487250000000001,
+            "tokens": {
+              "input": 2165,
+              "output": 119,
+              "reasoning": 2117,
+              "cache": {
+                "read": 0,
+                "write": 2269
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "row_span_semantics",
+        "condition": "facts",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "busy_us": true,
+          "wall_us": true,
+          "max_row_us": true,
+          "busy_us_semantics": true,
+          "timestamps_establish_pipe_active_time": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 8028,
+        "prompt_sha256": "2fc3d10fcfef72107d4e69875c00d4c604196fcdeb7a97cbaf9a9b0757a475ef",
+        "wall_s": 18.403,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0023036000000000003,
+            "tokens": {
+              "input": 3632,
+              "output": 149,
+              "reasoning": 2094,
+              "cache": {
+                "read": 0,
+                "write": 3334
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "occupancy_objective",
+        "condition": "columns",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "occupancy_alone_proves_speedup": true,
+          "unprofiled_median_available": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 4738,
+        "prompt_sha256": "76d9e168d00d8c88f5d1122adf89ecb9d188b11d208fe4f7116e6b34a6eb031b",
+        "wall_s": 7.717,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00113595,
+            "tokens": {
+              "input": 2188,
+              "output": 237,
+              "reasoning": 668,
+              "cache": {
+                "read": 0,
+                "write": 2156
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "occupancy_objective",
+        "condition": "facts",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "occupancy_alone_proves_speedup": true,
+          "unprofiled_median_available": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 5559,
+        "prompt_sha256": "bff4a3383d536a1d93b2db1b702d21ee4e34e093c36db97bd48254540f205cb5",
+        "wall_s": 7.517,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0011648750000000001,
+            "tokens": {
+              "input": 2571,
+              "output": 214,
+              "reasoning": 576,
+              "cache": {
+                "read": 0,
+                "write": 2451
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "capture_identity",
+        "condition": "columns",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "same_workload_established": true,
+          "task_id_only_pmu_join_safe": true,
+          "token_count_relation": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 2435,
+        "prompt_sha256": "810bfb411c74eabaa0e34ce430e978afd1b2009eb1040d8816ede0e3ad5e0088",
+        "wall_s": 8.991,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.000675825,
+            "tokens": {
+              "input": 1126,
+              "output": 218,
+              "reasoning": 365,
+              "cache": {
+                "read": 0,
+                "write": 1271
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "capture_identity",
+        "condition": "facts",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "same_workload_established": true,
+          "task_id_only_pmu_join_safe": true,
+          "token_count_relation": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 2391,
+        "prompt_sha256": "ef6a665614c2212d4f8cb0f2c79226cac3abc7a48b1202441aa4c8b68b79660b",
+        "wall_s": 9.641,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0009161250000000001,
+            "tokens": {
+              "input": 1112,
+              "output": 273,
+              "reasoning": 731,
+              "cache": {
+                "read": 0,
+                "write": 1243
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "experiment_memory",
+        "condition": "columns",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "saved_trial_count": true,
+          "repeat_hypothesis_exclusion_proven": true,
+          "caller_win_proves_validation": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1186,
+        "prompt_sha256": "be4590562ca553616fd990c56538969fce618253b827766d1c021879e102cbd6",
+        "wall_s": 6.766,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00044209999999999996,
+            "tokens": {
+              "input": 1301,
+              "output": 171,
+              "reasoning": 319,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "experiment_memory",
+        "condition": "facts",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "saved_trial_count": true,
+          "repeat_hypothesis_exclusion_proven": true,
+          "caller_win_proves_validation": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1162,
+        "prompt_sha256": "e270ea686888c8a8d67060b223d22302b28675406e18df0cab5d6bf2396ec361",
+        "wall_s": 8.736,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0004885,
+            "tokens": {
+              "input": 1280,
+              "output": 194,
+              "reasoning": 380,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "submit_grid",
+        "condition": "facts",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "logical_tasks": true,
+          "blocks_per_task": true,
+          "physical_rows_per_task": true,
+          "merged_submit_proven": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 4618,
+        "prompt_sha256": "78f6e6b9674586b708d962cb8501bc2b6adb92d7ec1011119c924ee7aa1eaef7",
+        "wall_s": 6.511,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0008952000000000001,
+            "tokens": {
+              "input": 2070,
+              "output": 231,
+              "reasoning": 344,
+              "cache": {
+                "read": 0,
+                "write": 1990
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "submit_grid",
+        "condition": "columns",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "logical_tasks": true,
+          "blocks_per_task": true,
+          "physical_rows_per_task": true,
+          "merged_submit_proven": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 2787,
+        "prompt_sha256": "ca0726eb0153f1c50ae09373ec0ea0c89324a0beea6ddbecf34da679a9005784",
+        "wall_s": 8.281,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.000875025,
+            "tokens": {
+              "input": 1373,
+              "output": 159,
+              "reasoning": 655,
+              "cache": {
+                "read": 0,
+                "write": 1457
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "lowering_identity",
+        "condition": "facts",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "exact_scatter_axis": true,
+          "all_scatter_is_slow_proven": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1401,
+        "prompt_sha256": "8bb5a5ea4c5c16efb62cdb6b756abd6d250645a5724cced363c94d66e16c2d22",
+        "wall_s": 7.236,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00040990000000000004,
+            "tokens": {
+              "input": 1561,
+              "output": 203,
+              "reasoning": 166,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "lowering_identity",
+        "condition": "columns",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "exact_scatter_axis": true,
+          "all_scatter_is_slow_proven": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1425,
+        "prompt_sha256": "6db55d65e35d0ce4f2f6851cf7e03094c275d4f90a1b0c0f78cc06cb28c6dfe9",
+        "wall_s": 7.117,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0006753999999999999,
+            "tokens": {
+              "input": 1577,
+              "output": 189,
+              "reasoning": 619,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "completion_boundary",
+        "condition": "facts",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "projection_producers": true,
+          "deleting_a_live_group_edge_is_justified": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 10163,
+        "prompt_sha256": "d4b102ce259e6cc3025c59adc9494d5fe79d48fe6ee614dfa6eaf792998fb9e5",
+        "wall_s": 9.716,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0018926499999999998,
+            "tokens": {
+              "input": 4405,
+              "output": 222,
+              "reasoning": 1029,
+              "cache": {
+                "read": 0,
+                "write": 3866
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "completion_boundary",
+        "condition": "columns",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "projection_producers": true,
+          "deleting_a_live_group_edge_is_justified": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 5868,
+        "prompt_sha256": "bf9452a94159b2e7e0c7712f4148bdb29a8555fad40fea2f2bd908db1e000d24",
+        "wall_s": 10.72,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00171995,
+            "tokens": {
+              "input": 2881,
+              "output": 225,
+              "reasoning": 1349,
+              "cache": {
+                "read": 0,
+                "write": 2758
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "realized_pipeline",
+        "condition": "facts",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "requested_depth": true,
+          "fitted_buffers": true,
+          "stage_2_parameter_proves_double_buffering": true,
+          "isolated_latency_benefit_us": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 2465,
+        "prompt_sha256": "02e479c433572c8ff45e3147d7588ed256395cabebaf7dc9600f34195d81e079",
+        "wall_s": 5.483,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.000478675,
+            "tokens": {
+              "input": 976,
+              "output": 111,
+              "reasoning": 202,
+              "cache": {
+                "read": 0,
+                "write": 1169
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "realized_pipeline",
+        "condition": "columns",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "requested_depth": true,
+          "fitted_buffers": true,
+          "stage_2_parameter_proves_double_buffering": true,
+          "isolated_latency_benefit_us": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 2422,
+        "prompt_sha256": "2bdd86ac85c808e072fffff96e6e7b16899c5baa170c66b2d576353563b99619",
+        "wall_s": 6.972,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.000650625,
+            "tokens": {
+              "input": 961,
+              "output": 103,
+              "reasoning": 502,
+              "cache": {
+                "read": 0,
+                "write": 1161
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "local_global_ranking",
+        "condition": "facts",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "lower_full_program_median_run": true,
+          "shorter_projection_span_run": true,
+          "local_projection_alone_determines_program": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3528,
+        "prompt_sha256": "101cde64201fde7eea708c1ce45c141e565c8545d45105694b9a56d86812290d",
+        "wall_s": 6.037,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00072485,
+            "tokens": {
+              "input": 1640,
+              "output": 107,
+              "reasoning": 346,
+              "cache": {
+                "read": 0,
+                "write": 1668
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "local_global_ranking",
+        "condition": "columns",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "lower_full_program_median_run": true,
+          "shorter_projection_span_run": true,
+          "local_projection_alone_determines_program": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3620,
+        "prompt_sha256": "d8c8b6d806d6565c8faccdb80012f0bf552ded4aaec701d1913b7bd2196107d2",
+        "wall_s": 8.452,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00124735,
+            "tokens": {
+              "input": 1674,
+              "output": 245,
+              "reasoning": 1073,
+              "cache": {
+                "read": 0,
+                "write": 1708
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "bounded_scan_legality",
+        "condition": "facts",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "general_correctness_proven": true,
+          "reference_selection_basis": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1802,
+        "prompt_sha256": "0905800c4f4b4465bc81e568d12d5e399f6c08f0be5c1aaa8b9a9ffd8903a314",
+        "wall_s": 9.069,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00086345,
+            "tokens": {
+              "input": 1828,
+              "output": 208,
+              "reasoning": 868,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "bounded_scan_legality",
+        "condition": "columns",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "general_correctness_proven": true,
+          "reference_selection_basis": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1824,
+        "prompt_sha256": "2d9729121af190cd400c94a76739648aa2b5bdbe9b35c6a527449cd7b230f539",
+        "wall_s": 6.244,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0005066999999999999,
+            "tokens": {
+              "input": 1849,
+              "output": 145,
+              "reasoning": 325,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "row_span_semantics",
+        "condition": "facts",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "busy_us": true,
+          "wall_us": true,
+          "max_row_us": true,
+          "busy_us_semantics": true,
+          "timestamps_establish_pipe_active_time": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 8028,
+        "prompt_sha256": "2fc3d10fcfef72107d4e69875c00d4c604196fcdeb7a97cbaf9a9b0757a475ef",
+        "wall_s": 18.272,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0027224,
+            "tokens": {
+              "input": 3632,
+              "output": 201,
+              "reasoning": 2749,
+              "cache": {
+                "read": 0,
+                "write": 3334
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "row_span_semantics",
+        "condition": "columns",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "busy_us": true,
+          "wall_us": true,
+          "max_row_us": true,
+          "busy_us_semantics": true,
+          "timestamps_establish_pipe_active_time": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 4201,
+        "prompt_sha256": "808205269cea5f368dec096a67f3a99f90f1a947fa6ef480d7ac5fd80ceea2d1",
+        "wall_s": 13.887,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.002095525,
+            "tokens": {
+              "input": 2165,
+              "output": 123,
+              "reasoning": 2358,
+              "cache": {
+                "read": 0,
+                "write": 2269
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "occupancy_objective",
+        "condition": "facts",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "occupancy_alone_proves_speedup": true,
+          "unprofiled_median_available": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 5559,
+        "prompt_sha256": "bff4a3383d536a1d93b2db1b702d21ee4e34e093c36db97bd48254540f205cb5",
+        "wall_s": 9.054,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.001395375,
+            "tokens": {
+              "input": 2571,
+              "output": 310,
+              "reasoning": 876,
+              "cache": {
+                "read": 0,
+                "write": 2451
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "occupancy_objective",
+        "condition": "columns",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "occupancy_alone_proves_speedup": true,
+          "unprofiled_median_available": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 4738,
+        "prompt_sha256": "76d9e168d00d8c88f5d1122adf89ecb9d188b11d208fe4f7116e6b34a6eb031b",
+        "wall_s": 13.325,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00196055,
+            "tokens": {
+              "input": 2188,
+              "output": 230,
+              "reasoning": 2044,
+              "cache": {
+                "read": 0,
+                "write": 2156
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "capture_identity",
+        "condition": "facts",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "same_workload_established": true,
+          "task_id_only_pmu_join_safe": true,
+          "token_count_relation": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 2391,
+        "prompt_sha256": "ef6a665614c2212d4f8cb0f2c79226cac3abc7a48b1202441aa4c8b68b79660b",
+        "wall_s": 8.688,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.000707725,
+            "tokens": {
+              "input": 1112,
+              "output": 117,
+              "reasoning": 529,
+              "cache": {
+                "read": 0,
+                "write": 1243
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "capture_identity",
+        "condition": "columns",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "same_workload_established": true,
+          "task_id_only_pmu_join_safe": true,
+          "token_count_relation": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 2435,
+        "prompt_sha256": "810bfb411c74eabaa0e34ce430e978afd1b2009eb1040d8816ede0e3ad5e0088",
+        "wall_s": 11.084,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.000909725,
+            "tokens": {
+              "input": 1126,
+              "output": 144,
+              "reasoning": 829,
+              "cache": {
+                "read": 0,
+                "write": 1271
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "experiment_memory",
+        "condition": "facts",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "saved_trial_count": true,
+          "repeat_hypothesis_exclusion_proven": true,
+          "caller_win_proves_validation": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1162,
+        "prompt_sha256": "e270ea686888c8a8d67060b223d22302b28675406e18df0cab5d6bf2396ec361",
+        "wall_s": 6.271,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.000466,
+            "tokens": {
+              "input": 1280,
+              "output": 97,
+              "reasoning": 424,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "experiment_memory",
+        "condition": "columns",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "saved_trial_count": true,
+          "repeat_hypothesis_exclusion_proven": true,
+          "caller_win_proves_validation": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1186,
+        "prompt_sha256": "be4590562ca553616fd990c56538969fce618253b827766d1c021879e102cbd6",
+        "wall_s": 12.615,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0004247,
+            "tokens": {
+              "input": 1301,
+              "output": 103,
+              "reasoning": 346,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "scoring_scope": "exact fields and existing fact IDs/query coverage only; free claims require review",
+    "independence": "replicate labels, not reproducible serving seeds; fixed task-set exploration"
+  },
+  {
+    "study_id": "decisions-d1-v2",
+    "result_sha256": "c90d6ef88debeaf7b5f9d4edb324b72d7383b1107d34a024d476020c153ac1b4",
+    "protocol_sha256": "6afa809cf88cd77b50827f55804e16d6147f7d93c4e56f484d04011eb93d2766",
+    "model": "opencode-go/deepseek-v4.1-flash",
+    "conditions": {
+      "facts": {
+        "attempts": 30,
+        "completed": 30,
+        "fields_passed": 30,
+        "rubric_passed": 30,
+        "prompt_bytes": 152478
+      }
+    },
+    "attempts": [
+      {
+        "case_id": "submit_grid",
+        "condition": "facts",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "logical_tasks": true,
+          "blocks_per_task": true,
+          "physical_rows_per_task": true,
+          "merged_submit_proven": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 6193,
+        "prompt_sha256": "7a2b5c3c56240f0e4f858adb3578462ff594b0e2d6bde0d156e608c9d0d726b4",
+        "wall_s": 11.295,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00136415,
+            "tokens": {
+              "input": 2600,
+              "output": 260,
+              "reasoning": 865,
+              "cache": {
+                "read": 0,
+                "write": 2452
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "lowering_identity",
+        "condition": "facts",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "exact_scatter_axis": true,
+          "all_scatter_is_slow_proven": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1978,
+        "prompt_sha256": "f34487b6eb9f3874aa4a9d851fec86773394e6ecbe1a5776c4f4f99bcecff20a",
+        "wall_s": 13.82,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.000665425,
+            "tokens": {
+              "input": 915,
+              "output": 265,
+              "reasoning": 399,
+              "cache": {
+                "read": 0,
+                "write": 1105
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "completion_boundary",
+        "condition": "facts",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "projection_producers": true,
+          "deleting_a_live_group_edge_is_justified": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 11647,
+        "prompt_sha256": "bb23845a8400259c83d077fa8baef2ec11e3e40dd813bc090812fcec8dcbc61e",
+        "wall_s": 9.777,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0020426249999999997,
+            "tokens": {
+              "input": 4988,
+              "output": 442,
+              "reasoning": 815,
+              "cache": {
+                "read": 0,
+                "write": 4399
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "realized_pipeline",
+        "condition": "facts",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "requested_depth": true,
+          "fitted_buffers": true,
+          "stage_2_parameter_proves_double_buffering": true,
+          "isolated_latency_benefit_us": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3179,
+        "prompt_sha256": "cc19e18de8e171660d4ce37b1e5c86043f3c7768f50b23d47e76c8e12b903514",
+        "wall_s": 6.049,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0006215999999999999,
+            "tokens": {
+              "input": 1246,
+              "output": 126,
+              "reasoning": 306,
+              "cache": {
+                "read": 0,
+                "write": 1418
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "local_global_ranking",
+        "condition": "facts",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "lower_full_program_median_run": true,
+          "shorter_projection_span_run": true,
+          "local_projection_alone_determines_program": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3528,
+        "prompt_sha256": "101cde64201fde7eea708c1ce45c141e565c8545d45105694b9a56d86812290d",
+        "wall_s": 8.454,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00094545,
+            "tokens": {
+              "input": 1628,
+              "output": 111,
+              "reasoning": 713,
+              "cache": {
+                "read": 0,
+                "write": 1668
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "bounded_scan_legality",
+        "condition": "facts",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "general_correctness_proven": true,
+          "reference_selection_basis": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3403,
+        "prompt_sha256": "e5dd2dbe938bc4bcac764563b810cd055670822bf5b351165e0beca8a887b52c",
+        "wall_s": 10.506,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00123565,
+            "tokens": {
+              "input": 1290,
+              "output": 183,
+              "reasoning": 1260,
+              "cache": {
+                "read": 0,
+                "write": 1424
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "row_span_semantics",
+        "condition": "facts",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "busy_us": true,
+          "wall_us": true,
+          "max_row_us": true,
+          "busy_us_semantics": true,
+          "timestamps_establish_pipe_active_time": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 8841,
+        "prompt_sha256": "ac6609cc4f596dbfddf1a6d9b0ae85717f02d1026922fb8ba637d4473c0e9ae8",
+        "wall_s": 10.0,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0020698749999999997,
+            "tokens": {
+              "input": 3925,
+              "output": 227,
+              "reasoning": 1511,
+              "cache": {
+                "read": 0,
+                "write": 3599
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "occupancy_objective",
+        "condition": "facts",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "occupancy_alone_proves_speedup": true,
+          "unprofiled_median_available": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 6275,
+        "prompt_sha256": "a2177fec4920b7c95a067d66eda9c1794a0ba8e140a0db63352dd07f353c56f9",
+        "wall_s": 9.174,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0013549999999999999,
+            "tokens": {
+              "input": 2818,
+              "output": 253,
+              "reasoning": 755,
+              "cache": {
+                "read": 0,
+                "write": 2686
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "capture_identity",
+        "condition": "facts",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "same_workload_established": true,
+          "task_id_only_pmu_join_safe": true,
+          "token_count_relation": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3230,
+        "prompt_sha256": "e1600957ffe992c3c9cf0dfe53c1227026157e85ceeca94c8dee24b45f1fb985",
+        "wall_s": 7.361,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0008621,
+            "tokens": {
+              "input": 1475,
+              "output": 278,
+              "reasoning": 477,
+              "cache": {
+                "read": 0,
+                "write": 1564
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "experiment_memory",
+        "condition": "facts",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "saved_trial_count": true,
+          "repeat_hypothesis_exclusion_proven": true,
+          "caller_win_proves_validation": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 2552,
+        "prompt_sha256": "091df18ec2052ed0b458b161d46b5adc51a6732ebbb31963984614287a478fba",
+        "wall_s": 7.146,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0004996,
+            "tokens": {
+              "input": 979,
+              "output": 119,
+              "reasoning": 224,
+              "cache": {
+                "read": 0,
+                "write": 1188
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "submit_grid",
+        "condition": "facts",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "logical_tasks": true,
+          "blocks_per_task": true,
+          "physical_rows_per_task": true,
+          "merged_submit_proven": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 6193,
+        "prompt_sha256": "7a2b5c3c56240f0e4f858adb3578462ff594b0e2d6bde0d156e608c9d0d726b4",
+        "wall_s": 10.305,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00109285,
+            "tokens": {
+              "input": 2600,
+              "output": 255,
+              "reasoning": 420,
+              "cache": {
+                "read": 0,
+                "write": 2452
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "lowering_identity",
+        "condition": "facts",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "exact_scatter_axis": true,
+          "all_scatter_is_slow_proven": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1978,
+        "prompt_sha256": "f34487b6eb9f3874aa4a9d851fec86773394e6ecbe1a5776c4f4f99bcecff20a",
+        "wall_s": 8.336,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0007991249999999999,
+            "tokens": {
+              "input": 915,
+              "output": 217,
+              "reasoning": 658,
+              "cache": {
+                "read": 0,
+                "write": 1105
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "completion_boundary",
+        "condition": "facts",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "projection_producers": true,
+          "deleting_a_live_group_edge_is_justified": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 11647,
+        "prompt_sha256": "bb23845a8400259c83d077fa8baef2ec11e3e40dd813bc090812fcec8dcbc61e",
+        "wall_s": 11.497,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.002234925,
+            "tokens": {
+              "input": 4988,
+              "output": 476,
+              "reasoning": 1104,
+              "cache": {
+                "read": 0,
+                "write": 4399
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "realized_pipeline",
+        "condition": "facts",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "requested_depth": true,
+          "fitted_buffers": true,
+          "stage_2_parameter_proves_double_buffering": true,
+          "isolated_latency_benefit_us": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3179,
+        "prompt_sha256": "cc19e18de8e171660d4ce37b1e5c86043f3c7768f50b23d47e76c8e12b903514",
+        "wall_s": 6.756,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0006363,
+            "tokens": {
+              "input": 1246,
+              "output": 116,
+              "reasoning": 340,
+              "cache": {
+                "read": 0,
+                "write": 1418
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "local_global_ranking",
+        "condition": "facts",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "lower_full_program_median_run": true,
+          "shorter_projection_span_run": true,
+          "local_projection_alone_determines_program": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3528,
+        "prompt_sha256": "101cde64201fde7eea708c1ce45c141e565c8545d45105694b9a56d86812290d",
+        "wall_s": 13.093,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00081295,
+            "tokens": {
+              "input": 1628,
+              "output": 103,
+              "reasoning": 501,
+              "cache": {
+                "read": 0,
+                "write": 1668
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "bounded_scan_legality",
+        "condition": "facts",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "general_correctness_proven": true,
+          "reference_selection_basis": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3403,
+        "prompt_sha256": "e5dd2dbe938bc4bcac764563b810cd055670822bf5b351165e0beca8a887b52c",
+        "wall_s": 7.367,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00074385,
+            "tokens": {
+              "input": 1290,
+              "output": 153,
+              "reasoning": 470,
+              "cache": {
+                "read": 0,
+                "write": 1424
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "row_span_semantics",
+        "condition": "facts",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "busy_us": true,
+          "wall_us": true,
+          "max_row_us": true,
+          "busy_us_semantics": true,
+          "timestamps_establish_pipe_active_time": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 8841,
+        "prompt_sha256": "ac6609cc4f596dbfddf1a6d9b0ae85717f02d1026922fb8ba637d4473c0e9ae8",
+        "wall_s": 8.671,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.001599575,
+            "tokens": {
+              "input": 3925,
+              "output": 225,
+              "reasoning": 729,
+              "cache": {
+                "read": 0,
+                "write": 3599
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "occupancy_objective",
+        "condition": "facts",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "occupancy_alone_proves_speedup": true,
+          "unprofiled_median_available": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 6275,
+        "prompt_sha256": "a2177fec4920b7c95a067d66eda9c1794a0ba8e140a0db63352dd07f353c56f9",
+        "wall_s": 9.954,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0014719,
+            "tokens": {
+              "input": 2818,
+              "output": 192,
+              "reasoning": 1000,
+              "cache": {
+                "read": 0,
+                "write": 2686
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "capture_identity",
+        "condition": "facts",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "same_workload_established": true,
+          "task_id_only_pmu_join_safe": true,
+          "token_count_relation": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3230,
+        "prompt_sha256": "e1600957ffe992c3c9cf0dfe53c1227026157e85ceeca94c8dee24b45f1fb985",
+        "wall_s": 9.22,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0009815,
+            "tokens": {
+              "input": 1475,
+              "output": 234,
+              "reasoning": 715,
+              "cache": {
+                "read": 0,
+                "write": 1564
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "experiment_memory",
+        "condition": "facts",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "saved_trial_count": true,
+          "repeat_hypothesis_exclusion_proven": true,
+          "caller_win_proves_validation": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 2552,
+        "prompt_sha256": "091df18ec2052ed0b458b161d46b5adc51a6732ebbb31963984614287a478fba",
+        "wall_s": 7.32,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0007205000000000001,
+            "tokens": {
+              "input": 979,
+              "output": 123,
+              "reasoning": 588,
+              "cache": {
+                "read": 0,
+                "write": 1188
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "submit_grid",
+        "condition": "facts",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "logical_tasks": true,
+          "blocks_per_task": true,
+          "physical_rows_per_task": true,
+          "merged_submit_proven": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 6193,
+        "prompt_sha256": "7a2b5c3c56240f0e4f858adb3578462ff594b0e2d6bde0d156e608c9d0d726b4",
+        "wall_s": 10.419,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00151765,
+            "tokens": {
+              "input": 2600,
+              "output": 204,
+              "reasoning": 1170,
+              "cache": {
+                "read": 0,
+                "write": 2452
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "lowering_identity",
+        "condition": "facts",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "exact_scatter_axis": true,
+          "all_scatter_is_slow_proven": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1978,
+        "prompt_sha256": "f34487b6eb9f3874aa4a9d851fec86773394e6ecbe1a5776c4f4f99bcecff20a",
+        "wall_s": 11.157,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0007376249999999999,
+            "tokens": {
+              "input": 915,
+              "output": 223,
+              "reasoning": 563,
+              "cache": {
+                "read": 0,
+                "write": 1105
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "completion_boundary",
+        "condition": "facts",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "projection_producers": true,
+          "deleting_a_live_group_edge_is_justified": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 11647,
+        "prompt_sha256": "bb23845a8400259c83d077fa8baef2ec11e3e40dd813bc090812fcec8dcbc61e",
+        "wall_s": 10.656,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.002199525,
+            "tokens": {
+              "input": 4988,
+              "output": 337,
+              "reasoning": 1188,
+              "cache": {
+                "read": 0,
+                "write": 4399
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "realized_pipeline",
+        "condition": "facts",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "requested_depth": true,
+          "fitted_buffers": true,
+          "stage_2_parameter_proves_double_buffering": true,
+          "isolated_latency_benefit_us": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3179,
+        "prompt_sha256": "cc19e18de8e171660d4ce37b1e5c86043f3c7768f50b23d47e76c8e12b903514",
+        "wall_s": 7.118,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0007204,
+            "tokens": {
+              "input": 1246,
+              "output": 113,
+              "reasoning": 484,
+              "cache": {
+                "read": 0,
+                "write": 1418
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "local_global_ranking",
+        "condition": "facts",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "lower_full_program_median_run": true,
+          "shorter_projection_span_run": true,
+          "local_projection_alone_determines_program": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3528,
+        "prompt_sha256": "101cde64201fde7eea708c1ce45c141e565c8545d45105694b9a56d86812290d",
+        "wall_s": 6.498,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0008062500000000001,
+            "tokens": {
+              "input": 1628,
+              "output": 124,
+              "reasoning": 469,
+              "cache": {
+                "read": 0,
+                "write": 1668
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "bounded_scan_legality",
+        "condition": "facts",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "general_correctness_proven": true,
+          "reference_selection_basis": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3403,
+        "prompt_sha256": "e5dd2dbe938bc4bcac764563b810cd055670822bf5b351165e0beca8a887b52c",
+        "wall_s": 7.804,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0008804500000000001,
+            "tokens": {
+              "input": 1290,
+              "output": 144,
+              "reasoning": 707,
+              "cache": {
+                "read": 0,
+                "write": 1424
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "row_span_semantics",
+        "condition": "facts",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "busy_us": true,
+          "wall_us": true,
+          "max_row_us": true,
+          "busy_us_semantics": true,
+          "timestamps_establish_pipe_active_time": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 8841,
+        "prompt_sha256": "ac6609cc4f596dbfddf1a6d9b0ae85717f02d1026922fb8ba637d4473c0e9ae8",
+        "wall_s": 16.711,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.002588675,
+            "tokens": {
+              "input": 3925,
+              "output": 227,
+              "reasoning": 2375,
+              "cache": {
+                "read": 0,
+                "write": 3599
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "occupancy_objective",
+        "condition": "facts",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "occupancy_alone_proves_speedup": true,
+          "unprofiled_median_available": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 6275,
+        "prompt_sha256": "a2177fec4920b7c95a067d66eda9c1794a0ba8e140a0db63352dd07f353c56f9",
+        "wall_s": 8.6,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.001215,
+            "tokens": {
+              "input": 2818,
+              "output": 213,
+              "reasoning": 550,
+              "cache": {
+                "read": 0,
+                "write": 2686
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "capture_identity",
+        "condition": "facts",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "same_workload_established": true,
+          "task_id_only_pmu_join_safe": true,
+          "token_count_relation": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3230,
+        "prompt_sha256": "e1600957ffe992c3c9cf0dfe53c1227026157e85ceeca94c8dee24b45f1fb985",
+        "wall_s": 8.439,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0007623,
+            "tokens": {
+              "input": 1475,
+              "output": 273,
+              "reasoning": 313,
+              "cache": {
+                "read": 0,
+                "write": 1564
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "experiment_memory",
+        "condition": "facts",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "saved_trial_count": true,
+          "repeat_hypothesis_exclusion_proven": true,
+          "caller_win_proves_validation": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 2552,
+        "prompt_sha256": "091df18ec2052ed0b458b161d46b5adc51a6732ebbb31963984614287a478fba",
+        "wall_s": 7.274,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0004343,
+            "tokens": {
+              "input": 979,
+              "output": 131,
+              "reasoning": 103,
+              "cache": {
+                "read": 0,
+                "write": 1188
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "scoring_scope": "exact fields and existing fact IDs/query coverage only; free claims require review",
+    "independence": "replicate labels, not reproducible serving seeds; fixed task-set exploration"
+  },
+  {
+    "study_id": "e3-model-v1",
+    "result_sha256": "2712efaf5ce851c9bf0214c8e953cde51ec28efae96d911d4f2158bc8bc50098",
+    "protocol_sha256": "d57171acfd7caab0c88a6d098b01be8a5a80ee5f1aee296f3806b02fff347b90",
+    "model": "opencode-go/deepseek-v4.1-flash",
+    "conditions": {
+      "facts": {
+        "attempts": 21,
+        "completed": 21,
+        "fields_passed": 18,
+        "rubric_passed": 17,
+        "prompt_bytes": 52329
+      },
+      "columns": {
+        "attempts": 21,
+        "completed": 21,
+        "fields_passed": 19,
+        "rubric_passed": 17,
+        "prompt_bytes": 52482
+      }
+    },
+    "attempts": [
+      {
+        "case_id": "host_cold",
+        "condition": "facts",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "cold_process_count": true,
+          "warm_binds": true,
+          "pid7_offcpu_us": true,
+          "effective_us_available": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3442,
+        "prompt_sha256": "45c35899e9279effb7998c4c3ce7dbe6b26f204af683a416692c61abff747f4d",
+        "wall_s": 9.521,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.001009925,
+            "tokens": {
+              "input": 1664,
+              "output": 101,
+              "reasoning": 816,
+              "cache": {
+                "read": 0,
+                "write": 1691
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "host_cold",
+        "condition": "columns",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "cold_process_count": true,
+          "warm_binds": true,
+          "pid7_offcpu_us": true,
+          "effective_us_available": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3206,
+        "prompt_sha256": "071e9473e2b9b868e5677b57a6170f271fe5aafd1bedc6e00562a4eb77977e1b",
+        "wall_s": 7.864,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.000944,
+            "tokens": {
+              "input": 1544,
+              "output": 98,
+              "reasoning": 752,
+              "cache": {
+                "read": 0,
+                "write": 1630
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "scope_capacity",
+        "condition": "facts",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "scope_high_water_bytes": true,
+          "capacity_bytes": true,
+          "metric_is_realized_peak": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1873,
+        "prompt_sha256": "34bf3683ec71612076ebb8872015ab76cf6ef1ab666acadab16ab8d6b72de51e",
+        "wall_s": 9.09,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0006972,
+            "tokens": {
+              "input": 1814,
+              "output": 112,
+              "reasoning": 689,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "scope_capacity",
+        "condition": "columns",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "scope_high_water_bytes": true,
+          "capacity_bytes": true,
+          "metric_is_realized_peak": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1943,
+        "prompt_sha256": "2615690700037d0fe6d3c0ab3b051984db68570d1f46d28d5f5cb91433580518",
+        "wall_s": 6.644,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.000482125,
+            "tokens": {
+              "input": 843,
+              "output": 115,
+              "reasoning": 273,
+              "cache": {
+                "read": 0,
+                "write": 1029
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "args_physical",
+        "condition": "facts",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "slice_values": true,
+          "layout": true,
+          "logical_contiguous_claim_supported": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1905,
+        "prompt_sha256": "92d4088fdec519c8c4a7ebfed7903a512286d4e91495874644ef95d8842979bf",
+        "wall_s": 8.694,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0008500249999999999,
+            "tokens": {
+              "input": 895,
+              "output": 160,
+              "reasoning": 821,
+              "cache": {
+                "read": 0,
+                "write": 1073
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "args_physical",
+        "condition": "columns",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "slice_values": true,
+          "layout": true,
+          "logical_contiguous_claim_supported": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1975,
+        "prompt_sha256": "18e0e4dd3641587af8fffdd89a236f2ba90c496acdaf6438c799079bff8c36fc",
+        "wall_s": 9.667,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00056335,
+            "tokens": {
+              "input": 923,
+              "output": 155,
+              "reasoning": 336,
+              "cache": {
+                "read": 0,
+                "write": 1102
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "incore_overlap",
+        "condition": "facts",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "vec_duration_sum_us": true,
+          "vec_union_us": true,
+          "sum_is_elapsed_span": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1641,
+        "prompt_sha256": "6dcb9465f0fd8e6bbaa59543057c9d285ff6dbb4cd7422091303bb6c89e392d0",
+        "wall_s": 6.621,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00040169999999999995,
+            "tokens": {
+              "input": 1791,
+              "output": 117,
+              "reasoning": 196,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "incore_overlap",
+        "condition": "columns",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "vec_duration_sum_us": true,
+          "vec_union_us": true,
+          "sum_is_elapsed_span": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1612,
+        "prompt_sha256": "3a7882f57eac40cc404e88c47271a81095760d98c682820a2ee6a4870d6215fc",
+        "wall_s": 5.944,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00023864999999999997,
+            "tokens": {
+              "input": 791,
+              "output": 64,
+              "reasoning": 136,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "rank_clock",
+        "condition": "facts",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "wrong_rank_query_accepted": true,
+          "direct_profile_comparison_allowed": true,
+          "has_clock_mismatch": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 2482,
+        "prompt_sha256": "ef5bcbcb5011c28fa16e11839bb3218f194d396d8899089ee9cd6e79ee21427e",
+        "wall_s": 8.486,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0007024,
+            "tokens": {
+              "input": 1149,
+              "output": 96,
+              "reasoning": 526,
+              "cache": {
+                "read": 0,
+                "write": 1268
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "rank_clock",
+        "condition": "columns",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "wrong_rank_query_accepted": true,
+          "direct_profile_comparison_allowed": true,
+          "has_clock_mismatch": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 2518,
+        "prompt_sha256": "68a892ab655c778907f0ec505c1482b6ff173a607ab410b0e588b3273b741407",
+        "wall_s": 8.562,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00063255,
+            "tokens": {
+              "input": 1161,
+              "output": 99,
+              "reasoning": 397,
+              "cache": {
+                "read": 0,
+                "write": 1298
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "holdout_rms_norm",
+        "condition": "facts",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": false,
+        "fields": {
+          "busy_us": true,
+          "wall_us": true,
+          "max_row_us": true,
+          "timestamps_establish_pipe_active_time": false
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": false,
+        "error_types": [],
+        "prompt_bytes": 3055,
+        "prompt_sha256": "9a83bc7f2f998953f79c463a5ae3b68fbd3f9bade6c6d3a80df7b85504559b06",
+        "wall_s": 8.416,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.001047,
+            "tokens": {
+              "input": 1440,
+              "output": 119,
+              "reasoning": 950,
+              "cache": {
+                "read": 0,
+                "write": 1530
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "holdout_rms_norm",
+        "condition": "columns",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": false,
+        "fields": {
+          "busy_us": true,
+          "wall_us": true,
+          "max_row_us": true,
+          "timestamps_establish_pipe_active_time": false
+        },
+        "reference_checks": {
+          "evidence_query_coverage": false,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": false,
+        "error_types": [],
+        "prompt_bytes": 3125,
+        "prompt_sha256": "7aa527634153fcc7fa79c5ad1e1b6c6f49694e88d7b2e5ebc122ff0aafa735e5",
+        "wall_s": 15.197,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0018969499999999997,
+            "tokens": {
+              "input": 1467,
+              "output": 126,
+              "reasoning": 2346,
+              "cache": {
+                "read": 0,
+                "write": 1562
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "holdout_matmul",
+        "condition": "facts",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": false,
+        "fields": {
+          "busy_us": true,
+          "wall_us": true,
+          "max_row_us": true,
+          "timestamps_establish_pipe_active_time": false
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": false,
+        "error_types": [],
+        "prompt_bytes": 3045,
+        "prompt_sha256": "7d959a2341898bc37cae4fcdba7b849e4b47308faebd664502d47bfaf74ddfe4",
+        "wall_s": 16.81,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.001905,
+            "tokens": {
+              "input": 1434,
+              "output": 115,
+              "reasoning": 2386,
+              "cache": {
+                "read": 0,
+                "write": 1526
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "holdout_matmul",
+        "condition": "columns",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "busy_us": true,
+          "wall_us": true,
+          "max_row_us": true,
+          "timestamps_establish_pipe_active_time": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3115,
+        "prompt_sha256": "649183f4b915b6feb13cd6b71e20641cd2fcfa7da000e4bb4c94e2d854a577a3",
+        "wall_s": 18.678,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00233165,
+            "tokens": {
+              "input": 1461,
+              "output": 181,
+              "reasoning": 3018,
+              "cache": {
+                "read": 0,
+                "write": 1558
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "host_cold",
+        "condition": "columns",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "cold_process_count": true,
+          "warm_binds": true,
+          "pid7_offcpu_us": true,
+          "effective_us_available": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3206,
+        "prompt_sha256": "071e9473e2b9b868e5677b57a6170f271fe5aafd1bedc6e00562a4eb77977e1b",
+        "wall_s": 6.35,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0007358,
+            "tokens": {
+              "input": 1544,
+              "output": 108,
+              "reasoning": 395,
+              "cache": {
+                "read": 0,
+                "write": 1630
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "host_cold",
+        "condition": "facts",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "cold_process_count": true,
+          "warm_binds": true,
+          "pid7_offcpu_us": true,
+          "effective_us_available": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3442,
+        "prompt_sha256": "45c35899e9279effb7998c4c3ce7dbe6b26f204af683a416692c61abff747f4d",
+        "wall_s": 9.044,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.000957325,
+            "tokens": {
+              "input": 1664,
+              "output": 149,
+              "reasoning": 689,
+              "cache": {
+                "read": 0,
+                "write": 1691
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "scope_capacity",
+        "condition": "columns",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "scope_high_water_bytes": true,
+          "capacity_bytes": true,
+          "metric_is_realized_peak": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1943,
+        "prompt_sha256": "2615690700037d0fe6d3c0ab3b051984db68570d1f46d28d5f5cb91433580518",
+        "wall_s": 6.627,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.000612025,
+            "tokens": {
+              "input": 843,
+              "output": 119,
+              "reasoning": 485,
+              "cache": {
+                "read": 0,
+                "write": 1029
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "scope_capacity",
+        "condition": "facts",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "scope_high_water_bytes": true,
+          "capacity_bytes": true,
+          "metric_is_realized_peak": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1873,
+        "prompt_sha256": "34bf3683ec71612076ebb8872015ab76cf6ef1ab666acadab16ab8d6b72de51e",
+        "wall_s": 6.343,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00042060000000000003,
+            "tokens": {
+              "input": 812,
+              "output": 68,
+              "reasoning": 430,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "args_physical",
+        "condition": "columns",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "slice_values": true,
+          "layout": true,
+          "logical_contiguous_claim_supported": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1975,
+        "prompt_sha256": "18e0e4dd3641587af8fffdd89a236f2ba90c496acdaf6438c799079bff8c36fc",
+        "wall_s": 10.898,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00057245,
+            "tokens": {
+              "input": 923,
+              "output": 100,
+              "reasoning": 396,
+              "cache": {
+                "read": 0,
+                "write": 1102
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "args_physical",
+        "condition": "facts",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "slice_values": true,
+          "layout": true,
+          "logical_contiguous_claim_supported": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1905,
+        "prompt_sha256": "92d4088fdec519c8c4a7ebfed7903a512286d4e91495874644ef95d8842979bf",
+        "wall_s": 6.653,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00038159999999999995,
+            "tokens": {
+              "input": 892,
+              "output": 71,
+              "reasoning": 342,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "incore_overlap",
+        "condition": "columns",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "vec_duration_sum_us": true,
+          "vec_union_us": true,
+          "sum_is_elapsed_span": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1612,
+        "prompt_sha256": "3a7882f57eac40cc404e88c47271a81095760d98c682820a2ee6a4870d6215fc",
+        "wall_s": 5.186,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00027765,
+            "tokens": {
+              "input": 791,
+              "output": 71,
+              "reasoning": 194,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "incore_overlap",
+        "condition": "facts",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "vec_duration_sum_us": true,
+          "vec_union_us": true,
+          "sum_is_elapsed_span": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1641,
+        "prompt_sha256": "6dcb9465f0fd8e6bbaa59543057c9d285ff6dbb4cd7422091303bb6c89e392d0",
+        "wall_s": 5.811,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00043539999999999996,
+            "tokens": {
+              "input": 1791,
+              "output": 133,
+              "reasoning": 237,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "rank_clock",
+        "condition": "columns",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "wrong_rank_query_accepted": true,
+          "direct_profile_comparison_allowed": true,
+          "has_clock_mismatch": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 2518,
+        "prompt_sha256": "68a892ab655c778907f0ec505c1482b6ff173a607ab410b0e588b3273b741407",
+        "wall_s": 6.315,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00056975,
+            "tokens": {
+              "input": 1161,
+              "output": 94,
+              "reasoning": 297,
+              "cache": {
+                "read": 0,
+                "write": 1298
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "rank_clock",
+        "condition": "facts",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "wrong_rank_query_accepted": true,
+          "direct_profile_comparison_allowed": true,
+          "has_clock_mismatch": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 2482,
+        "prompt_sha256": "ef5bcbcb5011c28fa16e11839bb3218f194d396d8899089ee9cd6e79ee21427e",
+        "wall_s": 9.611,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.000589172,
+            "tokens": {
+              "input": 125,
+              "output": 100,
+              "reasoning": 584,
+              "cache": {
+                "read": 1024,
+                "write": 1268
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "holdout_rms_norm",
+        "condition": "columns",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "busy_us": true,
+          "wall_us": true,
+          "max_row_us": true,
+          "timestamps_establish_pipe_active_time": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": false,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": false,
+        "error_types": [],
+        "prompt_bytes": 3125,
+        "prompt_sha256": "7aa527634153fcc7fa79c5ad1e1b6c6f49694e88d7b2e5ebc122ff0aafa735e5",
+        "wall_s": 14.003,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0015740499999999998,
+            "tokens": {
+              "input": 1467,
+              "output": 116,
+              "reasoning": 1818,
+              "cache": {
+                "read": 0,
+                "write": 1562
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "holdout_rms_norm",
+        "condition": "facts",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": false,
+        "fields": {
+          "busy_us": true,
+          "wall_us": true,
+          "max_row_us": true,
+          "timestamps_establish_pipe_active_time": false
+        },
+        "reference_checks": {
+          "evidence_query_coverage": false,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": false,
+        "error_types": [],
+        "prompt_bytes": 3055,
+        "prompt_sha256": "9a83bc7f2f998953f79c463a5ae3b68fbd3f9bade6c6d3a80df7b85504559b06",
+        "wall_s": 11.985,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0013086,
+            "tokens": {
+              "input": 1440,
+              "output": 106,
+              "reasoning": 1399,
+              "cache": {
+                "read": 0,
+                "write": 1530
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "holdout_matmul",
+        "condition": "columns",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": false,
+        "fields": {
+          "busy_us": true,
+          "wall_us": true,
+          "max_row_us": true,
+          "timestamps_establish_pipe_active_time": false
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": false,
+        "error_types": [],
+        "prompt_bytes": 3115,
+        "prompt_sha256": "649183f4b915b6feb13cd6b71e20641cd2fcfa7da000e4bb4c94e2d854a577a3",
+        "wall_s": 11.865,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00144325,
+            "tokens": {
+              "input": 1461,
+              "output": 122,
+              "reasoning": 1596,
+              "cache": {
+                "read": 0,
+                "write": 1558
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "holdout_matmul",
+        "condition": "facts",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "busy_us": true,
+          "wall_us": true,
+          "max_row_us": true,
+          "timestamps_establish_pipe_active_time": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3045,
+        "prompt_sha256": "7d959a2341898bc37cae4fcdba7b849e4b47308faebd664502d47bfaf74ddfe4",
+        "wall_s": 12.671,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.001584,
+            "tokens": {
+              "input": 1434,
+              "output": 127,
+              "reasoning": 1839,
+              "cache": {
+                "read": 0,
+                "write": 1526
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "host_cold",
+        "condition": "facts",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "cold_process_count": true,
+          "warm_binds": true,
+          "pid7_offcpu_us": true,
+          "effective_us_available": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3442,
+        "prompt_sha256": "45c35899e9279effb7998c4c3ce7dbe6b26f204af683a416692c61abff747f4d",
+        "wall_s": 6.842,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.000823325,
+            "tokens": {
+              "input": 1664,
+              "output": 151,
+              "reasoning": 464,
+              "cache": {
+                "read": 0,
+                "write": 1691
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "host_cold",
+        "condition": "columns",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "cold_process_count": true,
+          "warm_binds": true,
+          "pid7_offcpu_us": true,
+          "effective_us_available": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3206,
+        "prompt_sha256": "071e9473e2b9b868e5677b57a6170f271fe5aafd1bedc6e00562a4eb77977e1b",
+        "wall_s": 16.676,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0011394999999999999,
+            "tokens": {
+              "input": 1544,
+              "output": 102,
+              "reasoning": 1074,
+              "cache": {
+                "read": 0,
+                "write": 1630
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "scope_capacity",
+        "condition": "facts",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "scope_high_water_bytes": true,
+          "capacity_bytes": true,
+          "metric_is_realized_peak": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1873,
+        "prompt_sha256": "34bf3683ec71612076ebb8872015ab76cf6ef1ab666acadab16ab8d6b72de51e",
+        "wall_s": 6.419,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00040260000000000003,
+            "tokens": {
+              "input": 812,
+              "output": 62,
+              "reasoning": 406,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "scope_capacity",
+        "condition": "columns",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "scope_high_water_bytes": true,
+          "capacity_bytes": true,
+          "metric_is_realized_peak": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1943,
+        "prompt_sha256": "2615690700037d0fe6d3c0ab3b051984db68570d1f46d28d5f5cb91433580518",
+        "wall_s": 8.14,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.000684725,
+            "tokens": {
+              "input": 843,
+              "output": 115,
+              "reasoning": 610,
+              "cache": {
+                "read": 0,
+                "write": 1029
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "args_physical",
+        "condition": "facts",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "slice_values": true,
+          "layout": true,
+          "logical_contiguous_claim_supported": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1905,
+        "prompt_sha256": "92d4088fdec519c8c4a7ebfed7903a512286d4e91495874644ef95d8842979bf",
+        "wall_s": 7.67,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0007275250000000001,
+            "tokens": {
+              "input": 895,
+              "output": 166,
+              "reasoning": 612,
+              "cache": {
+                "read": 0,
+                "write": 1073
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "args_physical",
+        "condition": "columns",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "slice_values": true,
+          "layout": true,
+          "logical_contiguous_claim_supported": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1975,
+        "prompt_sha256": "18e0e4dd3641587af8fffdd89a236f2ba90c496acdaf6438c799079bff8c36fc",
+        "wall_s": 7.183,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00061975,
+            "tokens": {
+              "input": 923,
+              "output": 115,
+              "reasoning": 461,
+              "cache": {
+                "read": 0,
+                "write": 1102
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "incore_overlap",
+        "condition": "facts",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "vec_duration_sum_us": true,
+          "vec_union_us": true,
+          "sum_is_elapsed_span": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1641,
+        "prompt_sha256": "6dcb9465f0fd8e6bbaa59543057c9d285ff6dbb4cd7422091303bb6c89e392d0",
+        "wall_s": 6.673,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00042409999999999995,
+            "tokens": {
+              "input": 1791,
+              "output": 140,
+              "reasoning": 213,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "incore_overlap",
+        "condition": "columns",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "vec_duration_sum_us": true,
+          "vec_union_us": true,
+          "sum_is_elapsed_span": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 1612,
+        "prompt_sha256": "3a7882f57eac40cc404e88c47271a81095760d98c682820a2ee6a4870d6215fc",
+        "wall_s": 6.095,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00048374999999999997,
+            "tokens": {
+              "input": 1777,
+              "output": 126,
+              "reasoning": 327,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "rank_clock",
+        "condition": "facts",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "wrong_rank_query_accepted": true,
+          "direct_profile_comparison_allowed": true,
+          "has_clock_mismatch": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 2482,
+        "prompt_sha256": "ef5bcbcb5011c28fa16e11839bb3218f194d396d8899089ee9cd6e79ee21427e",
+        "wall_s": 6.353,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0005707,
+            "tokens": {
+              "input": 1149,
+              "output": 93,
+              "reasoning": 309,
+              "cache": {
+                "read": 0,
+                "write": 1268
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "rank_clock",
+        "condition": "columns",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "wrong_rank_query_accepted": true,
+          "direct_profile_comparison_allowed": true,
+          "has_clock_mismatch": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 2518,
+        "prompt_sha256": "68a892ab655c778907f0ec505c1482b6ff173a607ab410b0e588b3273b741407",
+        "wall_s": 6.769,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00070745,
+            "tokens": {
+              "input": 1161,
+              "output": 98,
+              "reasoning": 523,
+              "cache": {
+                "read": 0,
+                "write": 1298
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "holdout_rms_norm",
+        "condition": "facts",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "busy_us": true,
+          "wall_us": true,
+          "max_row_us": true,
+          "timestamps_establish_pipe_active_time": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3055,
+        "prompt_sha256": "9a83bc7f2f998953f79c463a5ae3b68fbd3f9bade6c6d3a80df7b85504559b06",
+        "wall_s": 10.015,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0010573999999999998,
+            "tokens": {
+              "input": 1440,
+              "output": 139,
+              "reasoning": 948,
+              "cache": {
+                "read": 0,
+                "write": 1530
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "holdout_rms_norm",
+        "condition": "columns",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "busy_us": true,
+          "wall_us": true,
+          "max_row_us": true,
+          "timestamps_establish_pipe_active_time": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3125,
+        "prompt_sha256": "7aa527634153fcc7fa79c5ad1e1b6c6f49694e88d7b2e5ebc122ff0aafa735e5",
+        "wall_s": 18.073,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0021519499999999997,
+            "tokens": {
+              "input": 1467,
+              "output": 110,
+              "reasoning": 2787,
+              "cache": {
+                "read": 0,
+                "write": 1562
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "holdout_matmul",
+        "condition": "facts",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "busy_us": true,
+          "wall_us": true,
+          "max_row_us": true,
+          "timestamps_establish_pipe_active_time": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": false,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": false,
+        "error_types": [],
+        "prompt_bytes": 3045,
+        "prompt_sha256": "7d959a2341898bc37cae4fcdba7b849e4b47308faebd664502d47bfaf74ddfe4",
+        "wall_s": 9.525,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0011478,
+            "tokens": {
+              "input": 1434,
+              "output": 131,
+              "reasoning": 1108,
+              "cache": {
+                "read": 0,
+                "write": 1526
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "holdout_matmul",
+        "condition": "columns",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "busy_us": true,
+          "wall_us": true,
+          "max_row_us": true,
+          "timestamps_establish_pipe_active_time": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": false,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": false,
+        "error_types": [],
+        "prompt_bytes": 3115,
+        "prompt_sha256": "649183f4b915b6feb13cd6b71e20641cd2fcfa7da000e4bb4c94e2d854a577a3",
+        "wall_s": 14.827,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00178225,
+            "tokens": {
+              "input": 1461,
+              "output": 169,
+              "reasoning": 2125,
+              "cache": {
+                "read": 0,
+                "write": 1558
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "scoring_scope": "exact fields and existing fact IDs/query coverage only; free claims require review",
+    "independence": "replicate labels, not reproducible serving seeds; fixed task-set exploration"
+  },
+  {
+    "study_id": "memory-model-v1",
+    "result_sha256": "7d01c9e4ae482635d5eac1d7592ba15b79bf28b810941eef8c9c27a10d587c59",
+    "protocol_sha256": "fb810f4e9f802f6a770c2393fecfd0817324682a752c612c0381f1e9ee9b64f7",
+    "model": "opencode-go/deepseek-v4.1-flash",
+    "conditions": {
+      "facts": {
+        "attempts": 6,
+        "completed": 6,
+        "fields_passed": 5,
+        "rubric_passed": 5,
+        "prompt_bytes": 38079
+      },
+      "columns": {
+        "attempts": 6,
+        "completed": 6,
+        "fields_passed": 6,
+        "rubric_passed": 6,
+        "prompt_bytes": 33669
+      }
+    },
+    "attempts": [
+      {
+        "case_id": "conditional_memory",
+        "condition": "facts",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "duplicate_trial_id": true,
+          "caller_win_proves_validation": true,
+          "general_acceptance_proven": true,
+          "failed_workload_id": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 6169,
+        "prompt_sha256": "95a55128a7041d42ceababa632f5041b826d3ee66bef6029ff76610098327cbf",
+        "wall_s": 13.402,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.001804425,
+            "tokens": {
+              "input": 2294,
+              "output": 126,
+              "reasoning": 1849,
+              "cache": {
+                "read": 0,
+                "write": 2215
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "conditional_memory",
+        "condition": "columns",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "duplicate_trial_id": true,
+          "caller_win_proves_validation": true,
+          "general_acceptance_proven": true,
+          "failed_workload_id": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 5247,
+        "prompt_sha256": "13d4543f9c85349a472534c30b01d770ae6990f0370c9a0dd5ef5f7ff86b3b1a",
+        "wall_s": 6.483,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0008077500000000001,
+            "tokens": {
+              "input": 1990,
+              "output": 184,
+              "reasoning": 250,
+              "cache": {
+                "read": 0,
+                "write": 2012
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "pruned_history",
+        "condition": "facts",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": false,
+        "fields": {
+          "trial_rows_survive": true,
+          "bind_only_trial1_mean_survives": true,
+          "explicitly_attached_trial2_mean_survives": true,
+          "public_trial1_had_all_five_summary_fields_before": false,
+          "pruned_run_count": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": false,
+        "error_types": [],
+        "prompt_bytes": 6524,
+        "prompt_sha256": "6360096320408320f905bbbfd2e329458bbb282ab94d53b1e7b471e15456d5df",
+        "wall_s": 19.662,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0029646000000000004,
+            "tokens": {
+              "input": 2600,
+              "output": 175,
+              "reasoning": 3606,
+              "cache": {
+                "read": 0,
+                "write": 2458
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "pruned_history",
+        "condition": "columns",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "trial_rows_survive": true,
+          "bind_only_trial1_mean_survives": true,
+          "explicitly_attached_trial2_mean_survives": true,
+          "public_trial1_had_all_five_summary_fields_before": true,
+          "pruned_run_count": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 5976,
+        "prompt_sha256": "b0811928412bb3c5990a14476a0e6e6169b0a2aa918d80ae0ea948f3550e72f6",
+        "wall_s": 47.792,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0071018750000000005,
+            "tokens": {
+              "input": 2407,
+              "output": 184,
+              "reasoning": 10571,
+              "cache": {
+                "read": 0,
+                "write": 2339
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "conditional_memory",
+        "condition": "columns",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "duplicate_trial_id": true,
+          "caller_win_proves_validation": true,
+          "general_acceptance_proven": true,
+          "failed_workload_id": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 5247,
+        "prompt_sha256": "13d4543f9c85349a472534c30b01d770ae6990f0370c9a0dd5ef5f7ff86b3b1a",
+        "wall_s": 12.562,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00177995,
+            "tokens": {
+              "input": 1990,
+              "output": 176,
+              "reasoning": 1876,
+              "cache": {
+                "read": 0,
+                "write": 2012
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "conditional_memory",
+        "condition": "facts",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "duplicate_trial_id": true,
+          "caller_win_proves_validation": true,
+          "general_acceptance_proven": true,
+          "failed_workload_id": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 6169,
+        "prompt_sha256": "95a55128a7041d42ceababa632f5041b826d3ee66bef6029ff76610098327cbf",
+        "wall_s": 8.976,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0012300249999999998,
+            "tokens": {
+              "input": 2294,
+              "output": 126,
+              "reasoning": 891,
+              "cache": {
+                "read": 0,
+                "write": 2215
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "pruned_history",
+        "condition": "columns",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "trial_rows_survive": true,
+          "bind_only_trial1_mean_survives": true,
+          "explicitly_attached_trial2_mean_survives": true,
+          "public_trial1_had_all_five_summary_fields_before": true,
+          "pruned_run_count": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 5976,
+        "prompt_sha256": "b0811928412bb3c5990a14476a0e6e6169b0a2aa918d80ae0ea948f3550e72f6",
+        "wall_s": 54.289,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.007788675,
+            "tokens": {
+              "input": 2407,
+              "output": 199,
+              "reasoning": 11699,
+              "cache": {
+                "read": 0,
+                "write": 2339
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "pruned_history",
+        "condition": "facts",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "trial_rows_survive": true,
+          "bind_only_trial1_mean_survives": true,
+          "explicitly_attached_trial2_mean_survives": true,
+          "public_trial1_had_all_five_summary_fields_before": true,
+          "pruned_run_count": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 6524,
+        "prompt_sha256": "6360096320408320f905bbbfd2e329458bbb282ab94d53b1e7b471e15456d5df",
+        "wall_s": 23.409,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0033161,
+            "tokens": {
+              "input": 2600,
+              "output": 191,
+              "reasoning": 4176,
+              "cache": {
+                "read": 0,
+                "write": 2458
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "conditional_memory",
+        "condition": "facts",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "duplicate_trial_id": true,
+          "caller_win_proves_validation": true,
+          "general_acceptance_proven": true,
+          "failed_workload_id": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 6169,
+        "prompt_sha256": "95a55128a7041d42ceababa632f5041b826d3ee66bef6029ff76610098327cbf",
+        "wall_s": 8.638,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0012802249999999999,
+            "tokens": {
+              "input": 2294,
+              "output": 139,
+              "reasoning": 962,
+              "cache": {
+                "read": 0,
+                "write": 2215
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "conditional_memory",
+        "condition": "columns",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "duplicate_trial_id": true,
+          "caller_win_proves_validation": true,
+          "general_acceptance_proven": true,
+          "failed_workload_id": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 5247,
+        "prompt_sha256": "13d4543f9c85349a472534c30b01d770ae6990f0370c9a0dd5ef5f7ff86b3b1a",
+        "wall_s": 7.469,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.00084885,
+            "tokens": {
+              "input": 1990,
+              "output": 168,
+              "reasoning": 332,
+              "cache": {
+                "read": 0,
+                "write": 2012
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "pruned_history",
+        "condition": "facts",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "trial_rows_survive": true,
+          "bind_only_trial1_mean_survives": true,
+          "explicitly_attached_trial2_mean_survives": true,
+          "public_trial1_had_all_five_summary_fields_before": true,
+          "pruned_run_count": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 6524,
+        "prompt_sha256": "6360096320408320f905bbbfd2e329458bbb282ab94d53b1e7b471e15456d5df",
+        "wall_s": 10.211,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0014023,
+            "tokens": {
+              "input": 2600,
+              "output": 171,
+              "reasoning": 1006,
+              "cache": {
+                "read": 0,
+                "write": 2458
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "pruned_history",
+        "condition": "columns",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "trial_rows_survive": true,
+          "bind_only_trial1_mean_survives": true,
+          "explicitly_attached_trial2_mean_survives": true,
+          "public_trial1_had_all_five_summary_fields_before": true,
+          "pruned_run_count": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 5976,
+        "prompt_sha256": "b0811928412bb3c5990a14476a0e6e6169b0a2aa918d80ae0ea948f3550e72f6",
+        "wall_s": 26.914,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0038876749999999997,
+            "tokens": {
+              "input": 2407,
+              "output": 189,
+              "reasoning": 5209,
+              "cache": {
+                "read": 0,
+                "write": 2339
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "scoring_scope": "exact fields and existing fact IDs/query coverage only; free claims require review",
+    "independence": "replicate labels, not reproducible serving seeds; fixed task-set exploration"
+  },
+  {
+    "study_id": "e3-definitions-model-v1",
+    "result_sha256": "71a86ed4a780da892a8612d87cbb2e6bdb75672c37c49b78780e770172ea6ff7",
+    "protocol_sha256": "955f41045f3181a7c38184f99138bc2c91296e28e129401ef3b0dd84dd24cc38",
+    "model": "opencode-go/deepseek-v4.1-flash",
+    "conditions": {
+      "facts": {
+        "attempts": 6,
+        "completed": 6,
+        "fields_passed": 6,
+        "rubric_passed": 6,
+        "prompt_bytes": 22134
+      }
+    },
+    "attempts": [
+      {
+        "case_id": "holdout_rms_norm",
+        "condition": "facts",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "busy_us": true,
+          "wall_us": true,
+          "max_row_us": true,
+          "timestamps_establish_pipe_active_time": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3694,
+        "prompt_sha256": "7ba2135492da12d88cd25fe1c4fa88e2018fb4e676cc229d40e55fd7e07333ac",
+        "wall_s": 7.181,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0005890499999999999,
+            "tokens": {
+              "input": 1643,
+              "output": 148,
+              "reasoning": 423,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "holdout_matmul",
+        "condition": "facts",
+        "replicate": 0,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "busy_us": true,
+          "wall_us": true,
+          "max_row_us": true,
+          "timestamps_establish_pipe_active_time": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3684,
+        "prompt_sha256": "11fbd15eec8432c1b59060eadbd0149cf001422be1c8c6ff0cd6288c1186d8d5",
+        "wall_s": 6.733,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.000748925,
+            "tokens": {
+              "input": 1640,
+              "output": 121,
+              "reasoning": 365,
+              "cache": {
+                "read": 0,
+                "write": 1703
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "holdout_rms_norm",
+        "condition": "facts",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "busy_us": true,
+          "wall_us": true,
+          "max_row_us": true,
+          "timestamps_establish_pipe_active_time": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3694,
+        "prompt_sha256": "7ba2135492da12d88cd25fe1c4fa88e2018fb4e676cc229d40e55fd7e07333ac",
+        "wall_s": 7.178,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.000867725,
+            "tokens": {
+              "input": 1646,
+              "output": 180,
+              "reasoning": 514,
+              "cache": {
+                "read": 0,
+                "write": 1707
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "holdout_matmul",
+        "condition": "facts",
+        "replicate": 1,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "busy_us": true,
+          "wall_us": true,
+          "max_row_us": true,
+          "timestamps_establish_pipe_active_time": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3684,
+        "prompt_sha256": "11fbd15eec8432c1b59060eadbd0149cf001422be1c8c6ff0cd6288c1186d8d5",
+        "wall_s": 10.398,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.0007371249999999999,
+            "tokens": {
+              "input": 1640,
+              "output": 217,
+              "reasoning": 260,
+              "cache": {
+                "read": 0,
+                "write": 1703
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "holdout_rms_norm",
+        "condition": "facts",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "busy_us": true,
+          "wall_us": true,
+          "max_row_us": true,
+          "timestamps_establish_pipe_active_time": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3694,
+        "prompt_sha256": "7ba2135492da12d88cd25fe1c4fa88e2018fb4e676cc229d40e55fd7e07333ac",
+        "wall_s": 7.679,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.000846925,
+            "tokens": {
+              "input": 1646,
+              "output": 133,
+              "reasoning": 515,
+              "cache": {
+                "read": 0,
+                "write": 1707
+              }
+            }
+          }
+        ]
+      },
+      {
+        "case_id": "holdout_matmul",
+        "condition": "facts",
+        "replicate": 2,
+        "completed": true,
+        "fields_passed": true,
+        "fields": {
+          "busy_us": true,
+          "wall_us": true,
+          "max_row_us": true,
+          "timestamps_establish_pipe_active_time": true
+        },
+        "reference_checks": {
+          "evidence_query_coverage": true,
+          "valid_evidence_ids": true
+        },
+        "rubric_passed": true,
+        "error_types": [],
+        "prompt_bytes": 3684,
+        "prompt_sha256": "11fbd15eec8432c1b59060eadbd0149cf001422be1c8c6ff0cd6288c1186d8d5",
+        "wall_s": 6.651,
+        "usage": [
+          {
+            "status": "ok",
+            "cost": 0.000791225,
+            "tokens": {
+              "input": 1640,
+              "output": 177,
+              "reasoning": 389,
+              "cache": {
+                "read": 0,
+                "write": 1703
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "scoring_scope": "exact fields and existing fact IDs/query coverage only; free claims require review",
+    "independence": "replicate labels, not reproducible serving seeds; fixed task-set exploration"
+  }
+]

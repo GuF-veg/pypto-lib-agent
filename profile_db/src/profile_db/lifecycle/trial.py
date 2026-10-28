@@ -49,12 +49,21 @@ def register_trial(
 
 def bind_trial(conn, trial_id: int, run_id: int) -> None:
     """Attach an ingested run to a trial (the experiment's evidence)."""
-    if conn.execute("SELECT 1 FROM trial WHERE trial_id = ?", [trial_id]).fetchone() is None:
+    existing = conn.execute("SELECT run_id FROM trial WHERE trial_id = ?", [trial_id]).fetchone()
+    if existing is None:
         raise LifecycleError(f"trial {trial_id} does not exist")
+    if existing[0] is not None and existing[0] != run_id:
+        raise LifecycleError(
+            f"trial {trial_id} is already bound to run {existing[0]}; "
+            "register a new trial with parent_trial_id for another run"
+        )
     # An active trial's run is prune-protected, so a bogus id would create a
     # phantom protection and a dangling reference in `trials list`.
     if conn.execute("SELECT 1 FROM run WHERE run_id = ?", [run_id]).fetchone() is None:
         raise LifecycleError(f"run {run_id} does not exist; ingest the capture first")
+    from profile_db.lifecycle.candidate import check_run
+
+    check_run(conn, trial_id, run_id)
     conn.execute("UPDATE trial SET run_id = ? WHERE trial_id = ?", [run_id, trial_id])
 
 
@@ -98,21 +107,32 @@ def attach_bench(conn, trial_id: int, bench: Mapping[str, Any]) -> None:
     )
 
 
-def list_trials(conn, *, active_only: bool = False) -> list[dict[str, Any]]:
+def list_trials(conn, *, active_only: bool = False, trial_id: int | None = None) -> list[dict[str, Any]]:
     """All trials (or only ``running`` ones) as dicts, ordered by id."""
     sql = (
         "SELECT trial.trial_id, trial.parent_trial_id, trial.run_id, trial.goal, "
         "trial.hypothesis, CAST(trial.changed_files AS VARCHAR), trial.status, "
         "trial.verdict, CAST(trial.evidence_refs AS VARCHAR), trial.notes, "
         "COALESCE(trial.bench_mean_us, run.bench_mean_us), "
-        "trial.bench_min_us, trial.bench_median_us, trial.bench_max_us, "
-        "trial.bench_rounds FROM trial "
-        "LEFT JOIN run ON run.run_id = trial.run_id"
+        "COALESCE(trial.bench_min_us, run.bench_min_us), "
+        "COALESCE(trial.bench_median_us, run.bench_median_us), "
+        "COALESCE(trial.bench_max_us, run.bench_max_us), "
+        "COALESCE(trial.bench_rounds, run.bench_rounds) FROM trial "
+        "LEFT JOIN run ON run.run_id = trial.run_id "
+        "AND trial.bench_min_us IS NULL AND trial.bench_median_us IS NULL "
+        "AND trial.bench_mean_us IS NULL AND trial.bench_max_us IS NULL "
+        "AND trial.bench_rounds IS NULL"
     )
+    conditions, params = [], []
     if active_only:
-        sql += " WHERE trial.status = 'running'"
+        conditions.append("trial.status = 'running'")
+    if trial_id is not None:
+        conditions.append("trial.trial_id = ?")
+        params.append(trial_id)
+    if conditions:
+        sql += " WHERE " + " AND ".join(conditions)
     sql += " ORDER BY trial.trial_id"
-    rows = conn.execute(sql).fetchall()
+    rows = conn.execute(sql, params).fetchall()
     out: list[dict[str, Any]] = []
     for row in rows:
         out.append(

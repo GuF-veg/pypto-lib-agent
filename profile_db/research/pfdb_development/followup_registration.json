@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "registered_date": "2026-10-22",
+  "stage": "bounded follow-up; frozen before model/device calls",
+  "scope": "offline candidate identity, input-contract scope, and work/resource relations; no runtime or operator edits",
+  "model": "opencode-go/deepseek-v4.1-flash",
+  "model_revision_limit": "provider alias; immutable serving revision and reproducible server seed unavailable",
+  "base_cases": ["contract_fixture", "contract_general", "swa_fresh", "identity", "c4_units", "swa_pools"],
+  "conditions": {
+    "D0": "starting/historical evidence; correct abstention is accepted where current candidate evidence is absent",
+    "D1": "D0 plus existing current raw source/compiler/validation artifacts and provenance; contract negative controls may have identical raw evidence",
+    "R": "exact D1 raw facts plus deterministic, source-anchored entity relations; adds derived information, not a pure formatting treatment"
+  },
+  "model_attempts": 54,
+  "replicates": 3,
+  "parallel": 2,
+  "timeout_seconds": 180,
+  "retry": "none; preserve provider errors/timeouts and count them as missing",
+  "isolation": "existing deny-all pfdb-eval OpenCode agent; loaded permissions checked; fresh session per attempt; no files/tools visible",
+  "order": "arm order rotated per base case, then the unchanged runner's replicate scheduling; no server-side randomization claim",
+  "scoring": "frozen per-arm typed fields, valid fact references, minimum necessary evidence coverage; separate abstention, information recovery and unsupported claims",
+  "review": "fresh reviewer sees anonymized public responses and their supplied evidence only; condition, deterministic scores and treatment mapping withheld; evidence content cannot itself be blinded",
+  "device_diagnostic": {
+    "calls": 4,
+    "implementations": "saved K256 non-scan c7ea6e parent and K256 scan 6fded candidate, identified through confirmation jobs and full source hashes",
+    "fixtures": ["unchanged copied affine512/start0", "one-request sorted gap512: arange512 with positions from physical index3 increased by1; position-dependent mappings/RoPE regenerated"],
+    "oracle": "unchanged canonical standalone golden and comparators; original inputs/builds remain untouched; private build copies",
+    "expected": "both affine controls and non-scan gap control pass; scan gap may expose the skipped-index mechanism",
+    "interpretation": "oracle-defined diagnostic only: skipped-position business-domain legality is unresolved; no timing or compiler-bug claim",
+    "execution": "each fresh process under npu-run on logical device0; benchmark disabled; no automatic retry"
+  },
+  "stopping": "run these attempts once; no adaptive repeats or new optimization search in this follow-up",
+  "implementation_gate": "only minimal pfdb changes justified by results; do not add a generic IR engine, new tool family or acquisition to pfdb",
+  "claims_excluded": ["device speedup from static answers", "general optimization improvement", "skipped positions are an established legal domain", "compiled metadata hash uniquely identifies a build", "buffer allocation proves measured overlap", "54 attempts are 54 independent operator cases"],
+  "preservation": "do not edit previous frozen packets/results, original databases/captures/goldens, canonical operators or PyPTO/runtime"
+}

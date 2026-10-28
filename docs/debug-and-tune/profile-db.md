@@ -17,6 +17,37 @@ query · render · MCP · lifecycle
 agent / caller — decides whether and how to optimize
 ```
 
+Version 0.8.1 (DB schema 9, MCP schema 7) provides
+[candidate identity, scope and availability](pfdb-candidate-evidence.md)
+through existing `attach --trial-id` and `trial list --trial-id` operations.
+Compile-only candidates need no profile run; source/build mismatches and
+missing observations remain explicit. No new top-level MCP tool is added.
+
+`trial list --view diagnostics` reads a bounded tail of registered diagnostic
+text for an explicitly source-guarded candidate. `overview` adds declared block
+counts and per-engine physical-row/core counts; these are whole-capture counts,
+not utilization or a bottleneck verdict. Existing summary calls stay compatible.
+
+`RESOURCE.scope="capture_declared_topology"` identifies engine core counts from
+capture metadata; `EXECUTION.distinct_cores` counts cores observed executing.
+Neither establishes a chip-wide hardware maximum or utilization.
+
+`overview` also reports a `TIMELINE` execution interval in capture timestamps;
+pass these coordinates to `region`/window selectors rather than using a latency
+as a zero-based range. Missing timed rows produce unavailable bounds.
+`critical_path` includes lifecycle/compute/stall definitions: zero path stall
+does not exclude waits inside a task and does not measure pipe activity.
+An empty runtime counter selection in `why_sparse` explicitly returns
+`OVERHEAD_WINDOW evidence=unavailable`; an existing zero-valued track remains
+a measured zero. Missing validation declarations now default to `unknown`,
+while an explicit producer `not_run` declaration remains supported.
+
+The default MCP server advertises **33 database-read tools**. `--writable`
+adds the eight database-mutating lifecycle tools, restoring all **41** supported
+tools. Existing write guards remain enforced even for unadvertised calls.
+Tool names and read capabilities are retained; reconnect MCP clients after an
+upgrade to refresh their catalog. Database schema and runtime analyses are unchanged.
+
 pfdb never starts a collection, never changes source code, and never emits an
 optimization recommendation. It returns measurements and deterministically
 derived evidence; the tuning decision stays with the caller.
@@ -155,6 +186,15 @@ All query output is `facts` (default DSL), `json`, or `markdown`, bounded by
 budget cuts the stream it ends with an explicit `TRUNCATED … hint="retry
 --budget N"` line — omission is never silent.
 
+MCP query tools expose the same control as the optional positive integer
+`budget_bytes`. If a response is truncated, retry the same tool and selectors
+with the larger budget in the hint. The retry returns the complete prefix from
+the beginning: replace the earlier response, rather than appending two prefixes.
+Each retry is a new read; there is no saved offset or continuation cursor to
+reuse across a refresh. The Python API uses
+`db.query("tasks", run_id=1, name="proj", budget_bytes=32768)`; `name` here is
+the task-name filter, independent of the query name.
+
 ```bash
 pfdb query overview --run-id 1 --format markdown
 pfdb query density --run-id 1 --bands 10 --budget 2000
@@ -211,6 +251,32 @@ why_late) using only MCP tools.
 
 ## Lifecycle and short-term memory
 
+`compare` reports descriptive deltas. Its `compatibility_scope` covers capture
+configuration and profile analysis; `workload_validation_checked=false` explicitly
+means that matching shapes, inputs, reference, comparator and validation coverage
+have not been established. Check those separately before claiming an optimization.
+The bootstrap currently estimates mean speedup, so a median objective needs a
+separate median analysis over independent benchmark strata.
+
+Family timing totals require a recorded value for every task in each present
+family. If any task lacks a timing, only that family's affected timing delta is
+omitted; counts and complete timing metrics remain available. `unavailable_metrics`
+contains scoped objects with `family`, `metric`, `unavailable_before`,
+`unavailable_after` and `reason` for these omissions; capture-wide omissions
+retain their metric-name entries. A family absent from one run means zero tasks
+and zero work on that side, rather than unknown timing.
+
+Completed trials retain their compact min/median/mean/max/rounds summary when
+their bound run is pruned. Explicitly attached summaries take precedence as a
+whole; missing fields are not filled from a different benchmark. Pruning still
+removes raw capture rows and files. A saved caller verdict remains a caller
+decision, independently of numerical validation.
+A trial's bound run is stable: binding the same existing run is idempotent;
+another run requires a new trial, optionally linked with `parent_trial_id`.
+Run IDs still referenced by trial memory are reserved after pruning. These
+rules prevent retained evidence being silently reassigned; missing historical
+identity in older databases cannot be reconstructed by this upgrade.
+
 ```bash
 # working set: latest 3 runs + baseline/active-trial references survive
 pfdb prune --keep 3
@@ -240,6 +306,18 @@ pfdb trial verdict 3 --verdict regression
 ```
 
 ## Facts and evidence
+
+`why_long` includes a `METRIC_DEFINITION` record beside the timing facts:
+`busy_us` is the first-row-start to last-row-end envelope, while `wall_us`
+is first-dispatch to last-FIN. A row's duration brackets its kernel lifecycle
+and can contain synchronization or waits; timestamps alone do not measure
+pipe-active time. Level-1 captures lack dispatch/FIN: task, row and path views
+omit those legacy placeholder endpoints/wall times and return an unavailable
+evidence record. `why_long` reports `wall_us_available=false`; family comparison
+omits `family_wall_us` and names it in `unavailable_metrics`. Raw stored rows
+remain unchanged. `family_median_us` retains
+its historical lower-middle order statistic, explicitly named in the definition;
+this is distinct from the benchmark's conventional median.
 
 Every fact is one line: `REC k=v … evidence=<state>`, keys sorted, values
 JSON-encoded. Evidence states are exactly:

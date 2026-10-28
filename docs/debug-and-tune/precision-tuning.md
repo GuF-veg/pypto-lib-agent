@@ -46,7 +46,7 @@ should still use the same rule.
 |------------|--------------------|-----|
 | `fp32 → bf16` | `rint` | matches torch `.to(torch.bfloat16)` (RNE) |
 | `fp32 → fp16` | `rint` | matches torch `.to(torch.float16)` (RNE) |
-| `fp32 → int8` (quant) | `rint` | round-to-nearest-even on the scaled value, matching a torch `round().to(int8)` quantizer |
+| `fp32 → int8` (quant) | integer RNE | On the current a2a3 toolchain, round to INT32 before the bridge described below; direct FP32→INT8 `rint` can double-round through FP16 |
 | `int32 → fp16/fp32` (de-quant) | `rint` | matches torch when rounding is needed; every integer is exactly representable only through magnitude 2^11 in fp16 and 2^24 in fp32 |
 | `acc → fp32` (cube/Acc move) | `none` | width-preserving move, no rounding involved |
 | float → `int` for **indices** / lane math | `trunc` or `floor` | deterministic floor/truncation, never ties-away (which would jump an index) |
@@ -120,20 +120,34 @@ Two rules:
    stream (`res_row`/`y_row`) is fp32 end to end — the store stays fp32 too,
    with no bf16 narrowing at the output.
 
-2. **Never cast through an intermediate dtype.** A direct `fp32 → int8` is
-   strictly better than `fp32 → bf16 → int8`: the second hop throws away
+2. **Do not narrow floating-point values before integer rounding.** An exact
+   FP32-to-integer rounding is preferable to `fp32 → bf16 → int8`: the latter throws away
    mantissa bits *before* quantization, so the int8 result is rounded off a
    value that is already wrong. Quantize from the widest source you have.
-   Likewise `fp32 → int8` for quant, not `fp32 → fp16 → int8`.
+   Round the FP32 scaled value to an integer before introducing a narrower float.
 
    ```python
    # BAD: loses fp32 mantissa before quantizing
    x_bf16 = pl.cast(x_fp32, pl.BF16, mode="rint")
    x_i8   = pl.cast(pl.mul(x_bf16, inv_scale), pl.INT8, mode="rint")
 
-   # GOOD: quantize straight from fp32
-   x_i8   = pl.cast(pl.mul(x_fp32, inv_scale), pl.INT8, mode="rint")
+   # Current a2a3: round bounded quantization values before a floating bridge
+   q_i32 = pl.cast(pl.mul(x_fp32, inv_scale), pl.INT32, mode="rint")
+   q_f16 = pl.cast(q_i32, pl.FP16, mode="rint")
+   x_i8 = pl.cast(q_f16, pl.INT8, mode="trunc")
    ```
+
+   The current pinned a2a3 compiler (PyPTO ee49fcea, PTOAS0.65) lowers a
+   direct FP32→INT8 rint into two floating/integer casts through FP16.
+   This can double-round: 1.4999 becomes1.5 then2, whereas integer RNE gives1.
+   A device probe found256/256 wrong direct casts and256/256 correct integer
+   bridges. The bridge above applies to quantization bounded to[-127,127],
+   whose rounded integers fit FP16 exactly; it is not a general FP32 conversion.
+   This restriction belongs to compiler legalization, not runtime scheduling.
+   Recheck the [reduced cast test](../../profile_db/research/pfdb_development/probe_fp32_int8_rounding.py)
+   under npu-run with a fresh output path when upgrading PyPTO; no upstream code was
+   changed to work around it. Inspect generated PTO rather than assuming the
+   source cast spelling proves a single native conversion.
 
    The same applies to the int8→float dequant path: go straight from the
    integer to fp32, not via fp16.
